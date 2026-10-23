@@ -2,5 +2,6 @@ credentials.json
 token.json
 out/
 .venv/
+.venv-docling/
 __pycache__/
 .DS_Store
