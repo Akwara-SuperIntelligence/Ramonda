@@ -96,24 +96,10 @@ def tika_ready():
 
 
 def ensure_tika():
-    # shortcut: local Docker Tika on port 9998, point this at the cluster when Tika is deployed
+    # shortcut: Compose starts local Tika, point this URL at the cluster when Tika is deployed
     if tika_ready():
         return
-    started = subprocess.run(["docker", "start", "ramonda-tika"], capture_output=True)
-    if started.returncode != 0:
-        subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                "ramonda-tika",
-                "-p",
-                "9998:9998",
-                "apache/tika:latest",
-            ],
-            check=True,
-        )
+    subprocess.run(["docker", "compose", "up", "-d"], check=True, cwd=connect_drive.ROOT)
     for _ in range(60):
         if tika_ready():
             return

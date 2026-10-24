@@ -1,0 +1,7 @@
+services:
+  tika:
+    image: apache/tika:latest
+    container_name: ramonda-tika
+    ports:
+      - "9998:9998"
+    restart: unless-stopped
