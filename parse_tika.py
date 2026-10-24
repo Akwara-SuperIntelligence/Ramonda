@@ -1,14 +1,20 @@
 """Send one Drive file through Tika and keep the text and the metadata."""
 
+import io
 import json
 import subprocess
 import time
 import urllib.request
 
+from googleapiclient.http import MediaIoBaseDownload
+
 import connect_drive
 
 NAME = "19th June 2026 - End-User Features & Applications_Robust Tech Template"
+PDF_NAME = "laboratory proporsal st theresa-2.pdf"
+FILES = (NAME, PDF_NAME)
 SLIDES = "application/vnd.google-apps.presentation"
+PDF = "application/pdf"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 CONTENT_KEYS = ("X-TIKA:content", "tk:content")
 
@@ -37,9 +43,9 @@ def _self_check():
     raise AssertionError("empty Tika payload was accepted")
 
 
-def find_file(service):
+def find_file(service, name=NAME):
     # Shared-drive file. A My Drive query does not return it.
-    escaped = NAME.replace("\\", "\\\\").replace("'", "\\'")
+    escaped = name.replace("\\", "\\\\").replace("'", "\\'")
     result = (
         service.files()
         .list(
@@ -53,8 +59,22 @@ def find_file(service):
     )
     files = result.get("files", [])
     if len(files) != 1:
-        raise SystemExit(f"Expected one file named {NAME!r}, found {len(files)}.")
+        raise SystemExit(f"Expected one file named {name!r}, found {len(files)}.")
     return files[0]
+
+
+def file_bytes(service, item):
+    if item["mimeType"] == SLIDES:
+        return export_pptx(service, item)
+    if item["mimeType"] != PDF:
+        raise SystemExit(f"{item['name']} is {item['mimeType']}.")
+    request = service.files().get_media(fileId=item["id"])
+    buffer = io.BytesIO()
+    downloader = MediaIoBaseDownload(buffer, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buffer.getvalue()
 
 
 def export_pptx(service, item):
@@ -115,16 +135,17 @@ def tika_rmeta(data):
 def main():
     ensure_tika()
     service = connect_drive.drive_service()
-    item = find_file(service)
-    text, meta = split_rmeta(tika_rmeta(export_pptx(service, item)))
     connect_drive.OUT.mkdir(exist_ok=True)
-    stem = connect_drive.safe_name(item["name"], "")
-    text_path = connect_drive.OUT / f"{stem}.txt"
-    meta_path = connect_drive.OUT / f"{stem}.meta.json"
-    text_path.write_text(text)
-    meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
-    print(f"Text {len(text)} chars -> {text_path}")
-    print(f"Metadata {len(meta)} fields -> {meta_path}")
+    for name in FILES:
+        item = find_file(service, name)
+        text, meta = split_rmeta(tika_rmeta(file_bytes(service, item)))
+        stem = connect_drive.safe_name(item["name"], "")
+        text_path = connect_drive.OUT / f"{stem}.txt"
+        meta_path = connect_drive.OUT / f"{stem}.meta.json"
+        text_path.write_text(text)
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        print(f"Text {len(text)} chars -> {text_path}")
+        print(f"Metadata {len(meta)} fields -> {meta_path}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-"""OCR the chart pictures in the same Drive deck with Docling."""
+"""Docling on a Drive file: OCR the pictures in a deck, or read a PDF."""
 
 import io
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -29,16 +30,9 @@ def ocr_image(converter, path):
     return document.export_to_markdown().strip()
 
 
-def main():
-    from docling.document_converter import DocumentConverter
-
-    service = connect_drive.drive_service()
-    item = parse_tika.find_file(service)
-    data = parse_tika.export_pptx(service, item)
-    OUT.mkdir(parents=True, exist_ok=True)
+def write_pictures(converter, data):
     images = OUT / "images"
     images.mkdir(exist_ok=True)
-    converter = DocumentConverter()
     lines = []
     # shortcut: Docling does not OCR pictures inside a pptx, so each image is converted alone
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -51,6 +45,31 @@ def main():
     summary = "\n".join(lines) + "\n"
     (OUT / "summary.txt").write_text(summary)
     print(summary, end="")
+
+
+def write_pdf(converter, data, stem):
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        text = converter.convert(tmp.name).document.export_to_markdown().strip()
+    path = OUT / f"{stem}.md"
+    path.write_text(text)
+    print(f"{stem}: {len(text)} chars -> {path}")
+
+
+def main():
+    from docling.document_converter import DocumentConverter
+
+    service = connect_drive.drive_service()
+    OUT.mkdir(parents=True, exist_ok=True)
+    converter = DocumentConverter()
+    for name in parse_tika.FILES:
+        item = parse_tika.find_file(service, name)
+        data = parse_tika.file_bytes(service, item)
+        if item["mimeType"] == parse_tika.PDF:
+            write_pdf(converter, data, connect_drive.safe_name(item["name"], ""))
+        else:
+            write_pictures(converter, data)
 
 
 if __name__ == "__main__":

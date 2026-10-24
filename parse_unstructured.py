@@ -1,4 +1,4 @@
-"""Partition the same Drive deck into Unstructured's typed blocks."""
+"""Partition a Drive file into Unstructured's typed blocks."""
 
 import io
 import json
@@ -22,11 +22,17 @@ def _self_check():
     assert table["html"] == "<table></table>"
 
 
-def blocks_from(data):
-    from unstructured.partition.pptx import partition_pptx
+def blocks_from(data, mime):
+    if mime == parse_tika.PDF:
+        from unstructured.partition.pdf import partition_pdf
 
-    # shortcut: text already in the pptx, Docling reads the chart pictures
-    elements = partition_pptx(file=io.BytesIO(data))
+        # shortcut: fast reads the text layer; run this venv on Python 3.12 (no torch wheel for 3.15). Docling OCRs a scan
+        elements = partition_pdf(file=io.BytesIO(data), strategy="fast")
+    else:
+        from unstructured.partition.pptx import partition_pptx
+
+        # shortcut: text already in the pptx, Docling reads the chart pictures
+        elements = partition_pptx(file=io.BytesIO(data))
     blocks = []
     for element in elements:
         html = getattr(element.metadata, "text_as_html", None)
@@ -36,15 +42,16 @@ def blocks_from(data):
 
 def main():
     service = connect_drive.drive_service()
-    item = parse_tika.find_file(service)
-    blocks = blocks_from(parse_tika.export_pptx(service, item))
     connect_drive.OUT.mkdir(exist_ok=True)
-    path = connect_drive.OUT / f"{connect_drive.safe_name(item['name'], '')}.unstructured.json"
-    path.write_text(json.dumps(blocks, indent=2, ensure_ascii=False))
-    counts = Counter(block["type"] for block in blocks)
-    print(f"{len(blocks)} blocks -> {path}")
-    for name, count in sorted(counts.items()):
-        print(f"  {name}: {count}")
+    for name in parse_tika.FILES:
+        item = parse_tika.find_file(service, name)
+        blocks = blocks_from(parse_tika.file_bytes(service, item), item["mimeType"])
+        path = connect_drive.OUT / f"{connect_drive.safe_name(item['name'], '')}.unstructured.json"
+        path.write_text(json.dumps(blocks, indent=2, ensure_ascii=False))
+        counts = Counter(block["type"] for block in blocks)
+        print(f"{len(blocks)} blocks -> {path}")
+        for kind, count in sorted(counts.items()):
+            print(f"  {kind}: {count}")
 
 
 if __name__ == "__main__":
