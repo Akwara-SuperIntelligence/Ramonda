@@ -2,6 +2,7 @@
 
 import io
 import json
+import re
 from collections import Counter
 
 import connect_drive
@@ -22,7 +23,30 @@ def _self_check():
     assert table["html"] == "<table></table>"
 
 
+def _use_simple_tokenize():
+    # shortcut: spaCy 3.8 crashes loading its English model in this image, so splits are regex
+    import unstructured.nlp.tokenize as tokenize
+    import unstructured.partition.text_type as text_type
+
+    def sent_tokenize(text):
+        text = str(text).strip()
+        parts = [part for part in re.split(r"(?<=[.!?])\s+", text) if part]
+        return parts or ([text] if text else [])
+
+    def word_tokenize(text):
+        return re.findall(r"\w+|[^\w\s]", str(text))
+
+    def pos_tag(text):
+        return [(word, "NN") for word in word_tokenize(text)]
+
+    for module in (tokenize, text_type):
+        module.sent_tokenize = sent_tokenize
+        module.word_tokenize = word_tokenize
+        module.pos_tag = pos_tag
+
+
 def blocks_from(data, mime):
+    _use_simple_tokenize()
     if mime == parse_tika.PDF:
         from unstructured.partition.pdf import partition_pdf
 
