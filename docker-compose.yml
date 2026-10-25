@@ -12,6 +12,8 @@ services:
       - tika
     environment:
       TIKA_URL: http://tika:9998
+    env_file:
+      - .env
     volumes:
       - ./credentials.json:/app/credentials.json:ro
       - ./token.json:/app/token.json

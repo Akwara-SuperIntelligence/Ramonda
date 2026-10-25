@@ -3,4 +3,5 @@ google-api-python-client
 google-auth-oauthlib
 docling
 llama-index-core
+llama-index-llms-openai
 unstructured[pptx,pdf]
