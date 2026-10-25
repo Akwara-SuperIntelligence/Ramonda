@@ -4,4 +4,5 @@ out
 .git
 credentials.json
 token.json
+ramonda/retrieval/.env
 **/__pycache__

@@ -1,6 +1,7 @@
 credentials.json
 token.json
 .env
+ramonda/retrieval/.env
 out/
 .venv/
 __pycache__/
