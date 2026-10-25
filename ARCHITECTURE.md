@@ -1,44 +1,59 @@
-Building this ingestion pipeline as a standalone microservice is the right architectural move—it isolates the heavy, bursty document-processing workload from the low-latency query path. Based on the transcript and the components you're using, here is the recommended blueprint.
+# Architecture
 
-### 🐍 1. What Language Should You Use?
+An agent reads institutional knowledge and produces an artifact a client asked for: an investor report, a risk analysis, or the next brief of that kind. The knowledge is private. The artifact is the product.
 
-**Use Python (with FastAPI) as the primary language for the ingestion microservice.**
+The core is one Python process. Components call each other in-process through a public API. Apache Tika stays its own container, because it is a Java server. Postgres, and OpenSearch if retrieval uses it, stay their own containers because they are databases. The application deploys once.
 
-Here is why Python is the best fit for this specific layer, and where Java still fits in:
+A component is one reason the code changes. A pipeline step is not a component. If a small change has to touch several components, the boundary is wrong and the code moves. Each component exposes one public module. Other components import that module and leave the implementation alone.
 
-*   **The AI Ecosystem is Python-First**: The core "intelligence" of your ingestion pipeline relies on **LlamaIndex** (metadata extractors, pipeline orchestration) and **Docling** (layout-aware PDF parsing). Both are Python-native libraries. While you *could* call them via other languages, doing so adds unnecessary bridging complexity. The industry pattern is clear: Python owns the intelligence layer (LLM orchestration, RAG pipelines, data processing), while Java handles the enterprise foundation.
-*   **FastAPI for Orchestration**: Use **FastAPI** to build the API layer of your microservice. It is async-native, highly performant, and integrates seamlessly with Python's AI libraries.
-*   **The Tika Exception (Java)**: **Apache Tika** is a Java application. You should **not** try to rewrite Tika in Python. Instead, run Tika as its own separate Java container (or use the official Docker image). Your Python microservice will simply make HTTP calls to Tika's endpoint (`/tika` or `/meta`) to extract raw text from arbitrary formats.
+## Components
 
-**Summary**: Build the orchestrator in **Python + FastAPI**, and let it call a **Java-based Tika container** alongside the Python-native Docling and Unstructured libraries.
+### Ingestion
 
-### 🐳 2. How Should You Use Docker?
+Changes when a source file comes out as different chunks.
 
-You should use Docker to containerize every moving part of the ingestion subsystem, creating a reproducible, isolated environment.
+Public API: `ingest(file) -> chunks`.
 
-*   **Microservice Isolation**: Since this is one microservice in a larger architecture, its Docker image should contain your FastAPI application, the LlamaIndex orchestration code, and the Docling/Unstructured libraries.
-*   **Sidecar Containers**: Run **Apache Tika** as a separate Docker container. The official `apache/tika` image exposes a REST API on port 9998. Docling can also be run as a separate container (e.g., `docling-serve-cpu`) if you want to isolate its heavier layout-understanding workloads.
-*   **Orchestration**: Use **Docker Compose** for local development to spin up your Python app, the Tika container, a message broker (like RabbitMQ), and a database. For production, deploy these as distinct Pods/Services in **Kubernetes**.
-*   **Why Docker is Crucial Here**: The transcript highlights that at 10 million documents, consistency beats cleverness. Docker ensures that the parsing behavior is identical across your laptop and production servers. It also allows you to scale the heavy parsing containers (like Docling) independently from the API containers.
+Inside: the Drive source, Tika, Unstructured, Docling, the hierarchical chunker, and the LlamaIndex metadata extractors (`document_title`, `section_summary`, `prev_section_summary`, `excerpt_keywords`, `questions_this_excerpt_can_answer`). Tables stay whole. Tika's text is not what gets chunked. Tika is called over HTTP at the container's `/rmeta` endpoint.
 
-### 📡 3. How Should the Services Communicate?
+### Retrieval
 
-The communication strategy should be a hybrid of synchronous calls for immediate processing and asynchronous messaging for high-volume ingestion.
+Changes when a search comes back with different chunks. The agent uses this as a tool.
 
-*   **Synchronous (Internal Parsing)**: Use **gRPC** or **REST** for the Python orchestrator to call the Tika or Docling containers. gRPC is increasingly being adopted for document pipelines (like LlamaIndex's `liteparse-grpc`) because it offers lower latency and typed, service-to-service communication compared to REST.
-*   **Asynchronous (Ingestion Events)**: Because you are dealing with 10 million documents, you **must** use a message broker like **Kafka** or **RabbitMQ**. Your ingestion microservice should publish an `IngestionEvent` to a queue when a new document arrives. Worker processes then pull from this queue. This decouples the intake of documents from the heavy processing (parsing, chunking, embedding), preventing your API from being overwhelmed by a spike in uploads.
-*   **Data Passing (Claim-Check Pattern)**: Do not send the full 10MB document payload through the message queue. Instead, upload the raw file to an object store (S3 or MinIO), and send a lightweight message containing the **S3 URI** (the "claim check") through the queue. The downstream workers use the URI to fetch the file, process it, and then write the chunks/metadata to the vector store and relational DB.
+Public API: `save(chunks)` and `search(query, filters)`.
 
-### 🏗️ The Recommended Architecture Flow
+Inside: the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. One Postgres schema holds the rows. OpenSearch, when used for fusing vector search with BM25, is private to this component. No other component writes its tables.
 
-1.  **Ingest**: A document arrives. Your **Python FastAPI** service receives it.
-2.  **Store**: The service uploads the raw file to **S3/MinIO** and pushes a message to **Kafka/RabbitMQ**.
-3.  **Orchestrate**: The worker (Python + LlamaIndex) picks up the message.
-    *   It checks the format. If it's a weird format, it makes a **gRPC/REST call to the Tika container** for raw text.
-    *   If it's a PDF, it routes to **Docling** (for layout).
-    *   It uses **Unstructured** to partition typed elements.
-4.  **Process**: The worker applies **Structure-Aware Chunking** (Table Preserver, Heading Detector, Boundary Detector) and **Metadata Creation** (Summary, Keyword, Question Generator) as specified in your diagram.
-5.  **Store**: The enriched chunks and metadata are written to your Vector DB and Relational DB.
+### Agent
 
-### 💎 Why This Design Wins at Scale
-By using **Python** for the AI logic, **Docker** for consistent isolation, and an **asynchronous queue** for decoupling, you ensure that a spike in 10,000 messy documents doesn't block your query-time retrieval. The heavy lifting (Tika, Docling) happens in isolated containers, while the orchestrator stays lean and responsive. This aligns perfectly with the transcript's warning: at scale, a RAG system is an air traffic control tower, not a lemonade stand.
+Changes when a brief comes out as a different artifact.
+
+Public API: `produce(brief) -> artifact`.
+
+Inside: the router, the planner, the tools, the specialists, and the retry loop. The router decides which step needs `retrieval.search` and which step does not. Low confidence returns to the router. An investor report and a risk analysis are slices inside this component. They split into their own components only when a change to one no longer changes the other.
+
+Before an artifact is released, the agent calls oversight.
+
+### Oversight
+
+Changes when a decision must be approved or recorded.
+
+Public API: `approve(action)` and `record(who, what, why)`.
+
+Inside: the human gate for a high-stakes release, the append-only audit log, and the later review of edge cases. Chunk size and search weights do not change this component.
+
+## Who calls whom
+
+Ingestion may call `retrieval.save`. The agent may call `retrieval.search`, `oversight.approve`, and `oversight.record`. Retrieval and oversight call no other component. A guardrail sits on `produce` until those rules have their own owner. Evaluation and red-team runs live in the test suite and call the public APIs.
+
+## Layout
+
+```
+ramonda/
+  ingestion/
+  retrieval/
+  agent/
+  oversight/
+```
+
+Only ingestion exists today, as the scripts at the repository root (`connect_drive.py`, `parse_tika.py`, `parse_unstructured.py`, `parse_docling.py`, `chunk.py`, `enrich.py`) and the Tika service in `docker-compose.yml`. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
