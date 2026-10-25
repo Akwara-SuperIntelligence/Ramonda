@@ -44,7 +44,7 @@ Inside: the human gate for a high-stakes release, the append-only audit log, and
 
 ## Who calls whom
 
-The host is the single entry. Clients call the host. The host calls `ingest`, `produce`, and `approve`.
+The host is the single entry. Clients call the host. The host checks who is calling, starts a trace id, and calls `ingest`, `produce`, and `approve` with that caller and that trace id.
 
 Ingestion may call `retrieval.save`. The agent may call `retrieval.search`, `oversight.approve`, and `oversight.record`. Retrieval and oversight call no other component.
 
@@ -62,6 +62,16 @@ Evaluation and stress testing are on the map. Their arrows point at the agent. T
 Precision and recall need a known set of right chunks for that brief. The files ingested so far do not have that set.
 
 **Stress testing** sends hostile briefs at `produce` and watches the artifact. Garak, PyRIT, and Lakera fire those attacks at the reasoning engine and the specialists. NeMo Guardrails is the check on the door of `produce`: it inspects the brief on the way in and the artifact on the way out. That check stays on the host until the rules have their own owner.
+
+## Beside the components
+
+Identity, logging, and observability are required, and they are not packages the components import. A cache and a message broker are not part of this monolith. Components call each other in-process. A broker waits until a long ingest, or sending the finished report, must continue after the request is gone.
+
+**Identity.** Retrieval's filter is "only the rows this caller may see." Oversight's audit line is "who approved this release." The host checks the caller once, at the door, and passes that identity into `search`, `produce`, and `approve`. The Drive login is that check while there is one operator. A separate identity provider replaces it when a second client arrives, because the Drive account is the operator, not the client who may see a chunk.
+
+**Logging.** When a file fails, the line says which component, which file or brief, and which step. Each component writes that with Python's `logging` module to standard output. The container keeps those lines. A line carries the component name, the action, and the id.
+
+**Observability.** Evaluation's latency and cost scores need a clock and a count of model calls. The host's trace id is passed into every call. Each component logs how long its part took. The enricher and the agent log how many model calls they made. Evaluation reads those lines. A metrics collector comes later, when those lines are not enough to query.
 
 ## How the boundary is held
 
