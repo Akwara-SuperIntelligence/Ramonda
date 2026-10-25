@@ -1,5 +1,0 @@
-# Python 3.12. Docling needs torch, which publishes no Python 3.15 wheel.
-google-api-python-client
-google-auth-oauthlib
-docling
-unstructured[pptx,pdf]

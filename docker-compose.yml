@@ -5,3 +5,17 @@ services:
     ports:
       - "9998:9998"
     restart: unless-stopped
+  ingest:
+    profiles: ["ingest"]
+    build: .
+    depends_on:
+      - tika
+    environment:
+      TIKA_URL: http://tika:9998
+    volumes:
+      - ./credentials.json:/app/credentials.json:ro
+      - ./token.json:/app/token.json
+      - ./out:/app/out
+      - cache:/root/.cache
+volumes:
+  cache:

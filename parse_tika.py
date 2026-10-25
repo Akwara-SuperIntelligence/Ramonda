@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import subprocess
 import time
 import urllib.request
@@ -17,6 +18,7 @@ SLIDES = "application/vnd.google-apps.presentation"
 PDF = "application/pdf"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 CONTENT_KEYS = ("X-TIKA:content", "tk:content")
+TIKA = os.environ.get("TIKA_URL", "http://127.0.0.1:9998").rstrip("/")
 
 
 def split_rmeta(payload):
@@ -89,27 +91,32 @@ def export_pptx(service, item):
 
 def tika_ready():
     try:
-        urllib.request.urlopen("http://127.0.0.1:9998/version", timeout=2)
+        urllib.request.urlopen(TIKA + "/version", timeout=2)
     except OSError:
         return False
     return True
 
 
 def ensure_tika():
-    # shortcut: Compose starts local Tika, point this URL at the cluster when Tika is deployed
+    # shortcut: TIKA_URL is the Compose service; a local run starts only the tika service
     if tika_ready():
         return
-    subprocess.run(["docker", "compose", "up", "-d"], check=True, cwd=connect_drive.ROOT)
+    if not os.environ.get("TIKA_URL"):
+        subprocess.run(
+            ["docker", "compose", "up", "-d", "tika"],
+            check=True,
+            cwd=connect_drive.ROOT,
+        )
     for _ in range(60):
         if tika_ready():
             return
         time.sleep(1)
-    raise SystemExit("Tika did not answer on port 9998.")
+    raise SystemExit(f"Tika did not answer at {TIKA}.")
 
 
 def tika_rmeta(data):
     request = urllib.request.Request(
-        "http://127.0.0.1:9998/rmeta",
+        TIKA + "/rmeta",
         data=data,
         method="PUT",
         headers={"Accept": "application/json"},

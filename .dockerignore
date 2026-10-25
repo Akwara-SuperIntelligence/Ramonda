@@ -1,0 +1,7 @@
+.venv
+.venv-docling
+out
+.git
+credentials.json
+token.json
+**/__pycache__
