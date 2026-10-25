@@ -2,7 +2,7 @@
 
 import json
 
-import connect_drive
+from . import connect_drive
 
 # shortcut: LlamaIndex defaults are 2048/512/128, retune when documents dwarf these two files
 

@@ -5,8 +5,7 @@ import json
 import re
 from collections import Counter
 
-import connect_drive
-import parse_tika
+from . import connect_drive, parse_tika
 
 
 def as_block(category, text, html):

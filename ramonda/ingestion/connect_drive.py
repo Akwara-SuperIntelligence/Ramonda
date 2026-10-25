@@ -12,7 +12,8 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 
-ROOT = Path(__file__).resolve().parent
+# credentials, out, and compose live at the repo root, two levels above this package
+ROOT = Path(__file__).resolve().parents[2]
 CREDENTIALS = ROOT / "credentials.json"
 TOKEN = ROOT / "token.json"
 OUT = ROOT / "out"

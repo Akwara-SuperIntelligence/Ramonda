@@ -79,7 +79,7 @@ Identity, logging, and observability are required, and they are not packages the
 
 **Data.** A component that stores rows gets its own Postgres schema and its own database user. Retrieval's user owns the chunk rows. Oversight's user owns the audit log. Ingestion stores nothing. The files stay in Drive. The agent gets a schema only when an artifact needs a row of its own. No component has a login to another component's schema. Reading another component's data goes through its public functions.
 
-**The move.** The first change is the code that already exists. `connect_drive.py`, `parse_tika.py`, `parse_unstructured.py`, `parse_docling.py`, `chunk.py`, and `enrich.py` move into `ramonda/ingestion/`. The package root exports `ingest`. The self-checks in `chunk.py` and `enrich.py` are run after the move. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
+**The move.** The existing scripts live in `ramonda/ingestion/`. The package root exports `ingest`, which runs Tika, Unstructured, Docling, chunk, and enrich in that order. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
 
 ## Layout
 
@@ -92,4 +92,4 @@ ramonda/
   oversight/
 ```
 
-`host.py` wires the public functions and is the only module a client process starts. It is not a fifth component. Only ingestion exists today, as the scripts at the repository root and the Tika service in `docker-compose.yml`.
+`host.py` wires the public functions and is the only module a client process starts. It is not a fifth component. Only ingestion exists today, as `ramonda/ingestion/`. The container runs `python -m ramonda.ingestion`. Tika stays the service in `docker-compose.yml`.

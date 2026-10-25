@@ -4,7 +4,7 @@ import json
 import os
 import time
 
-import connect_drive
+from . import connect_drive
 
 # Keys written by TitleExtractor, SummaryExtractor, KeywordExtractor, QuestionsAnsweredExtractor.
 LLAMA_KEYS = (

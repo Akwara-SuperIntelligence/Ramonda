@@ -14,6 +14,6 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
     && pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir --force-reinstall --no-deps torchvision --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir llama-index-llms-openai
-COPY connect_drive.py parse_tika.py parse_unstructured.py parse_docling.py chunk.py enrich.py ./
+COPY ramonda ./ramonda
 
-CMD ["sh", "-c", "python parse_tika.py && python parse_unstructured.py && python parse_docling.py && python chunk.py && python enrich.py"]
+CMD ["python", "-m", "ramonda.ingestion"]

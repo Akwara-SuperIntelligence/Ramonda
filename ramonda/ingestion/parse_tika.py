@@ -9,7 +9,7 @@ import urllib.request
 
 from googleapiclient.http import MediaIoBaseDownload
 
-import connect_drive
+from . import connect_drive
 
 NAME = "19th June 2026 - End-User Features & Applications_Robust Tech Template"
 PDF_NAME = "laboratory proporsal st theresa-2.pdf"

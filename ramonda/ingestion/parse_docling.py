@@ -5,8 +5,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-import connect_drive
-import parse_tika
+from . import connect_drive, parse_tika
 
 OUT = connect_drive.OUT / "docling"
 
