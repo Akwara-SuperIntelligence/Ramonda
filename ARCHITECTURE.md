@@ -4,7 +4,7 @@ An agent reads institutional knowledge and produces an artifact a client asked f
 
 The core is one Python process. Components call each other in-process through a public API. Apache Tika stays its own container, because it is a Java server. Postgres, and OpenSearch if retrieval uses it, stay their own containers because they are databases. The application deploys once.
 
-A component is one reason the code changes. A pipeline step is not a component. If a small change has to touch several components, the boundary is wrong and the code moves. Each component exposes one public module. Other components import that module and leave the implementation alone.
+A component is one reason the code changes. A pipeline step is not a component. If a small change has to touch several components, the boundary is wrong and the code moves.
 
 ## Components
 
@@ -22,7 +22,7 @@ Changes when a search comes back with different chunks. The agent uses this as a
 
 Public API: `save(chunks)` and `search(query, filters)`.
 
-Inside: the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. One Postgres schema holds the rows. OpenSearch, when used for fusing vector search with BM25, is private to this component. No other component writes its tables.
+Inside: the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. OpenSearch, when used for fusing vector search with BM25, is private to this component.
 
 ### Agent
 
@@ -44,16 +44,42 @@ Inside: the human gate for a high-stakes release, the append-only audit log, and
 
 ## Who calls whom
 
-Ingestion may call `retrieval.save`. The agent may call `retrieval.search`, `oversight.approve`, and `oversight.record`. Retrieval and oversight call no other component. A guardrail sits on `produce` until those rules have their own owner. Evaluation and red-team runs live in the test suite and call the public APIs.
+The host is the single entry. Clients call the host. The host calls `ingest`, `produce`, and `approve`.
+
+Ingestion may call `retrieval.save`. The agent may call `retrieval.search`, `oversight.approve`, and `oversight.record`. Retrieval and oversight call no other component.
+
+## Outside the components
+
+Evaluation and stress testing are on the map. Their arrows point at the agent. The agent does not call them to build an artifact, so they are not packages under `ramonda/`. They live in the test suite and call the host.
+
+**Evaluation** scores the run after the artifact exists. Ragas, TruLens, and DeepEval do that scoring. The loop runs continuously against the host, not only when a person launches the suite once.
+
+- Faithfulness compares the report with the chunks that were retrieved. A sentence in the report should be supported by those chunks.
+- Relevance compares the report with the client’s brief. The report should cover what was asked.
+- Precision and recall compare the chunks that came back with the chunks that should have come back. Precision asks whether the retrieved chunks were the right ones. Recall asks whether enough of the right ones were retrieved.
+- Latency and cost compare the run with a time limit and a money limit.
+
+Precision and recall need a known set of right chunks for that brief. The files ingested so far do not have that set.
+
+**Stress testing** sends hostile briefs at `produce` and watches the artifact. Garak, PyRIT, and Lakera fire those attacks at the reasoning engine and the specialists. NeMo Guardrails is the check on the door of `produce`: it inspects the brief on the way in and the artifact on the way out. That check stays on the host until the rules have their own owner.
+
+## How the boundary is held
+
+**Public surface.** Each component is a package. Its `__init__.py` exports the public functions and nothing else. A test fails the build when one component imports a module behind another's package root. `ramonda.agent` may import `ramonda.retrieval`. It may not import `ramonda.retrieval.search`.
+
+**Data.** A component that stores rows gets its own Postgres schema and its own database user. Retrieval's user owns the chunk rows. Oversight's user owns the audit log. Ingestion stores nothing. The files stay in Drive. The agent gets a schema only when an artifact needs a row of its own. No component has a login to another component's schema. Reading another component's data goes through its public functions.
+
+**The move.** The first change is the code that already exists. `connect_drive.py`, `parse_tika.py`, `parse_unstructured.py`, `parse_docling.py`, `chunk.py`, and `enrich.py` move into `ramonda/ingestion/`. The package root exports `ingest`. The self-checks in `chunk.py` and `enrich.py` are run after the move. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
 
 ## Layout
 
 ```
 ramonda/
+  host.py
   ingestion/
   retrieval/
   agent/
   oversight/
 ```
 
-Only ingestion exists today, as the scripts at the repository root (`connect_drive.py`, `parse_tika.py`, `parse_unstructured.py`, `parse_docling.py`, `chunk.py`, `enrich.py`) and the Tika service in `docker-compose.yml`. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
+`host.py` wires the public functions and is the only module a client process starts. It is not a fifth component. Only ingestion exists today, as the scripts at the repository root and the Tika service in `docker-compose.yml`.
