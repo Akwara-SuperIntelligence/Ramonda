@@ -68,6 +68,9 @@ def main():
     connect_drive.OUT.mkdir(exist_ok=True)
     for name in parse_tika.FILES:
         item = parse_tika.find_file(service, name)
+        if not parse_tika.shaped(item["mimeType"]):
+            print(f"skip {item['name']}: Unstructured has no partition for {item['mimeType']}")
+            continue
         blocks = blocks_from(parse_tika.file_bytes(service, item), item["mimeType"])
         path = connect_drive.OUT / f"{connect_drive.safe_name(item['name'], '')}.unstructured.json"
         path.write_text(json.dumps(blocks, indent=2, ensure_ascii=False))

@@ -34,10 +34,15 @@ def split_rmeta(payload):
     return text, meta
 
 
+def shaped(mime):
+    return mime in (PDF, SLIDES)
+
+
 def _self_check():
     text, meta = split_rmeta([{"tk:content": " hello ", "Content-Type": "application/pdf"}])
     assert text == "hello"
     assert meta == {"Content-Type": "application/pdf"}
+    assert shaped(PDF) and shaped(SLIDES) and not shaped("text/csv")
     try:
         split_rmeta([])
     except ValueError:
@@ -68,8 +73,7 @@ def find_file(service, name=NAME):
 def file_bytes(service, item):
     if item["mimeType"] == SLIDES:
         return export_pptx(service, item)
-    if item["mimeType"] != PDF:
-        raise SystemExit(f"{item['name']} is {item['mimeType']}.")
+    # shortcut: other Google-native types need an export, get_media is for uploaded files
     request = service.files().get_media(fileId=item["id"])
     buffer = io.BytesIO()
     downloader = MediaIoBaseDownload(buffer, request)

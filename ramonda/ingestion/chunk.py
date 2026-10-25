@@ -159,6 +159,18 @@ def _self_check():
     assert chunks
     assert all(chunk["breadcrumb"] == crumb for chunk in chunks)
     assert any(chunk["parent_id"] for chunk in chunks)
+    assert reads_blocks([{"type": "Title", "text": "A"}])
+    assert not reads_blocks(None)
+
+
+def reads_blocks(blocks):
+    return blocks is not None
+
+
+def from_tika(text):
+    # shortcut: flat Tika text has no headings or tables, upgrade when a format brings them
+    body = (text or "").strip()
+    return hierarchize([("", body)]) if body else []
 
 
 def docling_extra(stem, blocks):
@@ -181,21 +193,36 @@ def docling_extra(stem, blocks):
     return tables, sections
 
 
+def chunks_from_blocks(stem, blocks):
+    tables, sections = sections_from_blocks(blocks)
+    extra_tables, extra_sections = docling_extra(stem, blocks)
+    chunks = [
+        {"kind": "table", "text": text, "breadcrumb": crumb}
+        for crumb, text in tables + extra_tables
+        if text.strip()
+    ]
+    chunks.extend(hierarchize(sections + extra_sections))
+    return chunks
+
+
 def main():
-    paths = sorted(connect_drive.OUT.glob("*.unstructured.json"))
-    if not paths:
-        raise SystemExit("No Unstructured output in out/. Run the parsers first.")
-    for path in paths:
-        stem = path.name.removesuffix(".unstructured.json")
-        blocks = json.loads(path.read_text())
-        tables, sections = sections_from_blocks(blocks)
-        extra_tables, extra_sections = docling_extra(stem, blocks)
-        chunks = [
-            {"kind": "table", "text": text, "breadcrumb": crumb}
-            for crumb, text in tables + extra_tables
-            if text.strip()
-        ]
-        chunks.extend(hierarchize(sections + extra_sections))
+    blocks_by_stem = {
+        path.name.removesuffix(".unstructured.json"): path
+        for path in connect_drive.OUT.glob("*.unstructured.json")
+    }
+    tika_by_stem = {
+        path.name.removesuffix(".txt"): path
+        for path in connect_drive.OUT.glob("*.txt")
+    }
+    stems = sorted(set(blocks_by_stem) | set(tika_by_stem))
+    if not stems:
+        raise SystemExit("No parser output in out/. Run the parsers first.")
+    for stem in stems:
+        blocks = json.loads(blocks_by_stem[stem].read_text()) if stem in blocks_by_stem else None
+        if reads_blocks(blocks):
+            chunks = chunks_from_blocks(stem, blocks)
+        else:
+            chunks = from_tika(tika_by_stem[stem].read_text())
         dest = connect_drive.OUT / f"{stem}.chunks.json"
         dest.write_text(json.dumps(chunks, indent=2, ensure_ascii=False))
         print(f"{len(chunks)} chunks -> {dest}")

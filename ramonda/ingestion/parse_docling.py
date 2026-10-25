@@ -64,6 +64,9 @@ def main():
     converter = DocumentConverter()
     for name in parse_tika.FILES:
         item = parse_tika.find_file(service, name)
+        if not parse_tika.shaped(item["mimeType"]):
+            print(f"skip {item['name']}: Docling has no reader for {item['mimeType']}")
+            continue
         data = parse_tika.file_bytes(service, item)
         if item["mimeType"] == parse_tika.PDF:
             write_pdf(converter, data, connect_drive.safe_name(item["name"], ""))
