@@ -14,7 +14,7 @@ LLAMA_KEYS = (
     "excerpt_keywords",
     "questions_this_excerpt_can_answer",
 )
-MODEL = "google/gemma-4-31b-it:free"
+MODEL = "deepseek-flash"
 
 
 def apply_fields(chunk, extracted):
@@ -52,8 +52,8 @@ def llm():
     from llama_index.core.base.llms.types import LLMMetadata
     from llama_index.llms.openai import OpenAI
 
-    class OpenRouter(OpenAI):
-        # shortcut: LlamaIndex only knows OpenAI model names. Drop this when it accepts OpenRouter ids.
+    class DeepSeek(OpenAI):
+        # shortcut: LlamaIndex only knows OpenAI model names. Drop this when it accepts DeepSeek ids.
         @property
         def metadata(self) -> LLMMetadata:
             return LLMMetadata(
@@ -64,13 +64,13 @@ def llm():
                 model_name=self.model,
             )
 
-    key = os.environ.get("OPENROUTER_API_KEY")
+    key = os.environ.get("DEEPSEEK_API_KEY")
     if not key:
-        raise SystemExit("OPENROUTER_API_KEY is missing.")
-    return OpenRouter(
+        raise SystemExit("DEEPSEEK_API_KEY is missing.")
+    return DeepSeek(
         model=MODEL,
         api_key=key,
-        api_base="https://openrouter.ai/api/v1",
+        api_base="https://api.deepseek.com",
         temperature=0,
         max_retries=2,
     )
