@@ -16,6 +16,7 @@ def ingest(caller):
 
 
 def labelled(chunks, label, user):
+    # shortcut: no doc_date, doc_type, or department yet; Fortune 500 sets them from the source.
     for chunk in chunks:
         chunk["security_label"] = label
         chunk["access"] = [f"user:{user}"]

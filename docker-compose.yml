@@ -5,6 +5,19 @@ services:
     ports:
       - "9998:9998"
     restart: unless-stopped
+  opensearch:
+    # shortcut: the security plugin is off for local use; a deployment turns TLS and auth on.
+    image: opensearchproject/opensearch:2.19.0
+    container_name: ramonda-opensearch
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    restart: unless-stopped
   postgres:
     image: pgvector/pgvector:pg16
     container_name: ramonda-postgres
@@ -22,9 +35,11 @@ services:
     depends_on:
       - tika
       - postgres
+      - opensearch
     environment:
       TIKA_URL: http://tika:9998
       POSTGRES_HOST: postgres
+      OPENSEARCH_URL: http://opensearch:9200
     env_file:
       - .env
       - ./ramonda/retrieval/.env
@@ -36,3 +51,4 @@ services:
 volumes:
   cache:
   postgres_data:
+  opensearch_data:

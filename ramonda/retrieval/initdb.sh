@@ -17,6 +17,10 @@ CREATE TABLE retrieval.document (
     org_id text NOT NULL,
     file_id text NOT NULL,
     security_label retrieval.clearance NOT NULL,
+    -- The hard filters read these columns. Null until ingestion knows the value.
+    doc_date date,
+    doc_type text,
+    department text,
     PRIMARY KEY (org_id, file_id)
 );
 CREATE TABLE retrieval.document_access (

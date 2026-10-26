@@ -10,7 +10,7 @@ The host is the only place that verifies a token. Retrieval receives the caller.
 import os
 from dataclasses import dataclass
 
-__all__ = ["Caller", "caller_from_claims", "caller_from_token", "matching_ids"]
+__all__ = ["Caller", "caller_from_claims", "caller_from_token", "search"]
 
 # The order is the clearance order. Keep it equal to the retrieval.clearance enum.
 CLEARANCE = ("public", "internal", "confidential", "restricted")
@@ -24,6 +24,10 @@ class Caller:
     org: str
     groups: tuple[str, ...]
     clearance: str
+
+    @property
+    def labels(self):
+        return CLEARANCE[: CLEARANCE.index(self.clearance) + 1]
 
 
 def caller_from_claims(claims):
@@ -75,10 +79,10 @@ def caller_from_token(token):
     return caller_from_claims(claims)
 
 
-def matching_ids(token, filters=None):
+def search(token, query, filters=None):
     from . import retrieval
 
-    return retrieval.matching_ids(caller_from_token(token), filters)
+    return retrieval.search(query, caller_from_token(token), filters)
 
 
 def _self_check():
@@ -94,6 +98,7 @@ def _self_check():
     assert caller.org == "akwara"
     assert caller.groups == ("finance",)
     assert caller.clearance == "confidential"
+    assert caller.labels == ("public", "internal", "confidential")
     default = caller_from_claims({"email": "a", "org": "b"})
     assert default.groups == () and default.clearance == "public"
     assert caller_from_claims({"email": "a", "org": "b", "groups": "finance"}).groups == (

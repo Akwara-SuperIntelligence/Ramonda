@@ -22,7 +22,7 @@ Changes when a search comes back with different chunks. The agent uses this as a
 
 Public API: `save(caller, chunks)` and `search(query, caller, filters)`.
 
-Inside: the document security label, the access list, the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. OpenSearch, when used for fusing vector search with BM25, is private to this component.
+Inside: the document security label, the access list, the SQL filters, the hybrid index (vectors in Postgres, BM25 in OpenSearch), and re-ranking. OpenSearch is private to this component.
 
 ### Agent
 
