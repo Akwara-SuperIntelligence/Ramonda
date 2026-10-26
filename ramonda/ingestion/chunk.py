@@ -1,5 +1,6 @@
 """Chunk Unstructured blocks and Docling text with a hierarchical parser."""
 
+import hashlib
 import json
 
 from . import connect_drive
@@ -103,8 +104,8 @@ def novel(text, corpus):
 
 
 def hierarchize(sections):
-    from llama_index.core.node_parser import HierarchicalNodeParser
-    from llama_index.core.schema import Document, NodeRelationship
+    from llama_index.core.node_parser import HierarchicalNodeParser, get_leaf_nodes
+    from llama_index.core.schema import Document
 
     crumbs = []
     docs = []
@@ -116,10 +117,11 @@ def hierarchize(sections):
         docs.append(Document(text=text, metadata={"section": len(crumbs) - 1}))
     if not docs:
         return []
-    nodes = HierarchicalNodeParser.from_defaults().get_nodes_from_documents(docs)
+    nodes = get_leaf_nodes(
+        HierarchicalNodeParser.from_defaults().get_nodes_from_documents(docs)
+    )
     chunks = []
     for node in nodes:
-        parent = node.relationships.get(NodeRelationship.PARENT)
         section = node.metadata.get("section")
         chunks.append(
             {
@@ -127,10 +129,29 @@ def hierarchize(sections):
                 "text": node.get_content(),
                 "breadcrumb": crumbs[int(section)] if section is not None else "",
                 "id": node.node_id,
-                "parent_id": parent.node_id if parent else None,
+                # shortcut: leaves only, so a parent_id would point nowhere; Fortune 500 stores the parents for context.
+                "parent_id": None,
             }
         )
     return chunks
+
+
+def identified(chunks, stem):
+    # shortcut: a content hash is the id for a table chunk; Fortune 500 uses the source record id.
+    seen = set()
+    kept = []
+    for chunk in chunks:
+        key = (chunk.get("kind"), chunk["text"], chunk.get("breadcrumb") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        chunk["file_id"] = stem
+        if not chunk.get("id"):
+            chunk["id"] = hashlib.sha1(
+                f"{stem}\0{chunk.get('kind') or ''}\0{chunk.get('breadcrumb') or ''}\0{chunk['text']}".encode()
+            ).hexdigest()
+        kept.append(chunk)
+    return kept
 
 
 def _self_check():
@@ -158,7 +179,35 @@ def _self_check():
     chunks = hierarchize([(crumb, prose)])
     assert chunks
     assert all(chunk["breadcrumb"] == crumb for chunk in chunks)
-    assert any(chunk["parent_id"] for chunk in chunks)
+    assert all(chunk["parent_id"] is None for chunk in chunks)
+    assert len({chunk["text"] for chunk in chunks}) == len(chunks)
+    short = hierarchize([("Intro", "One sentence.")])
+    assert len(short) == 1 and short[0]["text"] == "One sentence."
+    table = [{"kind": "table", "text": "| a |", "breadcrumb": "B"}]
+    first = identified(table, "f")
+    assert first[0]["file_id"] == "f" and first[0]["id"]
+    again = identified([{"kind": "table", "text": "| a |", "breadcrumb": "B"}], "f")
+    assert again[0]["id"] == first[0]["id"]
+    other = identified([{"kind": "table", "text": "| a |", "breadcrumb": "B"}], "g")
+    assert other[0]["id"] != first[0]["id"]
+    dup = identified(
+        [
+            {"kind": "table", "text": "| a |", "breadcrumb": "B"},
+            {"kind": "table", "text": "| a |", "breadcrumb": "B"},
+        ],
+        "f",
+    )
+    assert len(dup) == 1
+    split = identified(
+        [
+            {"kind": "text", "text": "A", "breadcrumb": "one"},
+            {"kind": "text", "text": "A", "breadcrumb": "two"},
+        ],
+        "f",
+    )
+    assert len(split) == 2
+    with_id = identified([{"id": "x", "kind": "text", "text": "t", "breadcrumb": ""}], "f")
+    assert with_id[0]["id"] == "x"
     assert reads_blocks([{"type": "Title", "text": "A"}])
     assert not reads_blocks(None)
 
@@ -223,9 +272,7 @@ def main():
             chunks = chunks_from_blocks(stem, blocks)
         else:
             chunks = from_tika(tika_by_stem[stem].read_text())
-        # shortcut: the output name is the file id; Fortune 500 uses the Drive file id.
-        for chunk in chunks:
-            chunk["file_id"] = stem
+        chunks = identified(chunks, stem)
         dest = connect_drive.OUT / f"{stem}.chunks.json"
         dest.write_text(json.dumps(chunks, indent=2, ensure_ascii=False))
         print(f"{len(chunks)} chunks -> {dest}")
