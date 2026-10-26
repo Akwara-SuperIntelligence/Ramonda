@@ -15,11 +15,12 @@ MODEL = "openai/text-embedding-3-small"
 WIDTH = 1536
 
 # Tune these per deployment. The map's numbers are examples, not laws.
-TOP_K = int(os.environ.get("RETRIEVAL_TOP_K", "100"))
+# POOL_K is the per-retriever pool and the fused cut; re-rank sizes it.
+POOL_K = int(os.environ.get("RETRIEVAL_POOL_K", "100"))
 MAX_CANDIDATES = int(os.environ.get("RETRIEVAL_MAX_CANDIDATES", "100000"))
 FISCAL_YEAR_START_MONTH = int(os.environ.get("RETRIEVAL_FISCAL_START_MONTH", "1"))
-if TOP_K < 1 or MAX_CANDIDATES < 1:
-    raise SystemExit("RETRIEVAL_TOP_K and RETRIEVAL_MAX_CANDIDATES must be positive.")
+if POOL_K < 1 or MAX_CANDIDATES < 1:
+    raise SystemExit("RETRIEVAL_POOL_K and RETRIEVAL_MAX_CANDIDATES must be positive.")
 
 # The filter vocabulary: chunk fields plus doc_type, department, security_label, doc_date_from, doc_date_to, fiscal_year.
 _CHUNK_FILTERS = frozenset({"file_id", "parent_id", "kind"})
@@ -49,7 +50,7 @@ _POLICY = (
     "WHERE a.org_id = c.org_id AND a.file_id = c.file_id AND a.subject = ANY(%s))",
 )
 
-# The filter runs inside the candidate CTE, before the ranking. The guard is a safety valve, not the reducer.
+# The filter runs inside the candidate CTE, before the ranking.
 _VECTOR = """
 WITH q AS (SELECT %s::vector AS v),
 candidates AS (
@@ -57,12 +58,22 @@ candidates AS (
     FROM retrieval.chunk c
     JOIN retrieval.document d ON d.org_id = c.org_id AND d.file_id = c.file_id
     WHERE {predicate}
-    LIMIT {guard}
 )
 SELECT id, file_id, kind, text, breadcrumb, 1 - (embedding <=> q.v) AS score
 FROM candidates, q
 ORDER BY embedding <=> q.v
 LIMIT %s
+"""
+
+# The guard fails loud. It stops at MAX_CANDIDATES + 1, so a weak filter cannot scan the table.
+_COUNT = """
+SELECT count(*) FROM (
+    SELECT 1
+    FROM retrieval.chunk c
+    JOIN retrieval.document d ON d.org_id = c.org_id AND d.file_id = c.file_id
+    WHERE {predicate}
+    LIMIT {limit}
+) candidate
 """
 
 _COLUMNS = ("id", "file_id", "kind", "text", "breadcrumb", "score")
@@ -267,6 +278,16 @@ def _os_filter(caller, filters):
     return clauses
 
 
+def _guard(predicate, params):
+    sql = _COUNT.format(predicate=predicate, limit=MAX_CANDIDATES + 1)
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            found = cur.fetchone()[0]
+    if found > MAX_CANDIDATES:
+        raise ValueError(f"filter matches more than {MAX_CANDIDATES} chunks; add a filter")
+
+
 def _rank(sql, params):
     with _connect() as conn:
         with conn.cursor() as cur:
@@ -292,17 +313,15 @@ def search(query, caller, filters=None):
     if not query:
         return []
     predicate, params = _predicate(caller, filters)
+    _guard(predicate, params)
     from . import opensearch
 
     vector = _vector(_embed([query])[0])
     ranked = [
-        _rank(
-            _VECTOR.format(predicate=predicate, guard=MAX_CANDIDATES),
-            [vector, *params, TOP_K],
-        ),
-        opensearch.search(query, _os_filter(caller, filters), TOP_K),
+        _rank(_VECTOR.format(predicate=predicate), [vector, *params, POOL_K]),
+        opensearch.search(query, _os_filter(caller, filters), POOL_K),
     ]
-    return _fuse(ranked, TOP_K)
+    return _fuse(ranked, POOL_K)
 
 
 def save(caller, chunks):
@@ -349,7 +368,7 @@ def _self_check():
     start, end = _fiscal_range(2025)
     assert start.month == FISCAL_YEAR_START_MONTH and start.year == 2025
     assert end == datetime.date(2026, FISCAL_YEAR_START_MONTH, 1)
-    assert "LIMIT 7" in _VECTOR.format(predicate="1 = 1", guard=7)
+    assert "LIMIT 8" in _COUNT.format(predicate="1 = 1", limit=8)
     zeros = [0.0] * WIDTH
     row = _row(
         {
