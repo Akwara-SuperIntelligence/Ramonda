@@ -223,6 +223,9 @@ def main():
             chunks = chunks_from_blocks(stem, blocks)
         else:
             chunks = from_tika(tika_by_stem[stem].read_text())
+        # shortcut: the output name is the file id; Fortune 500 uses the Drive file id.
+        for chunk in chunks:
+            chunk["file_id"] = stem
         dest = connect_drive.OUT / f"{stem}.chunks.json"
         dest.write_text(json.dumps(chunks, indent=2, ensure_ascii=False))
         print(f"{len(chunks)} chunks -> {dest}")

@@ -12,9 +12,9 @@ A component is one reason the code changes. A pipeline step is not a component. 
 
 Changes when a source file comes out as different chunks.
 
-Public API: `ingest(file) -> chunks`.
+Public API: `ingest(caller)`.
 
-Inside: the Drive source, Tika, Unstructured, Docling, the hierarchical chunker, and the LlamaIndex metadata extractors (`document_title`, `section_summary`, `prev_section_summary`, `excerpt_keywords`, `questions_this_excerpt_can_answer`). Tables stay whole. Tika's text is not what gets chunked. Tika is called over HTTP at the container's `/rmeta` endpoint.
+Inside: the Drive source, Tika, Unstructured, Docling, the hierarchical chunker, the LlamaIndex metadata extractors (`document_title`, `section_summary`, `prev_section_summary`, `excerpt_keywords`, `questions_this_excerpt_can_answer`), the document's label and access list, and the call to `retrieval.save`. Tables stay whole. Tika's text is not what gets chunked. Tika is called over HTTP at the container's `/rmeta` endpoint.
 
 ### Retrieval
 
@@ -22,7 +22,7 @@ Changes when a search comes back with different chunks. The agent uses this as a
 
 Public API: `save(caller, chunks)` and `search(query, caller, filters)`.
 
-Inside: the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. OpenSearch, when used for fusing vector search with BM25, is private to this component.
+Inside: the document security label, the access list, the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. OpenSearch, when used for fusing vector search with BM25, is private to this component.
 
 ### Agent
 
@@ -77,9 +77,9 @@ Identity, logging, and observability are required, and they are not packages the
 
 **Public surface.** Each component is a package. Its `__init__.py` exports the public functions and nothing else. A test fails the build when one component imports a module behind another's package root. `ramonda.agent` may import `ramonda.retrieval`. It may not import `ramonda.retrieval.search`.
 
-**Data.** A component that stores rows gets its own Postgres schema and its own database user. Retrieval's user owns the chunk rows. Oversight's user owns the audit log. Ingestion stores nothing. The files stay in Drive. The agent gets a schema only when an artifact needs a row of its own. No component has a login to another component's schema. Reading another component's data goes through its public functions.
+**Data.** A component that stores rows gets its own Postgres schema and its own database user. Retrieval's user owns the document, access, and chunk rows. Oversight's user owns the audit log. Ingestion stores nothing. The files stay in Drive. The agent gets a schema only when an artifact needs a row of its own. No component has a login to another component's schema. Reading another component's data goes through its public functions.
 
-**The move.** The existing scripts live in `ramonda/ingestion/`. The package root exports `ingest`, which runs Tika, Unstructured, Docling, chunk, and enrich in that order. Agent and oversight get a package when their first real code arrives. Empty packages are not part of the move.
+**The move.** The existing scripts live in `ramonda/ingestion/`. The package root exports `ingest`, which runs Tika, Unstructured, Docling, chunk, and enrich in that order, then labels each file and calls `retrieval.save`. Agent and oversight get a package when their first real code arrives. Empty packages are not part of the move.
 
 ## Layout
 

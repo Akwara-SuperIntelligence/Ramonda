@@ -21,10 +21,13 @@ services:
     build: .
     depends_on:
       - tika
+      - postgres
     environment:
       TIKA_URL: http://tika:9998
+      POSTGRES_HOST: postgres
     env_file:
       - .env
+      - ./ramonda/retrieval/.env
     volumes:
       - ./credentials.json:/app/credentials.json:ro
       - ./token.json:/app/token.json
