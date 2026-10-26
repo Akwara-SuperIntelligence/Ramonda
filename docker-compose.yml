@@ -6,7 +6,7 @@ services:
       - "9998:9998"
     restart: unless-stopped
   postgres:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     container_name: ramonda-postgres
     env_file:
       - ./ramonda/retrieval/.env

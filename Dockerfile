@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
     && pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir --force-reinstall --no-deps torchvision --index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir llama-index-llms-openai
+RUN pip install --no-cache-dir llama-index-llms-openai psycopg[binary]
 COPY ramonda ./ramonda
 
 CMD ["python", "-m", "ramonda.ingestion"]

@@ -4,4 +4,5 @@ google-auth-oauthlib
 docling
 llama-index-core
 llama-index-llms-openai
+psycopg[binary]
 unstructured[pptx,pdf]

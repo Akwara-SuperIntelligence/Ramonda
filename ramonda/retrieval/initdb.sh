@@ -3,12 +3,14 @@
 set -euo pipefail
 psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
   --set=retrieval_password="$RETRIEVAL_DB_PASSWORD" <<'SQL'
+CREATE EXTENSION IF NOT EXISTS vector;
 CREATE ROLE retrieval LOGIN PASSWORD :'retrieval_password';
 CREATE SCHEMA retrieval AUTHORIZATION retrieval;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA retrieval FROM PUBLIC;
 ALTER ROLE retrieval SET search_path TO retrieval;
 SET ROLE retrieval;
+SET search_path TO retrieval, public;
 CREATE TABLE retrieval.chunk (
     id text PRIMARY KEY,
     file_id text NOT NULL,
@@ -20,7 +22,10 @@ CREATE TABLE retrieval.chunk (
     section_summary text,
     prev_section_summary text,
     excerpt_keywords text,
-    questions_this_excerpt_can_answer text
+    questions_this_excerpt_can_answer text,
+    -- shortcut: 1536 is text-embedding-3-small; change this when the embedding model is chosen. Null until save writes it.
+    embedding vector(1536)
 );
+CREATE INDEX chunk_embedding_hnsw ON retrieval.chunk USING hnsw (embedding vector_cosine_ops);
 RESET ROLE;
 SQL
