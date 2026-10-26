@@ -5,4 +5,5 @@ docling
 llama-index-core
 llama-index-llms-openai
 psycopg[binary]
+pyjwt[crypto]
 unstructured[pptx,pdf]

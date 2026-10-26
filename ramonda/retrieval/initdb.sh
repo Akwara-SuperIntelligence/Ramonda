@@ -8,11 +8,12 @@ CREATE ROLE retrieval LOGIN PASSWORD :'retrieval_password';
 CREATE SCHEMA retrieval AUTHORIZATION retrieval;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE ALL ON SCHEMA retrieval FROM PUBLIC;
-ALTER ROLE retrieval SET search_path TO retrieval;
+ALTER ROLE retrieval SET search_path TO retrieval, public;
 SET ROLE retrieval;
 SET search_path TO retrieval, public;
 CREATE TABLE retrieval.chunk (
-    id text PRIMARY KEY,
+    id text NOT NULL,
+    org_id text NOT NULL,
     file_id text NOT NULL,
     parent_id text,
     kind text NOT NULL CHECK (kind IN ('text', 'table')),
@@ -24,7 +25,9 @@ CREATE TABLE retrieval.chunk (
     excerpt_keywords text,
     questions_this_excerpt_can_answer text,
     -- shortcut: 1536 is text-embedding-3-small; change this when the embedding model is chosen. Null until save writes it.
-    embedding vector(1536)
+    embedding vector(1536),
+    -- The organisation is part of the key. The same text in two organisations is two rows.
+    PRIMARY KEY (org_id, id)
 );
 CREATE INDEX chunk_embedding_hnsw ON retrieval.chunk USING hnsw (embedding vector_cosine_ops);
 RESET ROLE;

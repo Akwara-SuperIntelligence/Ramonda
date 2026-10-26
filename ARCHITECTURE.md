@@ -20,7 +20,7 @@ Inside: the Drive source, Tika, Unstructured, Docling, the hierarchical chunker,
 
 Changes when a search comes back with different chunks. The agent uses this as a tool.
 
-Public API: `save(chunks)` and `search(query, filters)`.
+Public API: `save(caller, chunks)` and `search(query, caller, filters)`.
 
 Inside: the SQL filters, the hybrid index (vectors plus BM25), and re-ranking. OpenSearch, when used for fusing vector search with BM25, is private to this component.
 
@@ -67,7 +67,7 @@ Precision and recall need a known set of right chunks for that brief. The files 
 
 Identity, logging, and observability are required, and they are not packages the components import. A cache and a message broker are not part of this monolith. Components call each other in-process. A broker waits until a long ingest, or sending the finished report, must continue after the request is gone.
 
-**Identity.** Retrieval's filter is "only the rows this caller may see." Oversight's audit line is "who approved this release." The host checks the caller once, at the door, and passes that identity into `search`, `produce`, and `approve`. The Drive login is that check while there is one operator. A separate identity provider replaces it when a second client arrives, because the Drive account is the operator, not the client who may see a chunk.
+**Identity.** Retrieval's filter is "only the rows this caller may see." Oversight's audit line is "who approved this release." The host verifies the identity provider's token once, at the door, and passes the caller into `search`, `produce`, and `approve`. The caller carries the user, the organisation, the groups, and the clearance. Ingestion reads Drive with its own credential, because that credential is not the client who may see a chunk.
 
 **Logging.** When a file fails, the line says which component, which file or brief, and which step. Each component writes that with Python's `logging` module to standard output. The container keeps those lines. A line carries the component name, the action, and the id.
 
@@ -79,7 +79,7 @@ Identity, logging, and observability are required, and they are not packages the
 
 **Data.** A component that stores rows gets its own Postgres schema and its own database user. Retrieval's user owns the chunk rows. Oversight's user owns the audit log. Ingestion stores nothing. The files stay in Drive. The agent gets a schema only when an artifact needs a row of its own. No component has a login to another component's schema. Reading another component's data goes through its public functions.
 
-**The move.** The existing scripts live in `ramonda/ingestion/`. The package root exports `ingest`, which runs Tika, Unstructured, Docling, chunk, and enrich in that order. Retrieval, agent, and oversight get a package when their first real code arrives. Empty packages are not part of the move.
+**The move.** The existing scripts live in `ramonda/ingestion/`. The package root exports `ingest`, which runs Tika, Unstructured, Docling, chunk, and enrich in that order. Agent and oversight get a package when their first real code arrives. Empty packages are not part of the move.
 
 ## Layout
 
@@ -92,4 +92,4 @@ ramonda/
   oversight/
 ```
 
-`host.py` wires the public functions and is the only module a client process starts. It is not a fifth component. Only ingestion exists today, as `ramonda/ingestion/`. The container runs `python -m ramonda.ingestion`. Tika stays the service in `docker-compose.yml`.
+`host.py` wires the public functions and is the only module a client process starts. It is not a fifth component. Ingestion and retrieval exist today, as `ramonda/ingestion/` and `ramonda/retrieval/`. The container runs `python -m ramonda.ingestion`. Tika stays the service in `docker-compose.yml`.
