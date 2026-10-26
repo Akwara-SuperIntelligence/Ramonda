@@ -19,8 +19,8 @@ WIDTH = 1536
 POOL_K = int(os.environ.get("RETRIEVAL_POOL_K", "100"))
 MAX_CANDIDATES = int(os.environ.get("RETRIEVAL_MAX_CANDIDATES", "100000"))
 FINAL_K = int(os.environ.get("RETRIEVAL_FINAL_K", "5"))
-# The floor is model-specific. Set it from the evaluation run.
-RERANK_FLOOR = float(os.environ.get("RETRIEVAL_RERANK_FLOOR", "0.0"))
+# Calibrated on tests/evaluation/labeled.jsonl with the L-6 model; re-run when the corpus or model changes.
+RERANK_FLOOR = float(os.environ.get("RETRIEVAL_RERANK_FLOOR", "0.20"))
 FISCAL_YEAR_START_MONTH = int(os.environ.get("RETRIEVAL_FISCAL_START_MONTH", "1"))
 if POOL_K < 1 or MAX_CANDIDATES < 1 or FINAL_K < 1:
     raise SystemExit("RETRIEVAL_POOL_K, RETRIEVAL_MAX_CANDIDATES, and RETRIEVAL_FINAL_K must be positive.")
