@@ -18,9 +18,12 @@ WIDTH = 1536
 # POOL_K is the per-retriever pool and the fused cut; re-rank sizes it.
 POOL_K = int(os.environ.get("RETRIEVAL_POOL_K", "100"))
 MAX_CANDIDATES = int(os.environ.get("RETRIEVAL_MAX_CANDIDATES", "100000"))
+FINAL_K = int(os.environ.get("RETRIEVAL_FINAL_K", "5"))
+# The floor is model-specific. Set it from the evaluation run.
+RERANK_FLOOR = float(os.environ.get("RETRIEVAL_RERANK_FLOOR", "0.0"))
 FISCAL_YEAR_START_MONTH = int(os.environ.get("RETRIEVAL_FISCAL_START_MONTH", "1"))
-if POOL_K < 1 or MAX_CANDIDATES < 1:
-    raise SystemExit("RETRIEVAL_POOL_K and RETRIEVAL_MAX_CANDIDATES must be positive.")
+if POOL_K < 1 or MAX_CANDIDATES < 1 or FINAL_K < 1:
+    raise SystemExit("RETRIEVAL_POOL_K, RETRIEVAL_MAX_CANDIDATES, and RETRIEVAL_FINAL_K must be positive.")
 
 # The filter vocabulary: chunk fields plus doc_type, department, security_label, doc_date_from, doc_date_to, fiscal_year.
 _CHUNK_FILTERS = frozenset({"file_id", "parent_id", "kind"})
@@ -54,12 +57,15 @@ _POLICY = (
 _VECTOR = """
 WITH q AS (SELECT %s::vector AS v),
 candidates AS (
-    SELECT c.id, c.file_id, c.kind, c.text, c.breadcrumb, c.embedding
+    SELECT c.id, c.file_id, c.kind, c.text, c.breadcrumb,
+           c.document_title, c.excerpt_keywords,
+           c.questions_this_excerpt_can_answer AS questions, c.embedding
     FROM retrieval.chunk c
     JOIN retrieval.document d ON d.org_id = c.org_id AND d.file_id = c.file_id
     WHERE {predicate}
 )
-SELECT id, file_id, kind, text, breadcrumb, 1 - (embedding <=> q.v) AS score
+SELECT id, file_id, kind, text, breadcrumb, document_title, excerpt_keywords, questions,
+       1 - (embedding <=> q.v) AS score
 FROM candidates, q
 ORDER BY embedding <=> q.v
 LIMIT %s
@@ -76,7 +82,17 @@ SELECT count(*) FROM (
 ) candidate
 """
 
-_COLUMNS = ("id", "file_id", "kind", "text", "breadcrumb", "score")
+_COLUMNS = (
+    "id",
+    "file_id",
+    "kind",
+    "text",
+    "breadcrumb",
+    "document_title",
+    "excerpt_keywords",
+    "questions",
+    "score",
+)
 
 _INSERT = """
 INSERT INTO retrieval.chunk (
@@ -321,7 +337,11 @@ def search(query, caller, filters=None):
         _rank(_VECTOR.format(predicate=predicate), [vector, *params, POOL_K]),
         opensearch.search(query, _os_filter(caller, filters), POOL_K),
     ]
-    return _fuse(ranked, POOL_K)
+    pool = _fuse(ranked, POOL_K)
+    from . import rerank
+
+    scored = rerank.rank(query, pool)
+    return [row for row in scored if row["score"] >= RERANK_FLOOR][:FINAL_K]
 
 
 def save(caller, chunks):
@@ -465,6 +485,9 @@ def _self_check():
     assert [row["id"] for row in fused] == ["b", "a", "c"]
     assert fused[0]["score"] > fused[1]["score"]
     assert _fuse([[{"id": "a"}]], 0) == []
+    from . import rerank
+
+    rerank._self_check()
     assert search("", caller) == []
 
 

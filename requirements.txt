@@ -6,4 +6,5 @@ llama-index-core
 llama-index-llms-openai
 psycopg[binary]
 pyjwt[crypto]
+sentence-transformers
 unstructured[pptx,pdf]

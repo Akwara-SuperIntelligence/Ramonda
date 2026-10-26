@@ -103,6 +103,9 @@ def search(query, filters, limit):
             "kind": hit["_source"].get("kind"),
             "text": hit["_source"].get("text"),
             "breadcrumb": hit["_source"].get("breadcrumb"),
+            "document_title": hit["_source"].get("document_title"),
+            "excerpt_keywords": hit["_source"].get("excerpt_keywords"),
+            "questions": hit["_source"].get("questions"),
             "score": hit["_score"],
         }
         for hit in response["hits"]["hits"]
