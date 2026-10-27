@@ -1,0 +1,8 @@
+outcomes:
+  - suspicious
+  - routine
+  - escalate-to-mlro
+required_fields: [rationale, rule_trail, evidence_bundle]
+escalation:
+  queue: mlro-review
+  notify: email

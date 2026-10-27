@@ -1,0 +1,20 @@
+# Classes matter: a screening vendor and an analyst searching the same vendor share one
+# class, so they cannot corroborate each other.
+sources:
+  - id: alert-feed
+    class: monitoring
+    connector: mssql-alerts
+    schedule: "*/5 * * * *"
+  - id: core-ledger
+    class: ledger
+    connector: oracle-ledger
+    schedule: "*/15 * * * *"
+  - id: screening-vendor
+    class: screening
+    connector: http-json
+  - id: analyst-search-log
+    class: screening
+    connector: postgres-search-log
+  - id: adverse-media
+    class: media
+    connector: http-json

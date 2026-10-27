@@ -1,0 +1,6 @@
+# Vendor and manual log share one class, so the Claim stays unconfirmed.
+fixture: same-class.json
+expect:
+  outcome: stopped
+  discrepancies: 1
+  reason: insufficient_independence

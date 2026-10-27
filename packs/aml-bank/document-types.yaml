@@ -1,0 +1,11 @@
+document_types:
+  - id: kyc-file
+    media_types:
+      - application/pdf
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+    classification: confidential
+    entities: kyc.schema.json
+  - id: adverse-media
+    media_types: ["text/html", "application/pdf"]
+    classification: public
+    entities: media.schema.json
