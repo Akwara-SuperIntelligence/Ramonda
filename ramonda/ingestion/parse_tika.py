@@ -9,14 +9,14 @@ import urllib.request
 
 from googleapiclient.http import MediaIoBaseDownload
 
-from . import connect_drive
+from . import connect_drive, intake
 
-NAME = "19th June 2026 - End-User Features & Applications_Robust Tech Template"
-PDF_NAME = "laboratory proporsal st theresa-2.pdf"
-FILES = (NAME, PDF_NAME)
+DOC = "application/vnd.google-apps.document"
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 SLIDES = "application/vnd.google-apps.presentation"
 PDF = "application/pdf"
 PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+SUFFIX = {DOC: ".docx", DOCX: ".docx", PDF: ".pdf", PPTX: ".pptx"}
 CONTENT_KEYS = ("X-TIKA:content", "tk:content")
 TIKA = os.environ.get("TIKA_URL", "http://127.0.0.1:9998").rstrip("/")
 
@@ -35,7 +35,8 @@ def split_rmeta(payload):
 
 
 def shaped(mime):
-    return mime in (PDF, SLIDES)
+    # What Unstructured can partition. A Google Doc and an uploaded docx are the same reader.
+    return mime in (PDF, SLIDES, DOC, DOCX)
 
 
 def _self_check():
@@ -50,7 +51,7 @@ def _self_check():
     raise AssertionError("empty Tika payload was accepted")
 
 
-def find_file(service, name=NAME):
+def find_file(service, name):
     # Shared-drive file. A My Drive query does not return it.
     escaped = name.replace("\\", "\\\\").replace("'", "\\'")
     result = (
@@ -73,6 +74,8 @@ def find_file(service, name=NAME):
 def file_bytes(service, item):
     if item["mimeType"] == SLIDES:
         return export_pptx(service, item)
+    if item["mimeType"] == DOC:
+        return export_docx(service, item)
     # shortcut: other Google-native types need an export, get_media is for uploaded files
     request = service.files().get_media(fileId=item["id"])
     buffer = io.BytesIO()
@@ -91,6 +94,12 @@ def export_pptx(service, item):
         .export(fileId=item["id"], mimeType=PPTX)
         .execute()
     )
+
+
+def export_docx(service, item):
+    if item["mimeType"] != DOC:
+        raise SystemExit(f"{item['name']} is {item['mimeType']}, not a Google Doc.")
+    return service.files().export(fileId=item["id"], mimeType=DOCX).execute()
 
 
 def tika_ready():
@@ -133,14 +142,20 @@ def main():
     ensure_tika()
     service = connect_drive.drive_service()
     connect_drive.OUT.mkdir(exist_ok=True)
-    for name in FILES:
-        item = find_file(service, name)
-        text, meta = split_rmeta(tika_rmeta(file_bytes(service, item)))
+    for row in intake.entries():
+        item = find_file(service, row["name"])
+        data = file_bytes(service, item)
         stem = connect_drive.safe_name(item["name"], "")
+        # Keep the source next to its text, so a re-run does not need Drive.
+        suffix = SUFFIX.get(item["mimeType"], "")
+        source = connect_drive.OUT / (stem if stem.lower().endswith(suffix) else f"{stem}{suffix}")
+        source.write_bytes(data)
+        text, meta = split_rmeta(tika_rmeta(data))
         text_path = connect_drive.OUT / f"{stem}.txt"
         meta_path = connect_drive.OUT / f"{stem}.meta.json"
         text_path.write_text(text)
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+        intake.record(row, stem)
         print(f"Text {len(text)} chars -> {text_path}")
         print(f"Metadata {len(meta)} fields -> {meta_path}")
 

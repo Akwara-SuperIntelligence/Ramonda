@@ -15,35 +15,44 @@ def sections_from_blocks(blocks):
     tables = []
     emitted = False
 
+    def crumb():
+        return " > ".join(title for _, title in titles)
+
     def flush():
         nonlocal emitted
         body = "\n".join(bucket).strip()
         bucket.clear()
         if body:
-            sections.append((" > ".join(titles), body))
+            sections.append((crumb(), body))
             emitted = True
 
     def close_page():
         nonlocal emitted
         flush()
         if titles and not emitted:
-            sections.append((" > ".join(titles), titles[-1]))
-        titles.clear()
+            sections.append((crumb(), titles[-1][1]))
+        # A heading survives the page break: the next page still belongs to its section.
         emitted = False
 
     for block in blocks:
         kind = block.get("type")
         text = (block.get("text") or "").strip()
+        # A docx repeats its header and footer on every page. They are not the body.
+        if kind in ("Header", "Footer"):
+            continue
         if kind == "Table":
             flush()
             table = (block.get("html") or text).strip()
             if table:
-                tables.append((" > ".join(titles), table))
+                tables.append((crumb(), table))
         elif kind == "PageBreak":
             close_page()
         elif kind == "Title" and text:
             flush()
-            titles.append(text)
+            depth = int(block.get("depth") or 0)
+            while titles and titles[-1][0] >= depth:
+                titles.pop()
+            titles.append((depth, text))
         elif text:
             bucket.append(text)
     close_page()
@@ -154,6 +163,19 @@ def identified(chunks, stem):
     return kept
 
 
+def titled(chunks, stem):
+    # The document title comes from the intake. A model asked for a title writes a paragraph.
+    path = connect_drive.OUT / f"{stem}.intake.json"
+    if not path.exists():
+        return chunks
+    name = json.loads(path.read_text())["name"]
+    for suffix in (".docx", ".pdf", ".pptx"):
+        name = name.removesuffix(suffix)
+    for chunk in chunks:
+        chunk["document_title"] = name
+    return chunks
+
+
 def _self_check():
     blocks = [
         {"type": "Title", "text": "Cover"},
@@ -208,6 +230,7 @@ def _self_check():
     assert len(split) == 2
     with_id = identified([{"id": "x", "kind": "text", "text": "t", "breadcrumb": ""}], "f")
     assert with_id[0]["id"] == "x"
+    assert titled([{"text": "t"}], "no such stem")[0].get("document_title") is None
     assert reads_blocks([{"type": "Title", "text": "A"}])
     assert not reads_blocks(None)
 
@@ -224,14 +247,11 @@ def from_tika(text):
 
 def docling_extra(stem, blocks):
     texts = []
-    named = connect_drive.OUT / "docling" / f"{stem}.md"
-    if named.exists():
-        texts.append(named.read_text())
-    # shortcut: picture OCR is the deck, the PDF's Docling text is the named markdown
-    if not stem.endswith(".pdf"):
-        image_dir = connect_drive.OUT / "docling" / "images"
-        if image_dir.is_dir():
-            texts.extend(path.read_text() for path in sorted(image_dir.glob("*.md")))
+    # The PDF's Docling text, and the OCR of the pictures inside a deck. One file per document.
+    for name in (f"{stem}.md", f"{stem}.images.md"):
+        path = connect_drive.OUT / "docling" / name
+        if path.exists():
+            texts.append(path.read_text())
     corpus = "\n".join(block.get("text") or "" for block in blocks)
     tables = []
     sections = []
@@ -272,7 +292,7 @@ def main():
             chunks = chunks_from_blocks(stem, blocks)
         else:
             chunks = from_tika(tika_by_stem[stem].read_text())
-        chunks = identified(chunks, stem)
+        chunks = titled(identified(chunks, stem), stem)
         dest = connect_drive.OUT / f"{stem}.chunks.json"
         dest.write_text(json.dumps(chunks, indent=2, ensure_ascii=False))
         print(f"{len(chunks)} chunks -> {dest}")

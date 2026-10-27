@@ -14,4 +14,5 @@ def caller():
 
 
 _self_check()
-ingest(caller())
+ingest()
+# ingest(caller())  # retrieval is off for now

@@ -1,18 +1,20 @@
-"""Run the ingestion steps, then write the labelled chunks to retrieval."""
+"""Run the ingestion steps, and write the labelled chunks to retrieval when a caller is given."""
 
 import json
 import os
 
 
-def ingest(caller):
-    from . import chunk, enrich, parse_docling, parse_tika, parse_unstructured
+def ingest(caller=None):
+    from . import chunk, enrich, intake, parse_docling, parse_tika, parse_unstructured
 
+    intake._self_check()
     parse_tika.main()
     parse_unstructured.main()
     parse_docling.main()
     chunk.main()
     enrich.main()
-    label_and_save(caller)
+    # Retrieval is off for now. Uncomment the next line to write the chunks and index them.
+    # label_and_save(caller)
 
 
 def labelled(chunks, label, user):

@@ -5,11 +5,12 @@ import json
 import re
 from collections import Counter
 
-from . import connect_drive, parse_tika
+from . import connect_drive, intake, parse_tika
 
 
-def as_block(category, text, html):
-    block = {"type": category, "text": text}
+def as_block(category, text, html, depth=None):
+    # depth is a docx heading level: 0 is a chapter, 1 is a sub-heading under it.
+    block = {"type": category, "text": text, "depth": depth}
     if html:
         block["html"] = html
     return block
@@ -18,8 +19,9 @@ def as_block(category, text, html):
 def _self_check():
     title = as_block("Title", "Intro", None)
     table = as_block("Table", "a b", "<table></table>")
-    assert title == {"type": "Title", "text": "Intro"}
+    assert title == {"type": "Title", "text": "Intro", "depth": None}
     assert table["html"] == "<table></table>"
+    assert as_block("Title", "Chapter", None, 0)["depth"] == 0
 
 
 def _use_simple_tokenize():
@@ -51,6 +53,10 @@ def blocks_from(data, mime):
 
         # shortcut: fast reads the text layer; run this venv on Python 3.12 (no torch wheel for 3.15). Docling OCRs a scan
         elements = partition_pdf(file=io.BytesIO(data), strategy="fast")
+    elif mime in (parse_tika.DOC, parse_tika.DOCX):
+        from unstructured.partition.docx import partition_docx
+
+        elements = partition_docx(file=io.BytesIO(data))
     else:
         from unstructured.partition.pptx import partition_pptx
 
@@ -59,15 +65,16 @@ def blocks_from(data, mime):
     blocks = []
     for element in elements:
         html = getattr(element.metadata, "text_as_html", None)
-        blocks.append(as_block(element.category, element.text or "", html))
+        depth = getattr(element.metadata, "category_depth", None)
+        blocks.append(as_block(element.category, element.text or "", html, depth))
     return blocks
 
 
 def main():
     service = connect_drive.drive_service()
     connect_drive.OUT.mkdir(exist_ok=True)
-    for name in parse_tika.FILES:
-        item = parse_tika.find_file(service, name)
+    for row in intake.entries():
+        item = parse_tika.find_file(service, row["name"])
         if not parse_tika.shaped(item["mimeType"]):
             print(f"skip {item['name']}: Unstructured has no partition for {item['mimeType']}")
             continue
