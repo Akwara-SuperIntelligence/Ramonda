@@ -94,4 +94,4 @@ Not in v0.1: scheduling, bulk import, a second Tenant, self-service Pack editing
 
 ## Reading order
 
-`GLOSSARY.md` for the words, `workflows.md` for what changes per Tenant, `releases.md` for how code reaches a Tenant, `harness.md` for the loop.
+`GLOSSARY.md` for the words. `workflows.md` for what changes per Tenant. `pack.md` for what is in a Pack. `api.md` for the public surface. `releases.md` for how code reaches a Tenant. `harness.md` for the loop. `security.md` for what can go wrong. `evaluation.md` for how we know a Run is right. `docs/adr/` for the decisions that are hard to reverse.
