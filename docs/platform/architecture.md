@@ -46,7 +46,9 @@ Plus one Docling sidecar for parsing, and one PostgreSQL.
 
 Why three: an API request must not block on a four-hundred-page scanned contract; the three scale on different axes; and a Connector fails for reasons the API should never share.
 
-No message broker. Jobs are rows in PostgreSQL claimed with `FOR UPDATE SKIP LOCKED`. That is enough for this size, and it removes a piece of infrastructure from a bank's network that nobody there wants to review.
+No message broker. Jobs are rows in PostgreSQL, managed by Procrastinate, claimed with `FOR UPDATE SKIP LOCKED`. That is enough for this size, and it removes a piece of infrastructure from a bank's network that nobody there wants to review.
+
+A Run stops by setting `cancel_requested` on its row. The worker checks that flag at every Step boundary and before every model or tool call.
 
 ## Data
 
