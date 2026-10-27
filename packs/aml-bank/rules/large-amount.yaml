@@ -1,6 +1,0 @@
-id: large-amount-review
-when:
-  all:
-    - { claim: alert.amount_above_threshold }
-    - { field: subject.risk_rating, eq: high }
-then: { require: human-review, reason: "AML Policy 7.2" }

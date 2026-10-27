@@ -1,9 +1,8 @@
 credentials.json
 token.json
 .env
-ramonda/retrieval/.env
 out/
 .venv/
 __pycache__/
+*.pyc
 .DS_Store
-/target

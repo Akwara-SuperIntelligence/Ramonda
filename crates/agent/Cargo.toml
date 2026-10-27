@@ -1,8 +1,0 @@
-[package]
-name = "ramonda-agent"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-
-[dependencies]
-ramonda-rules = { path = "../rules" }

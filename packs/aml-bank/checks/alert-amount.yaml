@@ -1,7 +1,0 @@
-id: alert-amount
-claim: alert.amount_above_threshold
-requires:
-  classes: [monitoring, ledger]
-  min_sources: 2
-compare: predicate
-on_discrepancy: stop

@@ -1,5 +1,0 @@
-[package]
-name = "ramonda-identity"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true

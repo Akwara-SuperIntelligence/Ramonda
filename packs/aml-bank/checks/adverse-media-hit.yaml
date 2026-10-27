@@ -1,7 +1,0 @@
-id: adverse-media-hit
-claim: subject.has_adverse_media
-requires:
-  classes: [screening, media]
-  min_sources: 2
-compare: predicate
-on_discrepancy: stop

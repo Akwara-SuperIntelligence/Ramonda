@@ -1,5 +1,0 @@
-fixture: routine.json
-expect:
-  outcome: drafted
-  decision: routine
-  discrepancies: 0

@@ -1,6 +1,0 @@
-# The ledger does not confirm the alert's threshold claim. The Case must stop.
-fixture: amount-mismatch.json
-expect:
-  outcome: stopped
-  discrepancies: 1
-  claim: alert.amount_above_threshold
