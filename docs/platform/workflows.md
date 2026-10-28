@@ -13,6 +13,7 @@ version: 3
 trigger:
   schedule: "0 06 1 1,4,7,10 *"
 subject: member-state
+classification_ceiling: internal
 steps:
   - id: gather
     uses: retrieve
@@ -40,6 +41,8 @@ steps:
 ```
 
 Read it top to bottom. That is the whole control flow.
+
+The header is not control flow. `classification_ceiling` is the highest Classification the Run may read, and the Run's effective Clearance is the lower of it and the starter's own Clearance, so a Person with high Clearance does not widen a Workflow that needs less. Leave it out and the ceiling is the starter's Clearance.
 
 ## The seven verbs
 

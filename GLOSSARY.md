@@ -35,7 +35,7 @@ One operation the engine can perform on a Workflow's behalf. There are seven, an
 _Avoid_: tool, function, action, capability
 
 **Run**:
-One execution of one Workflow over one Subject at one time, bounded in steps and in time.
+One execution of one Workflow over one Subject at one time, bounded in steps and in time. It acts as the Person who started it, at the Clearance that Person held at start, capped by the Workflow's Classification ceiling.
 _Avoid_: job, execution, instance, case, session
 
 **Subject**:
@@ -148,6 +148,10 @@ The page a Person reads to answer "why does this figure say 41": the value, its 
 The access level of a Document, or of a Person's Clearance.
 _Avoid_: label, security level, sensitivity
 
+**Classification ceiling**:
+The highest Classification one Workflow may read. A Run's effective Clearance is the lower of the starter's Clearance and this ceiling.
+_Avoid_: max level, limit, threshold
+
 **Clearance**:
 The highest Classification a Person may see.
 
@@ -158,5 +162,13 @@ _Avoid_: service account, API key, shared secret
 ## The build
 
 **Module**:
-One of six parts of the codebase, each with one reason to change and a public interface: `documents`, `harness`, `rules`, `work`, `evidence`, `access`.
+One of six parts of the codebase, each with one reason to change, its own tables and a public surface: `documents`, `harness`, `rules`, `work`, `evidence`, `access`.
 _Avoid_: crate, package, service, component, microservice
+
+**Public surface**:
+The names a Module's `__init__.py` exports: data objects, `Protocol`s and enums, and nothing else.
+_Avoid_: API, facade, interface, contract
+
+**Kernel**:
+The plumbing outside the six Modules that every Module may import: the database base, the unit of work, settings, identifier generation and Trace setup. It imports no Module and holds no domain word. It is not a seventh Module.
+_Avoid_: core, shared, common, utils

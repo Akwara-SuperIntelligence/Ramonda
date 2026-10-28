@@ -36,11 +36,13 @@ while run.next_step < len(workflow.steps):
     stop_if_over_budget(run)           # steps and deadline
     ctx = assemble(step, run)          # documents and ledger slice, token budget
     out = VERBS[step.uses](ctx, step.with_)
-    store.commit_step(run, step, out)  # one transaction
+    with unit_of_work() as uow:        # ADR 15: the audit pair, one commit
+        work.commit_step(uow, run, step, out)
+        evidence.append(uow, run, step, out)
     enqueue_next(run)
 ```
 
-Fifteen lines of control flow. Everything else is the seven verbs.
+The control flow is short on purpose. Everything else is the seven verbs. `harness` owns no store: it writes Run data through `work` and the ledger through `evidence`, and the kernel supplies the unit of work that makes the two one commit.
 
 ## Memory, and what "compaction" means here
 

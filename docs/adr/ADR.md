@@ -1,6 +1,6 @@
 # Decisions
 
-Twelve decisions that would be expensive to reverse, or that a reader would question without context. Each one names the alternative it rejected.
+Twelve decisions became sixteen as boundaries were pinned down. Each one would be expensive to reverse, or a reader would question it without context. Each one names the alternative it rejected.
 
 | # | Decision |
 |---|---|
@@ -16,6 +16,10 @@ Twelve decisions that would be expensive to reverse, or that a reader would ques
 | [10](#10-one-copy-of-the-system-per-tenant) | One copy of the system per Tenant — **provisional** |
 | [11](#11-documents-are-hostile-input) | Documents are hostile input |
 | [12](#12-authentication-is-a-per-tenant-oidc-boundary) | Authentication is a per-Tenant OIDC boundary |
+| [13](#13-boundaries-are-a-graph-and-only-a-graph) | Boundaries are a graph, and only a graph |
+| [14](#14-a-kernel-holds-the-plumbing) | A kernel holds the plumbing |
+| [15](#15-the-audit-pair-is-one-transaction) | The audit pair is one transaction |
+| [16](#16-a-run-acts-as-the-person-who-started-it) | A Run acts as the Person who started it |
 
 ---
 
@@ -37,6 +41,10 @@ Each Tenant gets its own PostgreSQL database, holding relational rows, vectors a
 
 Rejected: a shared database with `tenant_id` only (cheaper, but a bank's review becomes an audit of every query); a schema per Tenant in one database (migrations run N times, and isolation does not improve).
 
+Each Module owns its tables and the name carries the owner: `documents_chunk`, `work_run`, `evidence_entry`, `access_person`. One forward-only Alembic chain at the repository root collects every Module's metadata.
+
+Rejected: a schema per Module and a database user per Module. With one database per Tenant the Tenant boundary already isolates, and a table prefix plus a CI test buys most of what a schema buys. It is the answer when a security review asks for per-Module grants, not before.
+
 **Consequence:** a fleet of databases, each with its own backup, restore and migration run.
 
 ---
@@ -47,7 +55,7 @@ One modular monolith: `documents`, `harness`, `rules`, `work`, `evidence`, `acce
 
 Rejected: Rust. It was the previous plan and it was reversed. Document AI, parsing and evaluation tooling are Python, the team is small, and the compiler was buying correctness we can buy three cheaper ways: one function that builds a `Verified` value, one function that scopes a query to a Tenant, and one lint step that enforces the module graph.
 
-**Consequence:** the type-level guarantee becomes a runtime check plus a test. The lint step becomes the compiler, and it must never be skipped.
+**Consequence:** the type-level guarantee becomes a runtime check plus a test. The lint step becomes the compiler, and it must never be skipped. The graph the six Modules form, and the imports allowed between them, is [13](#13-boundaries-are-a-graph-and-only-a-graph).
 
 ---
 
@@ -65,7 +73,7 @@ Rejected: code per client (that is a fork by another name); a shared definition 
 
 ## 5. Rules are data and cannot reach a model
 
-A Rule is YAML in the Pack: typed operators, no loops, no recursion, no user-defined functions. Only the `harness` module holds a model client. `rules` cannot import it.
+A Rule is YAML in the Pack: typed operators, no loops, no recursion, no user-defined functions. `rules` imports nothing: no database, no model. It takes values and returns a verdict, which is what lets a compliance officer read it without seeing the rest of the system.
 
 Reason: "the company's own written rules, exactly as defined" is a legal claim. A compliance officer must be able to read a Rule, sign it, and see later the exact Rule version that produced an Artifact. A rule that has to be executed to be understood cannot be signed.
 
@@ -164,3 +172,49 @@ Default is a cell-local Keycloak, with the customer's own IdP brokered in where 
 Connectors use a workload identity, one per Connector, never a Person's token. Upstream credentials live in the Tenant's own sealed store, never in the Pack and never in the identity provider.
 
 **Consequence:** no vendor SDK in the core, a JWKS per Tenant, and moving a Tenant to a different IdP is a configuration change.
+
+---
+
+## 13. Boundaries are a graph, and only a graph
+
+`architecture.md` holds one table: what each Module may import. `import-linter` reads it. `rules`, `evidence` and `access` are leaves. `harness` calls every Module and owns no table. Nothing points up: no Module imports `apps/`, nothing imports `harness` but `apps/`, and `kernel` imports no Module.
+
+A Module's public surface carries data objects only: frozen dataclasses, `Protocol`s, enums, opaque identifiers. Never a table class, never a database session, never a query builder. A caller gets a snapshot of a value and cannot reach back into the Module's tables.
+
+Modules do not publish messages. A cross-Module action is a direct call, because an in-process bus is an edge the linter cannot see.
+
+Rejected: an in-process event bus (flexible, but half the graph becomes invisible and the table stops being the architecture); returning entities (one database, so it works, until the first lazy load reaches across two Modules' tables); a schema per Module (see [2](#2-one-database-per-tenant)).
+
+**Consequence:** the gain is change locality, not a migration to services later. Extractability survives only as two cheap invariants: no Module reads another Module's tables, and no transaction spans two Modules except the audit pair in [15](#15-the-audit-pair-is-one-transaction). A boundary that turns out wrong is a refactor in one repository, and the linter is the review.
+
+---
+
+## 14. A kernel holds the plumbing
+
+`kernel/` holds the database base, the unit of work, settings, identifier generation and Trace setup. Every Module may import it. It imports no Module and contains no domain word: no Run, no Document, no Artifact.
+
+Rejected: plumbing inside `access` or `work` (either would stop being a leaf); plumbing copied into each Module (six ways to open a session and six ways to make an identifier).
+
+**Consequence:** it is called `kernel` and not `core` or `shared`, because those names collect unfinished domain logic. The import-linter contract treats it as a node with no outgoing edges, and a domain noun in it belongs to a Module.
+
+---
+
+## 15. The audit pair is one transaction
+
+A write that changes both `work` and `evidence` commits once. That is every Step commit (the Run advances, the assertion enters the ledger) and every Signature (the Signature is recorded, and the ledger gains it).
+
+`apps/` opens one unit of work, `work` and `evidence` write inside it, and one commit ends it. `harness` owns no store: it calls two public APIs on the same unit of work.
+
+Rejected: two commits with a repair job (a window where the Run is ahead of the ledger, and the repair job is the thing an auditor asks to see fail); Evidence first and the Run second (a crash leaves an assertion for a Step that never committed, and `Explain` can then show a claim the Artifact does not contain).
+
+**Consequence:** this is the only cross-Module transaction in the system; every other write touches one Module. Only `apps/` opens a unit of work, and a CI test asserts that.
+
+---
+
+## 16. A Run acts as the Person who started it
+
+The Run row records that Person and the Clearance held at start. The Run keeps that Clearance until it ends, and effective Clearance is the lower of the snapshot and the Workflow's classification ceiling.
+
+Rejected: re-resolving the Person at every Step (a revoked Role would stop a Run mid-way, but the same Workflow version over the same Document version would stop producing the same Artifact, and "why could it read page 9" becomes unanswerable after the fact); a Run identity declared in the Pack (a second identity system beside the Person, for nothing the snapshot does not already give).
+
+**Consequence:** revocation is a policy, not a mechanism. A Tenant that wants an in-flight Run stopped gets a flag checked at each Step boundary, the same shape as `cancel_requested`.

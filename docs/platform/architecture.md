@@ -7,32 +7,66 @@ One product, many Tenants. Every Tenant has its own database, its own Roles, its
 ## Shape
 
 ```
-api        ──► modules ──► PostgreSQL
-                                  ▲
-worker     ──► modules ───────────┘        + Docling sidecar
-connector  ──► modules ──► the Tenant's Sources
+apps/api        ──► modules ──► PostgreSQL
+                                     ▲
+apps/worker     ──► modules ─────────┘        + Docling sidecar
+apps/connector  ──► modules ──► the Tenant's Sources
+
+modules/*       ──► kernel
 ```
 
-One image, three entrypoints, one database per Tenant, one parsing sidecar.
+One image, three entrypoints, one database per Tenant, one parsing sidecar. `apps/` is the composition root and imports anything. `kernel/` is plumbing and imports no Module.
 
 ## Six modules
 
 | Module | One reason to change | Owns |
 |---|---|---|
 | `documents` | how we read a Document | intake, parse, chunk, index, search, Anchor |
-| `harness` | how a Workflow is executed | the loop, the seven verbs, the step budget |
+| `harness` | how a Workflow is executed | the loop, the seven verbs, the context assembler |
 | `rules` | how a Tenant's Rules are applied | Rule evaluation, Checks, Discrepancy |
 | `work` | what a Run is | Run state, Artifact versions, Signatures, the review queue |
 | `evidence` | what we must be able to prove | Evidence entries, hash chain, Explain |
 | `access` | who may see what | Person, Role, Permission, Classification, Clearance |
 
-Three dependency rules:
+`kernel/` is not a seventh Module. It holds the database base, the unit of work, settings, identifier generation and Trace setup: the plumbing every Module needs and none of them owns. It imports no Module and contains no domain word.
 
-1. **`evidence` and `access` are leaves.** They depend on nothing else, so they can never grow an opinion about Runs or Documents.
-2. **`rules` must not reach a model.** Only `harness` holds a model client. This is the whole of the determinism claim: a Rule evaluates, it does not reason.
-3. **No upward edges.** `harness` composes and owns no data.
+## The dependency graph
 
-Enforcement in Python: one package per module, `modules/<name>/__init__.py` is the only public surface, and `import-linter` fails CI on any import deeper than another module's `__init__`. The compiler will not save you here, so the lint step is the compiler.
+The whole architecture is this table. It is the only list of imports allowed between Modules.
+
+| Node | May import |
+|---|---|
+| `apps/api`, `apps/worker`, `apps/connector` | any Module, and `kernel` |
+| `harness` | `documents`, `rules`, `work`, `evidence`, `access` |
+| `work` | `evidence`, `access` |
+| `documents` | `access` |
+| `rules` | — |
+| `evidence` | — |
+| `access` | — |
+| `kernel` | — |
+
+Three properties do the work:
+
+1. **`rules`, `evidence` and `access` are leaves.** `rules` takes values and returns a verdict; it holds no database and no model, which is what makes a Rule signable. `evidence` and `access` depend on nothing, so they can never grow an opinion about Runs or Documents.
+2. **`harness` is the only composer.** It calls every Module and owns no table. Only `apps/` imports `harness`.
+3. **`documents` depends on `access`.** A search must drop Chunks above a Person's Clearance in SQL, not after it. That is why `access` is the shared vocabulary of who-may-see-what and not one module among six.
+
+## What may cross a boundary
+
+Data objects only: frozen dataclasses, `Protocol`s, enums and opaque identifiers. Never a table class, never a database session, never a query builder. A caller gets a snapshot of a value, not an object that can reach back into the Module's tables.
+
+Modules also do not publish messages. A cross-Module action is a direct call into the other Module's `__init__.py`, the only form the linter can see. Work that must outlive a crash is a Procrastinate job, not an event bus.
+
+## Enforcement
+
+Six checks, blocking from the first commit. Python has no compiler to enforce a boundary, so these are the compiler:
+
+1. `import-linter` carries one layered contract from the table above, plus forbidden edges: no Module imports `apps/`, nothing imports `harness` but `apps/`, `kernel` imports no Module.
+2. A test asserts that the names each `__init__.py` exports match a committed allowlist. Adding a public name means editing the allowlist in the same diff, so a boundary change is a visible line.
+3. A forbidden contract rejects `sqlalchemy`, `asyncpg` and `psycopg` inside any `__init__.py`.
+4. A test asserts that SQL in `modules/<name>/` names only `<name>_*` tables.
+5. A test asserts that only `apps/` opens a unit of work.
+6. The OpenAPI drift check in [`api.md`](api.md).
 
 ## Runtime
 
@@ -50,9 +84,19 @@ No message broker. Jobs are rows in PostgreSQL, managed by Procrastinate, claime
 
 A Run stops by setting `cancel_requested` on its row. The worker checks that flag at every Step boundary and before every model or tool call.
 
+## The audit pair is one transaction
+
+Two Modules carry the audit trail: `work` holds the Run and the Signature, `evidence` holds the ledger. Whenever one write changes both, it is one transaction. That covers a Step commit (the Run advances, the assertion enters the ledger) and a Signature (the Signature is recorded, and the ledger gains it).
+
+`apps/` opens one unit of work, `work` and `evidence` write inside it, and one commit ends it. Modules receive that unit of work, never a database session. This is the single exception to "no transaction spans two Modules", and it exists because the product claim is atomic: a figure is in the Artifact and in the ledger, or it is nowhere. Every other write touches one Module. `harness` owns no store: it calls two public APIs on the same unit of work.
+
 ## Data
 
 One database per Tenant. The same tables in every one.
+
+Each Module owns its tables, and the name carries the owner: `documents_chunk`, `work_run`, `evidence_entry`, `access_person`. One forward-only Alembic chain at the repository root collects every Module's metadata; a Module does not migrate itself. The prefix makes a cross-Module query visible in review and testable in CI.
+
+Not in v0.1: a schema per Module, or a database user per Module. With one database per Tenant, the Tenant boundary already provides the isolation. A schema per Module is the answer when a security review asks for per-Module grants, not before.
 
 `tenant_id` sits on every row even though each database holds one Tenant. A row that does not know its Tenant is a bug waiting for a bad restore, and the day a Tenant merges or splits, the column is the proof of what was whose.
 
@@ -69,6 +113,12 @@ Every request resolves the Person from a verified OIDC token, then checks one Pe
 Two identities never mix: a Person has a token from the Tenant's identity provider, and a Connector has a workload identity. A Connector never carries a Person's token.
 
 v0.1 does not use database row-level security. It is a good second lock, and it arrives when a client's security review asks for it.
+
+### Whose Clearance a Run uses
+
+A Run acts as the Person who started it. That Person's Clearance is written into the Run row at start and does not change while the Run is in flight; a revoked Role blocks the next Run, not this one. The effective Clearance is the lower of that snapshot and the Workflow's classification ceiling, so a high-Clearance Person starting a low-Classification Workflow does not make the Run read more than the Workflow needs.
+
+The snapshot is a fact in the Run row and appears in `Explain`. Reproducibility is the reason: the same Workflow version over the same Document version must produce the same Artifact, and a Clearance re-resolved at every Step makes that false and makes "why could it read page 9" unanswerable after the fact.
 
 ## Observability
 
