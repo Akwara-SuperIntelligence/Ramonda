@@ -19,7 +19,7 @@ One repository. One image. One database per Tenant. A Workflow is a Tenant's own
 | [`docs/platform/harness.md`](docs/platform/harness.md) | the loop, and what we adopt |
 | [`docs/platform/security.md`](docs/platform/security.md) | what can go wrong, and the controls |
 | [`docs/platform/evaluation.md`](docs/platform/evaluation.md) | how we know a Run is right |
-| [`docs/adr/`](docs/adr/) | the decisions that are hard to reverse |
+| [`docs/ADR.md`](docs/ADR.md) | the twelve decisions that are hard to reverse |
 
 ## The claim in one sentence
 
