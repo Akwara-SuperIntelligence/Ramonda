@@ -6,6 +6,8 @@ The append-only event log is not a module. It has no capability of its own: it r
 
 `jobs` does not own it, because every module needs it and that would make `jobs` the centre of the system. A twelfth module does not own it, because there is no behaviour to own.
 
+**Amended by 0053.** The append call is still the only write into the log, but a module no longer makes it from its own request path. The module writes its event to an outbox in its own schema, in the same transaction as the state change, and a relay hands it to shared. The `events` schema remains shared's, and no module reads it except through replay.
+
 ## Consequences
 
 - Replay (0024) reads one log, not eleven.
