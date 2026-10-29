@@ -23,14 +23,18 @@ ramonda/
       adapters/              # this client's source adapters
       skills/                # Markdown SOPs
       config/                # source bindings, allowlist, flags
+      docs/
+        adr/                 # decisions about THIS client
+        GLOSSARY.md          # THIS client's vocabulary
       tests/
 ```
 
-Three rules:
+Four rules:
 
 1. **The composition file is the only meeting point.** It may import core and its own client. Core never imports a client or a composition. A client never imports another client.
 2. **A client's code lives in its folder.** If only one client needs it, it goes there. If two need it, it is proposed to core, and it enters core only domain-neutral (0027).
-3. **Data never lives in the repo.** Jobs, artifacts, evidence, structure specs, templates and client documents live in the deployment's database and object storage.
+3. **Client decisions and client vocabulary live in the client's `docs/`.** `docs/adr/` and `GLOSSARY.md` at the root carry only what holds for every client; a decision that names one customer's sessions, agenda items or signers belongs in that client's folder.
+4. **Data never lives in the repo.** Jobs, artifacts, evidence, structure specs, templates and client documents live in the deployment's database and object storage.
 
 ## Consequences
 
