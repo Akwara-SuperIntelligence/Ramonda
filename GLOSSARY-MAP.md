@@ -2,7 +2,7 @@
 
 ## Contexts
 
-- [Ramonda](./GLOSSARY.md) — the platform vocabulary, shared by every client
+- [Ramonda](./core/GLOSSARY.md) — the platform vocabulary, shared by every client
 - [AU Codex](./clients/au_codex/docs/GLOSSARY.md) — the first client's domain
 
 ## Relationships

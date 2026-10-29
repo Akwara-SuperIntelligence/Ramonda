@@ -1,6 +1,6 @@
 # Ramonda
 
-The platform vocabulary, shared by every client. For the first client's domain language, see [AU Codex](./clients/au_codex/docs/GLOSSARY.md).
+The platform vocabulary, shared by every client. For the first client's domain language, see [AU Codex](../clients/au_codex/docs/GLOSSARY.md).
 
 ## Language
 

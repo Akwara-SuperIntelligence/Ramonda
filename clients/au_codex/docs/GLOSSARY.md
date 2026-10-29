@@ -1,6 +1,6 @@
 # AU Codex
 
-The first client's domain: the African Union's Codex coordination desk, its proceedings, and the documents it signs. Platform terms live in the [root glossary](../../../GLOSSARY.md).
+The first client's domain: the African Union's Codex coordination desk, its proceedings, and the documents it signs. Platform terms live in the [platform glossary](../../../core/GLOSSARY.md).
 
 ## Language
 
