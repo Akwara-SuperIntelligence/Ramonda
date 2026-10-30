@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 01 — The loop that dies</title>
+<link rel="stylesheet" href="../assets/course.css">
+<style>
+  .loop-svg text { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 01</p>
+  <h1>The loop that dies</h1>
+  <p class="lede">An agent is a model calling tools in a loop. That loop is easy. Keeping it alive when the process ends is the whole course.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>one file</b></span>
+    <span>Stack: <b>Python 3.12</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html">reference</a></b></span>
+  </div>
+
+  <p>Your mission is a colleague in the cloud that keeps working after you close the laptop. Before anything can survive a crash, you need to see exactly what crashes. It is smaller than it looks — and the failure is more interesting than you expect.</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>An agent is not a model. It is a <strong>model plus a harness</strong> that executes tools and owns the conversation. The model never runs anything; it asks. Everything in the talk — memory, triggers, sub-agents, its own computer — is built on this boundary.</p>
+  </div>
+
+  <h2>1. A turn is three steps, repeated</h2>
+
+  <p>Each round trip has the same shape. You send messages and a list of tool schemas. The model replies with either text or one or more <strong>tool calls</strong> — a name and a JSON argument blob. Your code executes them, appends the results, and calls the model again. When a reply contains no tool calls, the turn is over.</p>
+
+  <p>That is the entire mechanism. Anthropic's description is blunt: agents "are typically just LLMs using tools based on environmental feedback in a loop."<sup><a href="#s1">1</a></sup> The <a href="https://github.com/humanlayer/12-factor-agents">12-Factor Agents</a> guide writes it as four lines of pseudocode: determine the next step, execute it, append the result, repeat until done.</p>
+
+  <p class="sidenote"><b>Why the boundary matters.</b> The model can ask to run <code>rm -rf</code>. The harness decides whether it runs. Treat every tool name and argument as untrusted input, not as a command from you.</p>
+
+  <figure class="loop-svg">
+    <svg viewBox="0 0 820 250" role="img" aria-label="Loop diagram: the model requests a tool call, the harness executes it, the result is appended, and the model is called again until it returns no tool call.">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+      <rect x="20" y="70" width="190" height="82" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="36" y="98" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">MODEL</text>
+      <text x="36" y="122" font-size="12" fill="currentColor">picks a tool</text>
+      <text x="36" y="140" font-size="12" fill="currentColor">or says done</text>
+
+      <rect x="300" y="70" width="200" height="82" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="316" y="98" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">HARNESS</text>
+      <text x="316" y="122" font-size="12" fill="currentColor">executes the call</text>
+      <text x="316" y="140" font-size="12" fill="currentColor">(your code)</text>
+
+      <rect x="590" y="70" width="200" height="82" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="606" y="98" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">CONTEXT</text>
+      <text x="606" y="122" font-size="12" fill="currentColor">result appended</text>
+      <text x="606" y="140" font-size="12" fill="currentColor">to messages</text>
+
+      <line x1="210" y1="111" x2="292" y2="111" stroke="currentColor" stroke-opacity="0.6" marker-end="url(#a2)"></line>
+      <line x1="500" y1="111" x2="582" y2="111" stroke="currentColor" stroke-opacity="0.6" marker-end="url(#a2)"></line>
+
+      <path d="M 690 152 L 690 196 L 115 196 L 115 160" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3" marker-end="url(#a2)"></path>
+      <text x="300" y="186" font-size="11" fill="currentColor" opacity="0.6">call the model again</text>
+
+      <text x="20" y="232" font-size="11" fill="currentColor" opacity="0.6">Stop when a reply has no tool calls.</text>
+    </svg>
+    <figcaption><b>One turn, three steps.</b> The cycle is mechanical; the intelligence is entirely in which tool the model picks next.</figcaption>
+  </figure>
+
+  <p>Two details in that loop will matter for the rest of the course. First, the <strong>result is the model's only evidence</strong> that anything happened. Second, the <strong>messages list is execution state</strong>: it holds the pending tool call, the history, and the step count. Where that list lives determines whether your agent survives anything.</p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="a">
+      <p>The model returns a tool call. What does the harness do next?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Run tool, append result, call the model again</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Save result, end turn, wait for the user</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Summarize result, clear transcript, restart the whole loop</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the appended result is the model's only evidence for the next decision. Ending the turn first would make multi-step work impossible.</div>
+    </div>
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <h2>2. Build the smallest honest loop</h2>
+
+  <p>The build is deliberately framework-free. You should be able to point at every line that turns a chat completion into an agent. Later lessons can use a framework because you will know what it is hiding.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>3 commands</span></div>
+    <ol>
+      <li>Open <a href="../build/lesson-01/agent.py"><code>build/lesson-01/agent.py</code></a>. Find the three parts: <code>TOOLS</code> (schemas the model sees), <code>execute()</code> (the only code that touches the world), and <code>run()</code> (the loop).</li>
+      <li>Run a two-tool task. Watch one API call per round.</li>
+      <li>Read the saved transcript and match each message to a step in the diagram.</li>
+    </ol>
+  </div>
+
+  <p class="small">Run these from the repo root. The <code>$</code> is the shell prompt — start typing after it, not at it. No activation needed: <code>.venv/bin/python</code> is the interpreter.</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-01/agent.py "Create hello.md with the line 'Hello from the loop'. Then read it back and confirm."</div>
+
+  <p>You should see something close to this — the exact tool choices vary between runs:</p>
+
+  <pre><code>[1] write_file {"path": "hello.md", ...}
+    -&gt; wrote 21 chars to hello.md
+[2] run_shell {"command": "cat hello.md"}
+    -&gt; exit code: 0
+       Hello from the loop.
+
+I created hello.md, then read it back to confirm the contents.</code></pre>
+
+  <p class="sidenote"><b>Count the calls.</b> Two tool rounds means three model calls: one to choose each tool, and one to write the summary. Cost scales with rounds, not with the size of the task description.</p>
+
+  <p>The only clever line in the file is the stop condition: <code>if not message.tool_calls</code>. There is no planner, no graph, no framework. The model decides; the harness executes.</p>
+
+  <p class="small">One caveat: <code>run_shell</code> runs on your machine, confined only to a workspace directory. That is convenient, not safe. Lesson 8 replaces it with a disposable VM; until then, do not give this toy anything you would not give a stranger.</p>
+
+  <h2>3. Now kill it</h2>
+
+  <p>Here is the experiment that the rest of the course exists to fix. Reset, then run a task that writes a file, and pull the power right after <code>write_file</code> returns — after the side effect, before the result is recorded.</p>
+
+  <div class="callout warn">
+    <span class="label">Predict before you run</span>
+    <p>When the process dies mid-turn, what is in <code>workspace/plan.md</code>? What is in <code>state/transcript.json</code>? Write your answer down before running — being wrong here is the lesson.</p>
+    <details><summary>Reveal</summary>
+      <p>The file exists, with content. The transcript stops at the last <em>completed</em> step, so the agent has no record of the write, and no idea the file changed. On resume it redoes the step: it may overwrite the file, or inspect it and validate it instead. It cannot simply continue.</p>
+    </details>
+  </div>
+
+  <div class="cmd"><span class="prompt">$</span>rm -rf build/lesson-01/state build/lesson-01/workspace
+<span class="prompt">$</span>.venv/bin/python build/lesson-01/agent.py "Create plan.md with exactly three bullets about launching a small agent. Then read it back and count them." --crash-on write_file
+<span class="comment"># the write lands on disk, then the process dies before recording the result</span>
+<span class="prompt">$</span>cat build/lesson-01/workspace/plan.md
+<span class="prompt">$</span>cat build/lesson-01/state/transcript.json</div>
+
+  <p>Then resume, and compare the file before and after:</p>
+
+  <div class="cmd"><span class="prompt">$</span>cp build/lesson-01/workspace/plan.md /tmp/plan-before.md
+<span class="prompt">$</span>.venv/bin/python build/lesson-01/agent.py "Create plan.md with exactly three bullets about launching a small agent. Then read it back and count them." --resume
+<span class="prompt">$</span>diff /tmp/plan-before.md build/lesson-01/workspace/plan.md</div>
+
+  <p>A clean diff is still a result: it means the agent rediscovered its own work through the filesystem, which is not the same as remembering it. A dirty diff is the more dangerous outcome — the same step produced a different world the second time.</p>
+
+  <p>What you should notice:</p>
+  <ul>
+    <li>The side effect survived the crash. The <em>knowledge</em> of it did not.</li>
+    <li>The transcript is valid, but it describes a world that no longer matches the filesystem.</li>
+    <li>Resume replays the lost step — overwriting, or re-checking, depending on the run. For a file that is survivable; for an email or a payment it is not.</li>
+    <li>What saved the resumed run was the file itself. The filesystem is a checkpoint your harness did not have to write — and a hint of why so much agent memory ends up in files.</li>
+  </ul>
+
+  <p class="sidenote"><b>This is not a bug in the toy.</b> Replace <code>os._exit</code> with a deploy, an out-of-memory kill, or a dropped connection. The same gap appears, just less politely.</p>
+
+  <h2>4. Name what you saw</h2>
+
+  <p>Two kinds of state were in that process. <strong>Business state</strong> is the work itself: the file, the record, the side effect. <strong>Execution state</strong> is where the run had got to: the pending call, the messages, the step count. The 12-Factor Agents guide's Factor 5 is exactly this: unify them, or at least make sure they cannot silently disagree.<sup><a href="#s2">2</a></sup></p>
+
+  <p>The talk's fix is not "save more often". It is a different execution model. A <strong>job queue</strong>, after a crash, replays steps one, two, three. A <strong>durable workflow</strong> journals what it is about to do and what happened, so a retry resumes at step three. The talk uses Temporal for this, runs the loop on the server, and keeps the computer separate so the VM can be rebuilt without killing the run.<sup><a href="#s3">3</a></sup></p>
+
+  <p>Your checkpoint saves <em>after</em> a result. A real journal records the decision <em>before</em> executing it, so replay can see "I already called <code>write_file</code> with this content" and choose not to repeat it. That difference — before versus after — is the next lesson's problem, and the reason the agent can run for days.</p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="b">
+      <p>A process dies just after a tool has run. What actually survives?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Side effects vanish; the recorded tool result survives intact</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Side effects survive; the recorded tool result is lost</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Both side effects and tool results are rolled back</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the filesystem has no idea your process died. Only the in-memory transcript is lost — which is precisely why it is dangerous: the record and the world disagree.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>What does a durable workflow change about a retry?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>It resumes at the last completed step, not the first</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>It restarts from the first step, but runs much faster</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>It skips the failed step and reports success to you</span></button>
+      </div>
+      <div class="why"><b>Why:</b> progress is journaled, so the retry has a place to continue from. A queue without a journal only knows how to start over.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="c">
+      <p>Why does the talk run the agent loop on a server, apart from the VM?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>So the sandbox VM can restart without the loop</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>So app-store updates can ship the loop much faster</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>So the run survives a rebuild of its computer</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the talk's stated reason: if the loop lived inside the VM, you could not rebuild the VM without dropping the run. Separating them is what makes a zero-day patch a non-event.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Explain to another engineer why an agent is a harness, not a model.</li>
+      <li>Read a transcript and say which step produced each message.</li>
+      <li>Show, with a running process, the gap between an execution state and the world.</li>
+      <li>Distinguish a queue replay from a workflow resume — and say why the second one lets an agent run for days.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 20 minutes</span>
+    <p><a href="https://www.anthropic.com/engineering/building-effective-agents">Anthropic, "Building effective agents"</a>. Read the <em>Agents</em> section and Appendix 2 ("Prompt engineering your tools"). Skip the framework survey on a first read. The definition of the loop and the tool-design advice are what this lesson compresses.</p>
+    <p class="small">Optional companion: <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-05-unify-execution-state.md">12-Factor Agents, Factor 5</a> — 5 minutes, and it will make section 4 obvious in hindsight.</p>
+  </div>
+
+  <p class="ask">Something unclear, or want a variant — a different tool, a different model, a slower walk through the trace? Ask me. I am your teacher for this course, and I can edit the build or write the next lesson around what is confusing.</p>
+
+  <nav class="next">
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>← The whole map</a>
+    <a href="../reference/glossary.html"><span class="dir">Vocabulary</span>Glossary →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="s1">1. Anthropic, <a href="https://www.anthropic.com/engineering/building-effective-agents">"Building effective agents"</a>.</span><br>
+    <span id="s2">2. HumanLayer, <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-05-unify-execution-state.md">12-Factor Agents, Factor 5</a>.</span><br>
+    <span id="s3">3. The talk, §03–§04; <a href="https://docs.temporal.io/encyclopedia/durable-execution">Temporal, durable execution</a>.</span><br><br>
+    Always-On Agents · lesson 01 · next: the process is not the agent.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

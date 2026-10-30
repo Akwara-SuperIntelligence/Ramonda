@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glossary — Always-On Agents</title>
+<link rel="stylesheet" href="../assets/course.css">
+<style>
+  .term { margin: 0 0 1.15rem; }
+  .term dt { font-weight: 600; font-size: 1rem; }
+  .term dd { margin: 0.15rem 0 0; color: var(--muted); font-size: 0.93rem; }
+  .term .avoid { display: block; margin-top: 0.2rem; font-size: 0.78rem; font-family: var(--mono); color: var(--muted); }
+  .term .avoid b { color: var(--accent); font-weight: 500; }
+  .note { font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main class="wrap ref">
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Reference</p>
+  <h1>Glossary</h1>
+  <p class="lede">The course's working vocabulary. Terms arrive only after a lesson has used them; if a word is missing here, it is not yet load-bearing.</p>
+  <div class="meta">
+    <span>Canonical file: <b><a href="../GLOSSARY.md">GLOSSARY.md</a></b></span>
+    <span>Updated: <b>after lesson 01</b></span>
+  </div>
+
+  <h2>The loop</h2>
+  <dl>
+    <div class="term">
+      <dt>Agent</dt>
+      <dd>An LLM that autonomously chooses tools in a loop until a task is done, rather than following a code path a developer fixed in advance.
+        <span class="avoid"><b>Avoid:</b> bot (that is the product surface), workflow</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Harness</dt>
+      <dd>The code around the model that assembles context, exposes tools, executes tool calls, and decides when to stop.
+        <span class="avoid"><b>Avoid:</b> framework, runtime</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Agent loop</dt>
+      <dd>The repeating three-step cycle: the model picks a tool, the harness executes it, the result is appended to context, repeat.
+        <span class="avoid"><b>Avoid:</b> agentic loop, ReAct loop</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Turn</dt>
+      <dd>One user-visible exchange, from an incoming message or trigger to the agent's next reply or deliberate silence.
+        <span class="avoid"><b>Avoid:</b> step, iteration</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Tool call</dt>
+      <dd>A structured request from the model naming a tool and its arguments, which the harness — not the model — executes.
+        <span class="avoid"><b>Avoid:</b> function call (except as an API field), action</span>
+      </dd>
+    </div>
+  </dl>
+
+  <h2>State and survival</h2>
+  <dl>
+    <div class="term">
+      <dt>Execution state</dt>
+      <dd>Where a run currently is: the messages so far, the pending tool call, the step counter.
+        <span class="avoid"><b>Avoid:</b> context (only the part sent to the model), memory</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Durable execution</dt>
+      <dd>A run model where progress is journaled, so a retry after a crash resumes at the last completed step instead of replaying from the start.
+        <span class="avoid"><b>Avoid:</b> checkpointing (weaker, related), retries</span>
+      </dd>
+    </div>
+    <div class="term">
+      <dt>Always-on agent</dt>
+      <dd>An agent whose process, state, and wake-up path live outside your terminal, so it can act while you are gone and resume after a restart.
+        <span class="avoid"><b>Avoid:</b> autonomous agent, background agent</span>
+      </dd>
+    </div>
+  </dl>
+
+  <div class="callout tip">
+    <span class="label">Use it or lose it</span>
+    <p>If you cannot use a term in a sentence about your own build, it has not landed yet. The quiz in <a href="../lessons/0001-the-loop-that-dies.html">lesson 01</a> is a retrieval check, not a reading check.</p>
+  </div>
+
+  <nav class="next">
+    <a href="../lessons/0001-the-loop-that-dies.html"><span class="dir">Lesson</span>← 01: The loop that dies</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">Always-On Agents · glossary · grows with the course.</footer>
+</main>
+</body>
+</html>
