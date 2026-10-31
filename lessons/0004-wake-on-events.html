@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 04 — Wake on events</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 04</p>
+  <h1>Wake on events</h1>
+  <p class="lede">No one types. A schedule fires, a webhook arrives, and the agent starts. A trigger is just a client without a human.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>router + trigger</b></span>
+    <span>Stack: <b>Python stdlib</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#waking">waking up</a></b></span>
+  </div>
+
+  <p>Lesson 03 gave the agent a body on a server. But it still only worked when a client asked. That is a remote control, not a colleague. The talk's always-on agent has events on the left: a schedule, a Slack message, an email, a meeting. [talk §03]</p>
+
+  <p>This lesson adds the front door. A <strong>router</strong> receives events, drops duplicates, and wakes the agent server. No client is involved.</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>A trigger is not a special path into the agent. It is a message that starts a turn. The router decides which messages become turns, and which are noise.</p>
+  </div>
+
+  <h2>1. Triggers, router, server</h2>
+
+  <p>Three jobs sit between the world and the loop. [talk §03]</p>
+
+  <ul>
+    <li><strong>Dedupe.</strong> One event, one turn. A webhook that retries three times must not start three runs.</li>
+    <li><strong>Priority.</strong> Your direct message jumps ahead of a background routine. The talk's agents stop the current loop when you correct them.</li>
+    <li><strong>Batch.</strong> Three quick messages become one turn, not three.</li>
+  </ul>
+
+  <p>The router is also where the <strong>silence policy</strong> belongs. Not every event deserves a message. The talk's heuristic is roughly one status update a day, or when something genuinely needs you — not every increment of progress.</p>
+
+  <figure>
+    <svg viewBox="0 0 660 300" role="img" aria-label="Triggers feed a router, which dedupes and prioritises events before waking the agent server. The client only reads history.">
+      <defs>
+        <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+
+      <text x="20" y="44" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">TRIGGERS</text>
+      <rect x="20" y="56" width="170" height="34" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="34" y="78" font-size="12" fill="currentColor">schedule / cron</text>
+      <rect x="20" y="100" width="170" height="34" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="34" y="122" font-size="12" fill="currentColor">webhook</text>
+      <rect x="20" y="144" width="170" height="34" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="34" y="166" font-size="12" fill="currentColor">chat / email</text>
+
+      <line x1="190" y1="117" x2="238" y2="117" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a5)"></line>
+      <text x="192" y="106" font-size="10" fill="currentColor" opacity="0.55">event</text>
+
+      <rect x="240" y="70" width="160" height="94" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="256" y="94" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">ROUTER</text>
+      <text x="256" y="116" font-size="12" fill="currentColor">dedupe</text>
+      <text x="256" y="136" font-size="12" fill="currentColor">priority</text>
+      <text x="256" y="156" font-size="12" fill="currentColor">batch</text>
+
+      <line x1="400" y1="117" x2="438" y2="117" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a5)"></line>
+      <text x="400" y="106" font-size="10" fill="currentColor" opacity="0.55">text</text>
+
+      <rect x="440" y="56" width="190" height="122" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="456" y="80" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">SERVER</text>
+      <text x="456" y="104" font-size="12" fill="currentColor">agent loop</text>
+      <text x="456" y="126" font-size="12" fill="currentColor">tools</text>
+      <text x="456" y="148" font-size="12" fill="currentColor">history</text>
+
+      <rect x="440" y="216" width="190" height="48" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3"></rect>
+      <text x="456" y="246" font-size="12" fill="currentColor" opacity="0.6">client reads history</text>
+      <line x1="535" y1="178" x2="535" y2="210" stroke="currentColor" stroke-opacity="0.4" stroke-dasharray="4 3" marker-end="url(#a5)"></line>
+    </svg>
+    <figcaption><b>Events on the left, loop on the right.</b> The router decides what becomes a turn. The client is no longer the driver; it is a reader.</figcaption>
+  </figure>
+
+  <h2>2. Build it</h2>
+
+  <p>Two new files, three terminals. The agent server from lesson 03 does not change.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>3 terminals</span></div>
+    <ol>
+      <li>Start the agent server (terminal A) and the router (terminal B).</li>
+      <li>Fire an event from terminal C. No client is attached.</li>
+      <li>Read the history. Then fire a duplicate and watch the router drop it.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="comment"># terminal A — the agent server from lesson 03</span>
+<span class="prompt">$</span>rm -rf build/lesson-03/state build/lesson-03/workspace build/lesson-04/state
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/server.py
+
+<span class="comment"># terminal B — the front door</span>
+<span class="prompt">$</span>.venv/bin/python build/lesson-04/router.py</div>
+
+  <p>In terminal C, send an event. There is no client:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-04/trigger.py "Check the workspace. If heartbeat.md is missing, create it with the current UTC time. Otherwise append one line with the current time. Use the date command."</div>
+
+  <p>The trigger prints <code>accepted</code> and exits. Terminal B prints the event, then the reply when the turn finishes. Terminal A shows the tool calls. Wait a few seconds, then read the history:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py --history</div>
+
+  <p>Now send the same event id twice:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-04/trigger.py --replay "Append one line to replay.md with the word once."</div>
+
+  <p>Terminal B should show one <code>[event]</code> and one <code>[duplicate]</code>. The history gains one turn, not two. The router remembers the id in <code>build/lesson-04/state/seen.json</code>.</p>
+
+  <p>Finally, a schedule. This sends an event every 15 seconds until you stop it:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-04/trigger.py --every 15 "Append one line to log.md with the current time. Keep it short."
+<span class="comment"># Ctrl-C after two or three events</span>
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py --history</div>
+
+  <p>Each event starts a turn. The agent works, writes, and goes back to sleep. Nobody typed.</p>
+
+  <div class="callout warn">
+    <span class="label">This endpoint has no authentication</span>
+    <p><code>/event</code> accepts any JSON from any local process. That is fine for <code>127.0.0.1</code>. On a public port, it is a remote trigger for anyone. Auth and a tenant check are not in this build.</p>
+  </div>
+
+  <h2>3. What you proved</h2>
+
+  <p>The agent woke without a user message. The trigger was a client with no human, and the server did not care who called. That is the always-on part of always-on agent: events on the left, loop on the right.</p>
+
+  <p>You also proved why the router is separate. Dedupe is policy, not model work. The model never sees the duplicate; the router drops it before a turn starts. The same place will hold priority and batching when you need them.</p>
+
+  <h2>4. What is still missing</h2>
+
+  <ul>
+    <li><strong>Priority and batching.</strong> The router serialises turns; it does not preempt. A direct message waits behind a routine.</li>
+    <li><strong>Notification.</strong> The agent cannot message you. You read history. The silence policy is a stub.</li>
+    <li><strong>Auth.</strong> Localhost only. No tokens, no tenants.</li>
+    <li><strong>Journal.</strong> This server still has lesson 03's plain history; lesson 02's journal is not wired in.</li>
+  </ul>
+
+  <p>None of these is hard. Each is a lesson of its own. Do not add them all at once.</p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="b">
+      <p>What does the router do with a duplicate event id?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Runs the event again and appends another turn</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Drops the event and returns a duplicate status</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Queues the event behind the first one silently</span></button>
+      </div>
+      <div class="why"><b>Why:</b> dedupe happens before any turn starts. The model never sees the retry.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="c">
+      <p>Why is a trigger described as a client without a human?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>It runs the model inside the router process</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>It bypasses the server and calls tools directly</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>It sends a message that starts a turn</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the server only knows that text arrived. A human, a cron job, and a webhook look the same at the boundary.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>What is still missing after this lesson?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>A way for the agent to notify the user</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>A way for the client to send text messages</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>A way for the server to store the history</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the agent can work, but it cannot reach you. You still have to poll the history. Notification is a separate path.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Draw triggers, router, and server, and say what each one decides.</li>
+      <li>Wake the agent with a schedule or webhook, with no client attached.</li>
+      <li>Drop a duplicate event before it becomes a turn.</li>
+      <li>Name the missing pieces: auth, priority, batching, notification.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 12 minutes</span>
+    <p>The talk, <a href="../ACHITECTURE.md">§03</a>: read the left side of the always-on diagram — triggers, the router, dedupe, priority, batching, and the "do I need to bug the user" heuristic. That diagram is this lesson.</p>
+    <p class="small">Companion: <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-11-trigger-from-anywhere.md">12-Factor Agents, Factor 11</a> — trigger from anywhere, meet users where they are.</p>
+  </div>
+
+  <p class="ask">Want to see a real trigger? Ask me to wire the router to a local webhook sender, or to a file-change watcher. The shape does not change; only the source of the event does.</p>
+
+  <nav class="next">
+    <a href="0003-the-process-is-not-the-agent.html"><span class="dir">Previous</span>← 03: The process is not the agent</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="v1">1. The talk, §03; <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-11-trigger-from-anywhere.md">12-Factor Agents, Factor 11</a>.</span><br><br>
+    Always-On Agents · lesson 04 · next: stay lean.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
