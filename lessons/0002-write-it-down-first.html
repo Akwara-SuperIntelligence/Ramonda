@@ -75,6 +75,8 @@
 
   <p>On restart the harness does three things. It loads the transcript. It reads the journal. For the last unfinished call it writes a synthetic tool result: <em>INTERRUPTED — this call may have completed; check before you repeat it</em>. The model then decides what to do with that knowledge.</p>
 
+  <p>The model never reads the journal. The harness reads it and puts one line into the conversation. That line is the model's only evidence that a call may have run.</p>
+
   <p class="small">Why save the call first? The transcript needs the assistant's tool call for the conversation to stay valid. The journal adds what the transcript cannot: whether that call actually started.</p>
 
   <h2>2. Build it</h2>
