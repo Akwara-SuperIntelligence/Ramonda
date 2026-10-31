@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 05 — Stay lean</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 05</p>
+  <h1>Stay lean</h1>
+  <p class="lede">Long context is not more intelligence. It is a larger bill and weaker recall. Most tokens should be cached, and most content should not be in the context at all.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>measure the cache</b></span>
+    <span>Stack: <b>Python + DeepSeek</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#context">staying lean</a></b></span>
+  </div>
+
+  <p>The agent now runs for days. Every turn resends the conversation. Left alone, the context grows until it is expensive, slow, and worse at recall. The talk calls the discipline <strong>context engineering</strong>, and treats a cache miss as a bug. [talk §05]</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>The context is an attention budget, not a storage bin. Pay for the smallest set of tokens that produces the right behaviour, and keep the prefix stable so most of it is cached.</p>
+  </div>
+
+  <h2>1. The attention budget</h2>
+
+  <p>Models lose accuracy as the context grows — the "context rot" effect. Attention pairs every token with every other token, so the attention work grows with n², and the model's ability to find the right detail drops. Anthropic's guidance is blunt: find the smallest set of high-signal tokens.<sup><a href="#s1">1</a></sup></p>
+
+  <p>Four levers do most of the work. This lesson measures the first and explains the rest; sub-agents get their own lesson.</p>
+
+  <ol>
+    <li><strong>Static prefix + prompt caching.</strong> Keep the system prompt and tool schemas byte-identical between calls, so the provider can reuse its cached computation.</li>
+    <li><strong>Tool search.</strong> Send tool names only; load a schema when the model asks for it. Dozens of MCP connectors otherwise eat the window before the task starts.</li>
+    <li><strong>Files over context.</strong> A long tool output goes to a file; the context gets the path. The agent reads what it needs with <code>head</code>, <code>grep</code>, or a query.</li>
+    <li><strong>Compaction.</strong> Near the limit, summarise the conversation and continue from the summary. Lossy by definition; the algorithm decides what survives.</li>
+  </ol>
+
+  <h2>2. Measure the cache</h2>
+
+  <p>The build is one small script. It sends the same long prefix three times, then sends it with a changing timestamp at the front. DeepSeek reports cache hits in <code>usage</code>, so the difference is visible in tokens.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~20 minutes</h3><span>1 command</span></div>
+    <ol>
+      <li>Run the meter. Read the <code>hit</code> and <code>miss</code> columns.</li>
+      <li>Run it again. The first call may already hit — the cache persists for hours.</li>
+      <li>Find the line in the script that changes the prefix, and say why it destroys every later token.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-05/meter.py</div>
+
+  <p>Your numbers will differ with the model and the day. The pattern should not:</p>
+
+  <pre><code>model: deepseek-chat
+prefix chars: 18600
+
+stable 1   prompt= 3613  hit=    0  miss= 3613
+stable 2   prompt= 3613  hit= 3456  miss=  157
+stable 3   prompt= 3613  hit= 3456  miss=  157
+unstable 1 prompt= 3625  hit=    0  miss= 3625
+unstable 2 prompt= 3625  hit=    0  miss= 3625
+unstable 3 prompt= 3625  hit=    0  miss= 3625</code></pre>
+
+  <p>Stable prefix: after the first call, 96% of the input came from the cache. Unstable prefix: zero, every time. The only difference is one line at the front.</p>
+
+  <figure>
+    <svg viewBox="0 0 660 250" role="img" aria-label="Stable prefix diagram: system, tools, and history are cached, and only the new message is paid for. Unstable prefix: a changing id at the front means no part matches the cache.">
+      <text x="20" y="34" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">STABLE PREFIX</text>
+
+      <rect x="60" y="46" width="160" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="76" y="74" font-size="12" fill="currentColor">system</text>
+      <rect x="220" y="46" width="120" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="236" y="74" font-size="12" fill="currentColor">tools</text>
+      <rect x="340" y="46" width="140" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="356" y="74" font-size="12" fill="currentColor">history</text>
+      <rect x="480" y="46" width="100" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3"></rect>
+      <text x="496" y="74" font-size="12" fill="currentColor">new</text>
+
+      <path d="M 60 106 L 60 118 L 480 118 L 480 106" fill="none" stroke="currentColor" stroke-opacity="0.55"></path>
+      <text x="270" y="138" font-size="11" fill="currentColor" opacity="0.65">cached · one new message paid in full</text>
+
+      <text x="20" y="184" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">UNSTABLE PREFIX</text>
+
+      <rect x="20" y="196" width="50" height="40" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="30" y="221" font-size="10" fill="currentColor" opacity="0.7">id</text>
+      <rect x="70" y="196" width="150" height="40" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="86" y="221" font-size="12" fill="currentColor">system</text>
+      <rect x="220" y="196" width="110" height="40" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="236" y="221" font-size="12" fill="currentColor">tools</text>
+      <rect x="330" y="196" width="130" height="40" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="346" y="221" font-size="12" fill="currentColor">history</text>
+      <rect x="460" y="196" width="100" height="40" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45" stroke-dasharray="4 3"></rect>
+      <text x="476" y="221" font-size="12" fill="currentColor">new</text>
+
+      <text x="570" y="212" font-size="11" fill="currentColor" opacity="0.65">no hit</text>
+      <text x="570" y="228" font-size="11" fill="currentColor" opacity="0.65">for any</text>
+    </svg>
+    <figcaption><b>One token at the front changes everything after it.</b> Caching matches a prefix. Insert a timestamp, a request id, or a reordered section, and every later token is a new sequence.</figcaption>
+  </figure>
+
+  <p class="sidenote"><b>Best effort, not a guarantee.</b> DeepSeek builds the cache in seconds and clears it after hours or days. Hits depend on exact prefix units. Measure your own traffic; do not assume.</p>
+
+  <p>The provider's documentation is precise: a cache hit needs a prefix that <em>fully matches</em> a cached prefix unit. DeepSeek persists units at request boundaries and fixed intervals, and exposes <code>prompt_cache_hit_tokens</code> and <code>prompt_cache_miss_tokens</code> so you can see the result.<sup><a href="#s2">2</a></sup></p>
+
+  <h2>3. The other levers</h2>
+
+  <h3>Tool search</h3>
+
+  <p>Every tool schema is tokens the model must read before it does any work. With one connector it is nothing; with twelve MCP servers it is most of the window. Dynamic tool discovery sends names first and loads the schema on demand. [talk §04] The trade is one extra round trip for a much smaller baseline.</p>
+
+  <h3>Files over context</h3>
+
+  <p>A command can return 40,000 tokens. You almost never need them all. Write the output to a file and return the path and a short tail. The agent can <code>grep</code> the file, read the lines around a match, or run a query. This is the practical reason the agent has its own computer: storage is cheap, attention is not.</p>
+
+  <h3>Compaction</h3>
+
+  <p>Eventually the conversation exceeds the window. Compaction summarises it and starts fresh with the summary plus the few files that matter. Anthropic's implementation preserves architectural decisions, unresolved bugs, and implementation details, and discards redundant tool output.<sup><a href="#s1">1</a></sup> It is lossy. The art is choosing what survives.</p>
+
+  <p>The talk adds a timing trick: compact while the cache is still warm. Summarising a long conversation is itself a model call; doing it before the cache expires is cheaper. [talk §05]</p>
+
+  <h3>Order, hashing, and pre-warming</h3>
+
+  <p>Keep prompt sections in a fixed order, and hash each section so an A/B test cannot reshuffle the prefix for everyone else. Pre-warm the cache when the user opens the chat, the way a web page prefetches a link. [talk §05]</p>
+
+  <div class="callout warn">
+    <span class="label">What this does not buy</span>
+    <p>Caching cuts cost and latency, not context rot. Compaction loses details. Tool search costs a turn. Files need retrieval discipline. None of these is free; each is a trade you measure.</p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="b">
+      <p>Which change breaks the cache for every later token?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Appending a new user message at the end</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Adding a changing timestamp at the very front</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Keeping all of the tool schemas the same</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the cache matches a prefix. A new suffix keeps the old prefix intact; a new first line replaces it.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="b">
+      <p>What should happen to a long tool output?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Keep the full tool output inside the context window</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Write the output to a file, return the path</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Replace it with a brief summary from the model</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the path is cheap and the file is durable. The agent can read the part it needs, when it needs it.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="c">
+      <p>What does compaction lose?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Nothing at all, the summary keeps everything</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Only tokens, never a single important detail</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Some details, because every summary is lossy</span></button>
+      </div>
+      <div class="why"><b>Why:</b> compression discards information. The algorithm decides which details survive, and it will sometimes be wrong.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>Why keep the prompt prefix static?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>So the model can cache it between calls</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>So the model will read it more carefully</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>So the context window becomes very much larger</span></button>
+      </div>
+      <div class="why"><b>Why:</b> exact reuse is the condition for a hit. A static order also lets you hash sections and test changes without collateral damage.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Read cache hit and miss tokens, and explain what a miss costs.</li>
+      <li>Find the token in a prompt that invalidates the prefix.</li>
+      <li>Choose between context, a file, and a summary for a large output.</li>
+      <li>Say what compaction loses, and why the timing of it matters.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 20 minutes</span>
+    <p><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic, "Effective context engineering for AI agents"</a>. Read the anatomy, context rot, compaction, and note-taking sections. This lesson is a build on top of that essay.</p>
+    <p class="small">For the cache mechanics: <a href="https://api-docs.deepseek.com/guides/kv_cache">DeepSeek, Context Caching</a> — prefix units, hit fields, and the best-effort caveat. The talk's version is <a href="../ACHITECTURE.md">§05</a>.</p>
+  </div>
+
+  <p class="ask">If you want the other half of this lesson, ask me to add a compaction step to the agent and a long-output tool. That would let you watch the context shrink and the work continue.</p>
+
+  <nav class="next">
+    <a href="0004-wake-on-events.html"><span class="dir">Previous</span>← 04: Wake on events</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="s1">1. Anthropic, <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">"Effective context engineering for AI agents"</a>.</span><br>
+    <span id="s2">2. DeepSeek, <a href="https://api-docs.deepseek.com/guides/kv_cache">Context Caching</a>; the talk, §04–§05.</span><br><br>
+    Always-On Agents · lesson 05 · next: delegate.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
