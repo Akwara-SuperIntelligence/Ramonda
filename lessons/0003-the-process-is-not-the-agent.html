@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 03 — The process is not the agent</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 03</p>
+  <h1>The process is not the agent</h1>
+  <p class="lede">Close the terminal. The loop should not notice. This lesson moves the model, the tools, and the history to a server, and leaves the client with one job: send text, show text.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>server + client</b></span>
+    <span>Stack: <b>Python stdlib</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#shape">the shape</a></b></span>
+  </div>
+
+  <p>Lessons 01 and 02 built a real agent: a loop, tools, a journal. But all of it lived in one Python process in one terminal. Close the terminal and the agent is gone. The journal survives on disk; nothing is left to read it and continue.</p>
+
+  <p>The talk's fix is older than agents: a <strong>thin client</strong> and a <strong>thick server</strong>. [talk §03–§04] The client sends a message and renders the reply. The server owns the model key, the tools, the files, the history, and the loop. One boundary, one payload shape.</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>If the client disappears, the turn must still finish. That is the test of a real boundary. A client that holds the loop is not a client; it is the agent with a network cable.</p>
+  </div>
+
+  <h2>1. What crosses the boundary</h2>
+
+  <p>In the talk, exactly one tool crosses from server to client: <code>send_user</code>. The server decides what to say; the client decides how to show it — a form, a payment sheet, an approval card, an emoji. [talk §04]</p>
+
+  <p>Our build has the same shape in both directions: the client posts text, the server returns text. Everything else stays on the server.</p>
+
+  <figure>
+    <svg viewBox="0 0 660 280" role="img" aria-label="A thin client sends one text message to a thick server. The server holds the model, tools, history, and loop, and returns one text reply.">
+      <defs>
+        <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+
+      <rect x="20" y="60" width="190" height="160" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="36" y="84" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">CLIENT</text>
+      <text x="36" y="112" font-size="12" fill="currentColor">send text</text>
+      <text x="36" y="136" font-size="12" fill="currentColor">show reply</text>
+      <text x="36" y="168" font-size="12" fill="currentColor" opacity="0.55">no key</text>
+      <text x="36" y="190" font-size="12" fill="currentColor" opacity="0.55">no tools</text>
+
+      <rect x="360" y="36" width="280" height="208" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="376" y="60" font-size="10" letter-spacing="1.5" fill="currentColor" opacity="0.55">SERVER</text>
+
+      <rect x="380" y="76" width="240" height="54" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.4"></rect>
+      <text x="396" y="108" font-size="12" fill="currentColor">agent loop · model</text>
+
+      <rect x="380" y="142" width="112" height="54" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.4"></rect>
+      <text x="394" y="174" font-size="12" fill="currentColor">tools</text>
+
+      <rect x="508" y="142" width="112" height="54" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.4"></rect>
+      <text x="522" y="174" font-size="12" fill="currentColor">history</text>
+
+      <text x="380" y="226" font-size="10" letter-spacing="1.2" fill="currentColor" opacity="0.55">keys · files · journal</text>
+
+      <line x1="210" y1="118" x2="350" y2="118" stroke="currentColor" stroke-opacity="0.55" marker-end="url(#a4)"></line>
+      <text x="238" y="108" font-size="11" fill="currentColor" opacity="0.6">one message</text>
+
+      <line x1="350" y1="160" x2="210" y2="160" stroke="currentColor" stroke-opacity="0.55" marker-end="url(#a4)"></line>
+      <text x="252" y="180" font-size="11" fill="currentColor" opacity="0.6">one reply</text>
+    </svg>
+    <figcaption><b>One boundary, two directions.</b> The client is a view. The server is the agent's body: model, tools, state, loop. Killing the view must not kill the body.</figcaption>
+  </figure>
+
+  <p class="sidenote"><b>Why move it?</b> Server changes ship without an app update. Heavy tools run where the compute is. One server can serve many clients. And the client can be a phone that sleeps, a Slack tab that closes, or a terminal you <code>Ctrl-C</code>.</p>
+
+  <p>This is also the security boundary. The client never holds the model key, and never gets the tool schemas. A client that could call tools directly would be a second, unguarded harness.</p>
+
+  <h2>2. Build it</h2>
+
+  <p>The build is two small files. The server is about 200 lines. The client is about 40, and contains no model, no key, no tools.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>2 terminals</span></div>
+    <ol>
+      <li>Start the server in terminal A. Leave it running.</li>
+      <li>Send a task from terminal B. Then send another and kill the client mid-turn.</li>
+      <li>Read the history from a new client. The turn is there.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="comment"># terminal A — the only place with a key and tools</span>
+<span class="prompt">$</span>rm -rf build/lesson-03/state build/lesson-03/workspace
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/server.py
+<span class="comment"># listening on http://127.0.0.1:8765</span></div>
+
+  <p>In terminal B, send a task that takes a few tool calls:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Create numbers.md with the numbers 1 to 20, one per line. Then create total.md with the sum. Read both back and verify."</div>
+
+  <p>Watch terminal A. It prints each tool call as it runs. Terminal B prints only the final reply. That is the whole client.</p>
+
+  <p>Now the experiment. Send a second task, and press <code>Ctrl-C</code> in terminal B about two seconds after you press Enter:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Create squares.md with the squares of 1 to 15, one per line. Then read it back and count the lines."
+<span class="comment"># press Ctrl-C while terminal A is still working</span></div>
+
+  <p>The client dies. Terminal A keeps printing. When the turn finishes, the reply is saved to <code>build/lesson-03/state/history.json</code>, even though no client is listening. Start a new client and read it:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py --history</div>
+
+  <p>You should see both turns: the one that completed normally, and the one whose client you killed. The file is in <code>build/lesson-03/workspace</code>.</p>
+
+  <p>Any client works. This is the same history through <code>curl</code>:</p>
+
+  <div class="cmd"><span class="prompt">$</span>curl -s http://127.0.0.1:8765/history | head -c 400</div>
+
+  <h2>3. What you proved</h2>
+
+  <p>The loop is not in the terminal. The terminal is a view. When the view died, the server finished the turn and saved the result. That is the difference between a chat program and an always-on agent.</p>
+
+  <p>The talk's server also holds the state that outlives the client: the conversation, the memories, the routines. The client is replaceable — mobile, desktop, Slack, email — because the boundary is one message. [talk §04]</p>
+
+  <div class="callout warn">
+    <span class="label">What this build does not do</span>
+    <p>It has no authentication, so it binds to <code>127.0.0.1</code> only. It has no journal — the history file is not one, and a server crash can still lose an in-flight turn. And it wakes only when a client sends text. Each of those is a later lesson. Do not put this on a public port.</p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="b">
+      <p>Where do the model key, tools, and history live?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>On the client, where the user can inspect them</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>On the server, behind the single message boundary</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>In the model, which stores them between calls</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the client only sends text and renders text. Everything that can act on the world stays on the server.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>The client dies in the middle of a turn. What happens to the turn?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>The server finishes it and saves the result</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>The model stops and forgets the whole request</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>The turn is lost because the socket closed</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the socket is not the work. The server thread keeps running, saves the transcript, and a later client can read it.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="c">
+      <p>Why is the client allowed to be dumb?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Because the model runs inside the client process</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Because the boundary sends tool schemas to clients</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Because the server owns the loop, tools, and state</span></button>
+      </div>
+      <div class="why"><b>Why:</b> a client with no loop, no tools, and no key has nothing to protect and nothing to update. It can be replaced without touching the agent.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Draw the client/server boundary and say what crosses it.</li>
+      <li>Kill a client mid-turn and recover the result from the server.</li>
+      <li>Explain why keys, tools, and state never belong in the client.</li>
+      <li>Name the three things this build still lacks: auth, journal, triggers.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 15 minutes</span>
+    <p>The talk, <a href="../ACHITECTURE.md">§03–§04</a>: the "always-on" diagram, the thin-client/thick-server argument, and the single <code>send_user</code> tool. Read those two sections with the client/server split in mind; the diagram is the lesson.</p>
+    <p class="small">Companion: <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-07-contact-humans-with-tools.md">12-Factor Agents, Factor 7</a> — contact with the human as a tool call, not a special case.</p>
+  </div>
+
+  <p class="ask">If you want to see the boundary fail, ask me. I can make the client hold the loop and kill it, so you can watch the turn disappear. The contrast is the lesson.</p>
+
+  <nav class="next">
+    <a href="0002-write-it-down-first.html"><span class="dir">Previous</span>← 02: Write it down before you do it</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="u1">1. The talk, §03–§04; <a href="https://github.com/humanlayer/12-factor-agents/blob/main/content/factor-07-contact-humans-with-tools.md">12-Factor Agents, Factor 7</a>.</span><br><br>
+    Always-On Agents · lesson 03 · next: wake on events.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
