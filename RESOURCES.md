@@ -31,6 +31,9 @@ Curated sources for building a persistent, proactive agent. Knowledge sources gr
 - [Pydantic AI docs](https://ai.pydantic.dev/)
   The Python agent framework this repo already chose. Agents, tools, and structured outputs. Use for: lessons 2+, once the raw loop is understood.
 
+- [DeepSeek: context caching](https://api-docs.deepseek.com/guides/kv_cache)
+  Prefix-unit caching, the `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields, and the best-effort caveat. Use for: lesson 05's measurement, and any claim about cache behaviour on this stack.
+
 - [Anthropic: prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
   How cache prefixes work and what invalidates them. Use for: the stable-prefix rule and the "cache miss is a bug" discussion.
 
