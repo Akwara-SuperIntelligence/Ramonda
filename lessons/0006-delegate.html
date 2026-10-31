@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 06 — Delegate</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 06</p>
+  <h1>Delegate</h1>
+  <p class="lede">The main conversation should stay small. Give the expensive work to a helper with fresh context; take back only the report.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>helper loop</b></span>
+    <span>Stack: <b>Python + DeepSeek</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#context">context</a></b></span>
+  </div>
+
+  <p>Lesson 05 kept the context lean with caching, files, and compaction. But some work is simply expensive: scanning a large file, trying ten commands, reading twenty pages. If the main agent does that, its context fills with tool output it will never need again.</p>
+
+  <p>The talk's answer is a <strong>helper</strong>: a sub-agent with its own fresh working memory. The main agent hands over a focused task, the helper burns its own context, and only a short report comes back. [talk §02, §04]</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>The helper's tool calls are not the main agent's context. Delegation is context isolation, not just parallelism.</p>
+  </div>
+
+  <h2>1. A second loop</h2>
+
+  <p>A helper is not a new kind of model call. It is the same agent loop with a different system prompt, a fresh message list, and a narrower tool set. It cannot see the main conversation, so the brief must be self-contained.</p>
+
+  <p>Anthropic describes the pattern the same way: specialised sub-agents work in clean context windows, explore with tens of thousands of tokens, and return a condensed summary. The lead agent keeps the plan and synthesises.<sup><a href="#s1">1</a></sup></p>
+
+  <figure>
+    <svg viewBox="0 0 660 260" role="img" aria-label="The main agent sends a self-contained task to a helper. The helper's large context holds its tool calls; only a short report returns to the small main context.">
+      <defs>
+        <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+
+      <rect x="20" y="70" width="220" height="120" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="36" y="94" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">MAIN</text>
+      <text x="36" y="120" font-size="12" fill="currentColor">plan · task · report</text>
+      <text x="36" y="146" font-size="12" fill="currentColor" opacity="0.65">context ~2.8k</text>
+      <text x="36" y="168" font-size="12" fill="currentColor" opacity="0.65">small, hot, cached</text>
+
+      <rect x="400" y="36" width="240" height="188" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="4 3"></rect>
+      <text x="416" y="60" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">HELPER</text>
+      <text x="416" y="88" font-size="12" fill="currentColor">fresh messages</text>
+      <text x="416" y="112" font-size="12" fill="currentColor">8 tool calls</text>
+      <text x="416" y="136" font-size="12" fill="currentColor" opacity="0.65">context ~21k</text>
+      <text x="416" y="158" font-size="12" fill="currentColor" opacity="0.65">discarded after</text>
+      <text x="416" y="186" font-size="12" fill="currentColor" opacity="0.65">returns report only</text>
+
+      <line x1="240" y1="112" x2="390" y2="112" stroke="currentColor" stroke-opacity="0.55" marker-end="url(#a6)"></line>
+      <text x="268" y="102" font-size="11" fill="currentColor" opacity="0.65">task</text>
+
+      <line x1="390" y1="152" x2="240" y2="152" stroke="currentColor" stroke-opacity="0.55" marker-end="url(#a6)"></line>
+      <text x="270" y="172" font-size="11" fill="currentColor" opacity="0.65">report</text>
+    </svg>
+    <figcaption><b>Two contexts, one report.</b> The helper can read, run, and retry as much as it needs. Only the distilled answer crosses back.</figcaption>
+  </figure>
+
+  <p class="sidenote"><b>Helpers are not free.</b> They add latency, duplicate work, and can misread the brief. Use one when the task is big enough that isolation pays for the extra call.</p>
+
+  <p>The talk goes further: each helper is its own durable workflow, so a failed helper can restart without losing the main run. [talk §04] Our build leaves that out for now; the helper is a plain loop.</p>
+
+  <h2>2. Build it</h2>
+
+  <p>We add one tool to the lesson 03 server: <code>delegate</code>. The main loop is unchanged. The helper is a second loop with its own message list and only the shell tool.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>2 terminals</span></div>
+    <ol>
+      <li>Seed a 6,000-line log in the workspace.</li>
+      <li>Start the server and give it the analysis task, with instructions to delegate.</li>
+      <li>Read the server log: the <code>[helper]</code> line and the <code>[main]</code> line.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="comment"># terminal A</span>
+<span class="prompt">$</span>rm -rf build/lesson-03/state build/lesson-03/workspace
+<span class="prompt">$</span>.venv/bin/python build/lesson-06/seed.py
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/server.py</div>
+
+  <div class="cmd"><span class="comment"># terminal B</span>
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "In workspace/big.log, count the lines for each level (INFO, WARN, ERROR) and find the three most frequent ERROR messages. Delegate the analysis to a helper. Then verify the helper's report and write report.md with the counts and the top three errors."</div>
+
+  <p>The server log is the lesson. On the test run:</p>
+
+  <pre><code>[1] delegate {"task": "In your workspace there is a file ..."}
+  [helper] 8 tool calls, 21090 tokens
+[2] run_shell {"command": "cd workspace; ..."}
+[3] run_shell {"command": "cat &gt; report.md ..."}
+[main] 12 messages, ~2778 tokens</code></pre>
+
+  <p>The helper spent 8 tool calls and about 21,000 tokens. The main conversation ended at 12 messages and roughly 2,800 tokens. The main agent never saw the helper's tool results — only its report, and then re-ran the counts itself to verify.</p>
+
+  <p>Your numbers will differ. The shape is what matters: a large helper context, a small main context, one report between them.</p>
+
+  <p>Check the artifact:</p>
+
+  <div class="cmd"><span class="prompt">$</span>cat build/lesson-03/workspace/report.md</div>
+
+  <h2>3. What this buys, and what it costs</h2>
+
+  <p><strong>Buys:</strong> a main context that stays small and cached; a helper that can explore without polluting it; a clean division between planning and execution.</p>
+
+  <p><strong>Costs:</strong> extra latency; duplicated work when the helper re-reads what the main already knew; a brief that must stand alone; and a report you should not trust without verification. In the test, the main agent re-ran the counts. That is the right habit.</p>
+
+  <p><strong>Fails when:</strong> the task needs the main conversation's nuance; the helper's report drops a detail that mattered; or the helper loops without a step limit. Cap the steps, demand file paths, and verify the result.</p>
+
+  <div class="callout warn">
+    <span class="label">What this build does not do</span>
+    <p>No journal for the helper; no parallel helpers; no per-helper model or budget; no durable restart. Each is a later step. The helper shares the same workspace and the same shell as the main agent, so isolation is in the context, not in the filesystem.</p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="b">
+      <p>What does the main agent receive from a helper?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Every tool call and result from the helper</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>A short final summary of the helper's work</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>The full message history from the helper's run</span></button>
+      </div>
+      <div class="why"><b>Why:</b> isolation is the point. If the trace came back, the main context would grow exactly as it would without a helper.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="b">
+      <p>Why does delegation keep the main context small?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>The helper uses a smaller model with fewer tokens</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>The helper's tool work stays inside its own context</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>The main agent stops reading all tool results completely</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the helper's eight calls and 21k tokens lived in the helper's message list. Only the report crossed back.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>What must a delegation brief contain?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Enough context to work without the main transcript</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>The main agent's full conversation and all tool history</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Only the name of the tool the helper must call</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the helper starts with an empty context. Anything it needs — file paths, definitions, success criteria — has to be in the brief.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Add a helper loop that returns a report, not a trace.</li>
+      <li>Read a server log and compare helper tokens with main context size.</li>
+      <li>Write a self-contained brief for an agent that cannot see your conversation.</li>
+      <li>Say what delegation costs, and when not to use it.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 15 minutes</span>
+    <p><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic, "Effective context engineering"</a>, the <em>Sub-agent architectures</em> section. The 1,000–2,000 token report estimate is theirs, and it matches the shape you just built.</p>
+    <p class="small">The talk's version: <a href="../ACHITECTURE.md">§02 and §04</a> — helpers with fresh working memory, and each helper as its own durable workflow.</p>
+  </div>
+
+  <p class="ask">If the helper ignored the brief in your run, paste the log. That is a brief-writing problem, and we can fix it in one paragraph.</p>
+
+  <nav class="next">
+    <a href="0005-stay-lean.html"><span class="dir">Previous</span>← 05: Stay lean</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="s1">1. Anthropic, <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">"Effective context engineering for AI agents"</a>.</span><br>
+    <span id="s2">2. The talk, §02 and §04; <a href="https://github.com/humanlayer/12-factor-agents">12-Factor Agents</a>.</span><br><br>
+    Always-On Agents · lesson 06 · next: remember.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

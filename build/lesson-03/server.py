@@ -30,29 +30,57 @@ HOST, PORT = "127.0.0.1", 8765
 
 SYSTEM = """You are an agent on a server. You have a shell in your workspace.
 Work step by step: inspect, write, verify.
+You can delegate a focused task to a helper. The helper has its own context and
+shell. You get back only its report. Delegate work that needs many shell calls
+or reads a lot of data.
 Do not ask the user questions; do the task.
 When the task is finished, reply with a one-paragraph summary.
 """
 
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "run_shell",
-            "description": (
-                "Run a shell command in your workspace. Use it to list and read files, "
-                "run python, and check results. 30 second limit. Returns exit code and output."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string", "description": "The command to run, e.g. 'ls -la'."}
-                },
-                "required": ["command"],
+HELPER_SYSTEM = """You are a helper agent. You have one shell in the same workspace.
+Do the task you are given. Inspect, compute, verify.
+Do not delegate. Do not ask questions.
+When finished, reply with a short report: findings, file paths, and anything unresolved.
+"""
+
+RUN_SHELL = {
+    "type": "function",
+    "function": {
+        "name": "run_shell",
+        "description": (
+            "Run a shell command in your workspace. Use it to list and read files, "
+            "run python, and check results. 30 second limit. Returns exit code and output."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The command to run, e.g. 'ls -la'."}
             },
+            "required": ["command"],
         },
-    }
-]
+    },
+}
+
+DELEGATE = {
+    "type": "function",
+    "function": {
+        "name": "delegate",
+        "description": (
+            "Give a focused, self-contained task to a helper with fresh context and a shell. "
+            "The helper cannot see this conversation, so include all needed details. "
+            "Returns only the helper's short report."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "Full instructions for the helper."}
+            },
+            "required": ["task"],
+        },
+    },
+}
+
+TOOLS = [RUN_SHELL, DELEGATE]
 
 LOCK = threading.Lock()
 CLIENT: OpenAI | None = None
@@ -112,6 +140,39 @@ def save(messages: list[dict]) -> None:
     tmp.replace(STATE)
 
 
+def approx_tokens(messages: list[dict]) -> int:
+    return sum(len(json.dumps(m)) for m in messages) // 4
+
+
+def run_helper(task: str) -> tuple[str, int, int]:
+    """A second loop with its own context. Only the report comes back."""
+    client, name = model()
+    messages: list[dict] = [{"role": "user", "content": task}]
+    calls = 0
+    tokens = 0
+
+    for _ in range(1, 11):
+        response = client.chat.completions.create(
+            model=name,
+            messages=[{"role": "system", "content": HELPER_SYSTEM}, *messages],
+            tools=[RUN_SHELL],
+        )
+        tokens += response.usage.total_tokens
+        message = response.choices[0].message
+        messages.append(message.model_dump(exclude_none=True))
+
+        if not message.tool_calls:
+            return (message.content or ""), calls, tokens
+
+        for call in message.tool_calls:
+            args = json.loads(call.function.arguments or "{}")
+            result = execute(args.get("command", ""))
+            calls += 1
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+
+    return "(helper hit the step limit)", calls, tokens
+
+
 def run_turn(text: str) -> str:
     WORKSPACE.mkdir(exist_ok=True)
     messages = load_history()
@@ -130,15 +191,22 @@ def run_turn(text: str) -> str:
         save(messages)
 
         if not message.tool_calls:
+            print(f"  [main] {len(messages)} messages, ~{approx_tokens(messages)} tokens", flush=True)
             return message.content or ""
 
         for call in message.tool_calls:
+            name_ = call.function.name
             args = json.loads(call.function.arguments or "{}")
-            print(f"  [{step}] {call.function.name} {args.get('command', '')[:100]}", flush=True)
-            result = execute(args.get("command", ""))
+            print(f"  [{step}] {name_} {json.dumps(args)[:100]}", flush=True)
+            if name_ == "delegate":
+                result, calls, tokens = run_helper(args.get("task", ""))
+                print(f"  [helper] {calls} tool calls, {tokens} tokens", flush=True)
+            else:
+                result = execute(args.get("command", ""))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             save(messages)
 
+    print(f"  [main] {len(messages)} messages, ~{approx_tokens(messages)} tokens", flush=True)
     return "(stopped at the step limit)"
 
 
