@@ -181,7 +181,8 @@ class Handler(BaseHTTPRequestHandler):
         messages = [
             {"role": m["role"], "content": m.get("content", "")}
             for m in load_history()
-            if m.get("role") in ("user", "assistant") and m.get("content")
+            if m.get("role") == "user"
+            or (m.get("role") == "assistant" and not m.get("tool_calls") and m.get("content"))
         ]
         self._json(200, {"messages": messages})
 
