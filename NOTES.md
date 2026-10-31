@@ -5,6 +5,7 @@
 - Wants to ship a personal always-on agent, not study the theory for its own sake.
 - Has built LLM apps but not agent loops or long-running job infrastructure — do not assume durable-execution knowledge.
 - Prefers concrete wins over completeness. Cut scope rather than lengthen a lesson.
+- The model/harness split took several attempts. The framing that worked: "the model's whole world is the chat; the harness reads the files and puts one sentence in the chat." Use it early in later lessons.
 
 ## Code standards
 - All code in this workspace follows `/ponytail` (full level): smallest complete change, no speculative flags or abstractions, deletion over addition, one small self-check for non-trivial logic. Say what was skipped, in one line, at the end of a reply.
