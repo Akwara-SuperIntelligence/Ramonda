@@ -51,6 +51,16 @@ Do not delegate. Do not ask questions.
 When finished, reply with a short report: findings, file paths, and anything unresolved.
 """
 
+REVIEW_SYSTEM = """You review one shell command before an agent runs it.
+Allow commands that read or write inside the current working directory and do not expose secrets.
+Deny recursive deletion, sudo, package installs, downloads piped into a shell, network uploads,
+reads of .env, .ssh, or key files, and paths that climb out of the working directory with ...
+Answer exactly one line:
+ALLOW
+or
+DENY: <short reason>
+"""
+
 RUN_SHELL = {
     "type": "function",
     "function": {
@@ -158,6 +168,31 @@ def model() -> tuple[OpenAI, str]:
     return CLIENT, MODEL
 
 
+def review(command: str) -> str:
+    client, name = model()
+    try:
+        response = client.chat.completions.create(
+            model=name,
+            messages=[
+                {"role": "system", "content": REVIEW_SYSTEM},
+                {"role": "user", "content": command},
+            ],
+            max_tokens=40,
+            temperature=0,
+        )
+    except Exception as exc:
+        return f"DENY: reviewer error: {exc}"
+    return (response.choices[0].message.content or "").strip() or "DENY: empty review"
+
+
+def reviewed_execute(command: str) -> str:
+    verdict = review(command)
+    print(f"  [review] {verdict.splitlines()[0][:100]}", flush=True)
+    if not verdict.upper().startswith("ALLOW"):
+        return f"BLOCKED by reviewer: {verdict}"
+    return execute(command)
+
+
 def execute(command: str) -> str:
     if COMPUTER:
         request = urllib.request.Request(
@@ -262,7 +297,7 @@ def run_helper(task: str) -> tuple[str, int, int]:
 
         for call in message.tool_calls:
             args = json.loads(call.function.arguments or "{}")
-            result = execute(args.get("command", ""))
+            result = reviewed_execute(args.get("command", ""))
             calls += 1
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
@@ -304,7 +339,7 @@ def run_turn(text: str) -> str:
             elif name_ == "recall":
                 result = recall(args.get("query", ""))
             else:
-                result = execute(args.get("command", ""))
+                result = reviewed_execute(args.get("command", ""))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             save(messages)
 
@@ -322,6 +357,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self) -> None:
+        if self.path == "/review":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                command = (json.loads(self.rfile.read(length) or b"{}").get("command") or "").strip()
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "bad json"})
+            if not command:
+                return self._json(400, {"error": "command required"})
+            return self._json(200, {"verdict": review(command)})
+
         if self.path != "/send":
             return self._json(404, {"error": "not found"})
         length = int(self.headers.get("Content-Length") or 0)
