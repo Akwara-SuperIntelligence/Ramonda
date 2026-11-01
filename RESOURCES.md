@@ -34,6 +34,9 @@ Curated sources for building a persistent, proactive agent. Knowledge sources gr
 - [DeepSeek: context caching](https://api-docs.deepseek.com/guides/kv_cache)
   Prefix-unit caching, the `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields, and the best-effort caveat. Use for: lesson 05's measurement, and any claim about cache behaviour on this stack.
 
+- [Hamel Husain: "Your AI Product Needs Evals"](https://hamel.dev/blog/posts/evals/)
+  A practitioner's guide to building eval sets from real failures, with deterministic checks and assertions. Use for: lesson 10, and whenever the eval suite starts feeling like a vibe check.
+
 - [OWASP LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
   Why untrusted text is not an instruction, and why prompts are not a security boundary. Use for: lesson 09's threat model and any review of the input path.
 
