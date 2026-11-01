@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 07 — Remember</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 07</p>
+  <h1>Remember</h1>
+  <p class="lede">The model forgets everything. Memory is files the harness reads, writes, and chooses to show.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>profile + logs</b></span>
+    <span>Stack: <b>Python + DeepSeek</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#memory">memory</a></b></span>
+  </div>
+
+  <p>Lesson 02 kept the execution state across a crash. That is not the same as remembering you. The journal knows which tool ran; memory knows who you are, what you decided last week, and what the agent already tried.</p>
+
+  <p>The model still has no memory. Every request is a fresh read of whatever the harness chose to send. So "memory" is two things: files on disk, and a harness that decides which parts of them enter the chat.</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>Storage is not context. The agent can keep years of notes, but the model only sees the few lines the harness puts in the prompt. Memory is a selection problem, not a storage problem.</p>
+  </div>
+
+  <h2>1. Three layers, three costs</h2>
+
+  <p>The talk layers memory by the cost of including it, not by topic. [talk §05]</p>
+
+  <ul>
+    <li><strong>Core facts.</strong> Who you are, how you want to be spoken to. In every prompt, so they must stay short.</li>
+    <li><strong>Dated logs.</strong> What happened on a given day. Searched when a question needs them.</li>
+    <li><strong>Scratchpad.</strong> Notes for the current task. Ephemeral; thrown away when the task ends.</li>
+    <li><strong>Files, skills, memories.</strong> The long tail. Kept on disk and retrieved on demand.</li>
+  </ul>
+
+  <p>Our build implements the first two and the retrieval path. The profile is read by the harness and appended to the system prompt. The logs are written by the harness after each turn and searched by a <code>recall</code> tool.</p>
+
+  <figure>
+    <svg viewBox="0 0 660 280" role="img" aria-label="The context window holds the profile and the conversation. Logs live on disk and cross into the context only when the recall tool returns matching lines.">
+      <defs>
+        <marker id="a7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+
+      <rect x="20" y="40" width="280" height="190" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="36" y="64" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">CONTEXT · EVERY REQUEST</text>
+
+      <rect x="40" y="82" width="240" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="54" y="110" font-size="12" fill="currentColor">profile · core facts</text>
+
+      <rect x="40" y="142" width="240" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="54" y="170" font-size="12" fill="currentColor">conversation · tool results</text>
+
+      <rect x="380" y="40" width="260" height="190" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55" stroke-dasharray="4 3"></rect>
+      <text x="396" y="64" font-size="10" letter-spacing="1.4" fill="currentColor" opacity="0.55">DISK · ON DEMAND</text>
+
+      <rect x="400" y="82" width="220" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="414" y="110" font-size="12" fill="currentColor">dated logs</text>
+
+      <rect x="400" y="142" width="220" height="46" rx="2" fill="none" stroke="currentColor" stroke-opacity="0.45"></rect>
+      <text x="414" y="170" font-size="12" fill="currentColor">files · skills</text>
+
+      <path d="M 300 108 L 396 108" fill="none" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a7)"></path>
+      <path d="M 396 196 L 300 196" fill="none" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a7)"></path>
+      <text x="314" y="126" font-size="10" fill="currentColor" opacity="0.55">recall</text>
+      <text x="312" y="216" font-size="10" fill="currentColor" opacity="0.55">lines</text>
+    </svg>
+    <figcaption><b>The harness is the gate.</b> The profile always crosses. Logs cross only when a search asks for them. The model never browses the disk on its own.</figcaption>
+  </figure>
+
+  <p class="small"><b>Why not load all logs?</b> They grow without bound. A year of notes would crowd out the task. Search is how the agent gets the past without paying for all of it.</p>
+
+  <h2>2. Build it</h2>
+
+  <p>The server gains three things: a profile block in the system prompt, a <code>remember</code> tool that appends facts, and a <code>recall</code> tool that searches dated logs.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>2 terminals</span></div>
+    <ol>
+      <li>Seed a profile and one log from yesterday.</li>
+      <li>Ask what it remembers. Then teach it a new fact.</li>
+      <li>Restart the server and ask again. The fact survives the process.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="comment"># terminal A</span>
+<span class="prompt">$</span>rm -rf build/lesson-03/state build/lesson-03/memory
+<span class="prompt">$</span>.venv/bin/python build/lesson-07/seed.py
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/server.py</div>
+
+  <div class="cmd"><span class="comment"># terminal B</span>
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "What do you remember about me?"
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Remember that I prefer bullet points over paragraphs."
+<span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "What did we work on in the log analysis?"</div>
+
+  <p>The first answer should include the seeded profile facts. The second should call <code>remember</code>; the fact is appended to <code>build/lesson-03/memory/profile.md</code>. The third should call <code>recall</code> and quote yesterday's log.</p>
+
+  <p>Now restart the server in terminal A — <code>Ctrl-C</code>, then run it again — and ask the same first question. The new fact is still there, because the harness reads the profile at startup. The model never stored it.</p>
+
+  <pre><code># build/lesson-03/memory/profile.md
+# Profile
+- Works on a personal always-on agent in Python.
+- Prefers short, direct explanations.
+- Timezone: Africa/Nairobi.
+- Prefers bullet points over paragraphs.</code></pre>
+
+  <p>Look at the server log. You should see <code>recall {"query": ...}</code> and <code>remember {"fact": ...}</code> as ordinary tool calls. That is the whole memory system: two tools and a file the harness reads.</p>
+
+  <h2>3. What this costs</h2>
+
+  <p><strong>Profile tokens are paid every turn.</strong> Every fact in the profile sits at the front of the prompt and is sent on every request. It is also part of the cached prefix, so adding a fact invalidates the cache once — acceptable for a rare write, expensive if you write facts constantly.</p>
+
+  <p><strong>Recall is a search, not understanding.</strong> It matches lines. If the question needs synthesis across dates, the model has to search several times.</p>
+
+  <p><strong>Facts can be wrong, stale, or poisoned.</strong> A fact learned from an email or a webhook can be an injection. Memory needs attribution, review for sensitive facts, and a way to delete. None of that is in this build.</p>
+
+  <p>The talk's discipline is garbage collection: decide which facts deserve the always-on cost, and let the rest live in files. [talk §05] Anthropic calls the file version structured note-taking, and it is the same idea: persist outside the window, pull back only what the task needs.<sup><a href="#m1">1</a></sup></p>
+
+  <div class="callout warn">
+    <span class="label">What this build does not do</span>
+    <p>No dedupe, no conflict resolution, no deletion, no review, no per-user isolation. The profile is a flat file that any turn can append to. Do not put secrets in it, and do not let untrusted events write to it.</p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="a">
+      <p>Where do core facts about the user go?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Into every request as part of the prompt</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Into a log file searched only when needed</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Into the model weights by a fine-tuning run</span></button>
+      </div>
+      <div class="why"><b>Why:</b> core facts shape every reply, so they must be present every time. That is also why they must stay few and short.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="b">
+      <p>What does the recall tool do?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Loads all logs into the context every turn</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Searches the stored logs and returns matching lines</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Deletes old logs to save on context space</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the logs stay on disk. The search brings back a few lines, and only when the model asks.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>What is the cost of a fact in the profile?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>It is sent on every request and grows the prefix</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>It is sent only when the recall tool is called</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>It is stored in the model weights and costs nothing</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the profile is part of the prefix. Every fact is a permanent tax on every turn, and a cache break when it changes.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Separate storage from context, and say which memory layer pays which cost.</li>
+      <li>Teach the agent a fact and prove it survives a server restart.</li>
+      <li>Search dated logs through a tool instead of loading them.</li>
+      <li>Name the memory risks: staleness, poisoning, and missing deletion.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 15 minutes</span>
+    <p>The talk, <a href="../ACHITECTURE.md">§05</a>: the memory layers, the user profile in every prompt, dated logs, the scratchpad, and the garbage-collection idea. Short and directly built here.</p>
+    <p class="small">Companion: <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic, "Effective context engineering"</a>, the <em>Structured note-taking</em> section.</p>
+  </div>
+
+  <p class="ask">If you want the missing half, ask me to add fact dedupe and a review step before a fact reaches the profile. That is the difference between a demo and a memory you can trust.</p>
+
+  <nav class="next">
+    <a href="0006-delegate.html"><span class="dir">Previous</span>← 06: Delegate</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="m1">1. The talk, §05; <a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic, "Effective context engineering"</a>.</span><br><br>
+    Always-On Agents · lesson 07 · next: give it a computer.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

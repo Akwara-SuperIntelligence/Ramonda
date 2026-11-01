@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import threading
+from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -26,6 +27,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 WORKSPACE = HERE / "workspace"
 STATE = HERE / "state" / "history.json"
+MEMORY = HERE / "memory"
+PROFILE = MEMORY / "profile.md"
+LOGS = MEMORY / "log"
 HOST, PORT = "127.0.0.1", 8765
 
 SYSTEM = """You are an agent on a server. You have a shell in your workspace.
@@ -33,6 +37,8 @@ Work step by step: inspect, write, verify.
 You can delegate a focused task to a helper. The helper has its own context and
 shell. You get back only its report. Delegate work that needs many shell calls
 or reads a lot of data.
+You have memory tools. Use remember for durable facts about the user. Use recall
+to search your dated work logs when the user asks about past work.
 Do not ask the user questions; do the task.
 When the task is finished, reply with a one-paragraph summary.
 """
@@ -80,7 +86,43 @@ DELEGATE = {
     },
 }
 
-TOOLS = [RUN_SHELL, DELEGATE]
+REMEMBER = {
+    "type": "function",
+    "function": {
+        "name": "remember",
+        "description": (
+            "Save a durable fact about the user to memory. Use for preferences, names, "
+            "and recurring constraints. The fact is added to every future request."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fact": {"type": "string", "description": "One short fact, e.g. 'Prefers bullet points.'"}
+            },
+            "required": ["fact"],
+        },
+    },
+}
+
+RECALL = {
+    "type": "function",
+    "function": {
+        "name": "recall",
+        "description": (
+            "Search your dated work logs for a word or phrase. Returns matching lines "
+            "with file names. Use when the user asks about past work."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "A word or phrase to search for."}
+            },
+            "required": ["query"],
+        },
+    },
+}
+
+TOOLS = [RUN_SHELL, DELEGATE, REMEMBER, RECALL]
 
 LOCK = threading.Lock()
 CLIENT: OpenAI | None = None
@@ -140,6 +182,50 @@ def save(messages: list[dict]) -> None:
     tmp.replace(STATE)
 
 
+def profile_block() -> str:
+    if not PROFILE.exists():
+        return ""
+    text = PROFILE.read_text().strip()
+    return "\n\nWHAT YOU KNOW ABOUT THE USER (memory):\n" + text if text else ""
+
+
+def remember(fact: str) -> str:
+    fact = fact.strip()
+    if not fact:
+        return "error: empty fact"
+    if len(fact) > 500:
+        return "error: fact too long"
+    PROFILE.parent.mkdir(parents=True, exist_ok=True)
+    with PROFILE.open("a") as f:
+        f.write(f"- {fact}\n")
+    return f"remembered: {fact}"
+
+
+def recall(query: str) -> str:
+    query = query.strip()
+    if not query:
+        return "error: empty query"
+    if not LOGS.exists():
+        return "no logs yet"
+    hits: list[str] = []
+    for path in sorted(LOGS.glob("*.md"), reverse=True):
+        for n, line in enumerate(path.read_text().splitlines(), 1):
+            if query.lower() in line.lower():
+                hits.append(f"{path.name}:{n}: {line.strip()[:200]}")
+                if len(hits) >= 20:
+                    break
+        if len(hits) >= 20:
+            break
+    return "\n".join(hits) if hits else f"no matches for {query!r}"
+
+
+def log_turn(text: str, reply: str) -> None:
+    LOGS.mkdir(parents=True, exist_ok=True)
+    path = LOGS / f"{date.today().isoformat()}.md"
+    with path.open("a") as f:
+        f.write(f"\n## {datetime.now().strftime('%H:%M')}\nUSER: {text}\nAGENT: {reply}\n")
+
+
 def approx_tokens(messages: list[dict]) -> int:
     return sum(len(json.dumps(m)) for m in messages) // 4
 
@@ -183,7 +269,7 @@ def run_turn(text: str) -> str:
     for step in range(1, 9):
         response = client.chat.completions.create(
             model=name,
-            messages=[{"role": "system", "content": SYSTEM}, *messages],
+            messages=[{"role": "system", "content": SYSTEM + profile_block()}, *messages],
             tools=TOOLS,
         )
         message = response.choices[0].message
@@ -191,8 +277,10 @@ def run_turn(text: str) -> str:
         save(messages)
 
         if not message.tool_calls:
+            reply = message.content or ""
+            log_turn(text, reply)
             print(f"  [main] {len(messages)} messages, ~{approx_tokens(messages)} tokens", flush=True)
-            return message.content or ""
+            return reply
 
         for call in message.tool_calls:
             name_ = call.function.name
@@ -201,6 +289,10 @@ def run_turn(text: str) -> str:
             if name_ == "delegate":
                 result, calls, tokens = run_helper(args.get("task", ""))
                 print(f"  [helper] {calls} tool calls, {tokens} tokens", flush=True)
+            elif name_ == "remember":
+                result = remember(args.get("fact", ""))
+            elif name_ == "recall":
+                result = recall(args.get("query", ""))
             else:
                 result = execute(args.get("command", ""))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
