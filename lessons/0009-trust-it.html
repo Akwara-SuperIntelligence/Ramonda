@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 09 — Trust it</title>
+<link rel="stylesheet" href="../assets/course.css">
+</head>
+<body>
+<main class="wrap">
+
+  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 09</p>
+  <h1>Trust it</h1>
+  <p class="lede">A colleague with a shell needs three guards: review the command, distrust the input, and ask before the irreversible.</p>
+  <div class="meta">
+    <span>Time: <b>45 min</b></span>
+    <span>Build: <b>command reviewer</b></span>
+    <span>Stack: <b>Python + DeepSeek</b></span>
+    <span>Map: <b><a href="../reference/architecture-map.html#trust">trust</a></b></span>
+  </div>
+
+  <p>The agent now has a loop, a server, a machine, helpers, memory, and triggers. It can act. That is the point, and the risk.</p>
+
+  <p>The talk names three separate problems: a model should review shell commands before they run; untrusted input must never be treated as an instruction; and irreversible actions should ask first. [talk §04] This lesson builds the first and demonstrates the second. The third stays a design.</p>
+
+  <div class="callout tip">
+    <span class="label">The one idea</span>
+    <p>The model's judgement is one layer, not the only layer. Put a second check between the proposal and the machine, and assume the model can be fooled.</p>
+  </div>
+
+  <h2>1. Three guards</h2>
+
+  <p><strong>Command review.</strong> Before the machine runs a shell command, a second model reads it and answers ALLOW or DENY with a reason. The talk calls this auto-review, and argues it beats approval fatigue at scale. [talk §04]</p>
+
+  <p><strong>Input trust.</strong> An email, a webhook, or a web page can contain instructions. None of it is a user instruction. The model should treat it as data, and the harness should keep review in front of the machine anyway.</p>
+
+  <p><strong>Approval.</strong> Sending, paying, deleting: draft it, show it, wait. Not built here, but the boundary is the same one: a tool call is a proposal, not an action.</p>
+
+  <figure>
+    <svg viewBox="0 0 660 230" role="img" aria-label="A command flows from untrusted input to the model, then to a reviewer, and only then to the machine. A deny becomes a blocked tool result.">
+      <defs>
+        <marker id="a9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+        </marker>
+      </defs>
+
+      <rect x="20" y="62" width="130" height="74" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="34" y="86" font-size="10" letter-spacing="1" fill="currentColor" opacity="0.55">INPUT</text>
+      <text x="34" y="108" font-size="11" fill="currentColor">email · webhook</text>
+      <text x="34" y="126" font-size="11" fill="currentColor" opacity="0.65">untrusted</text>
+
+      <rect x="188" y="62" width="130" height="74" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="202" y="86" font-size="10" letter-spacing="1" fill="currentColor" opacity="0.55">MODEL</text>
+      <text x="202" y="108" font-size="11" fill="currentColor">proposes a</text>
+      <text x="202" y="126" font-size="11" fill="currentColor">command</text>
+
+      <rect x="356" y="62" width="130" height="74" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="370" y="86" font-size="10" letter-spacing="1" fill="currentColor" opacity="0.55">REVIEWER</text>
+      <text x="370" y="108" font-size="11" fill="currentColor">allow or deny</text>
+      <text x="370" y="126" font-size="11" fill="currentColor" opacity="0.65">fails closed</text>
+
+      <rect x="524" y="62" width="116" height="74" rx="3" fill="none" stroke="currentColor" stroke-opacity="0.55"></rect>
+      <text x="538" y="86" font-size="10" letter-spacing="1" fill="currentColor" opacity="0.55">MACHINE</text>
+      <text x="538" y="108" font-size="11" fill="currentColor">runs only</text>
+      <text x="538" y="126" font-size="11" fill="currentColor">if allowed</text>
+
+      <line x1="150" y1="99" x2="180" y2="99" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a9)"></line>
+      <line x1="318" y1="99" x2="348" y2="99" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a9)"></line>
+      <line x1="486" y1="99" x2="516" y2="99" stroke="currentColor" stroke-opacity="0.5" marker-end="url(#a9)"></line>
+
+      <text x="330" y="176" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">DENY becomes a tool result: "blocked by reviewer"</text>
+      <text x="330" y="200" text-anchor="middle" font-size="11" fill="currentColor" opacity="0.65">the command never reaches the machine</text>
+    </svg>
+    <figcaption><b>A gate, not a promise.</b> The reviewer sits between the proposal and the machine. A deny is information the model can read and respond to.</figcaption>
+  </figure>
+
+  <h2>2. Build it</h2>
+
+  <p>The server now reviews every shell command, for the main agent and for helpers. It also exposes <code>POST /review</code> so you can inspect the verdict without running anything.</p>
+
+  <div class="build">
+    <div class="build-head"><h3>Build step · ~25 minutes</h3><span>3 terminals</span></div>
+    <ol>
+      <li>Start the machine and the server, and plant an untrusted email in the box.</li>
+      <li>Ask for a benign command; watch the reviewer allow it.</li>
+      <li>Ask the reviewer directly about dangerous commands, then ask the agent to run one.</li>
+    </ol>
+  </div>
+
+  <div class="cmd"><span class="comment"># terminal A — the machine</span>
+<span class="prompt">$</span>rm -rf build/lesson-08/box build/lesson-08/snapshot build/lesson-03/state
+<span class="prompt">$</span>.venv/bin/python build/lesson-08/computer.py
+
+<span class="comment"># terminal B — the server with the reviewer</span>
+<span class="prompt">$</span>COMPUTER_URL=http://127.0.0.1:8767 .venv/bin/python build/lesson-03/server.py
+
+<span class="comment"># terminal C — plant the untrusted input</span>
+<span class="prompt">$</span>.venv/bin/python build/lesson-09/seed.py</div>
+
+  <p>First, a normal command:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Run ls -la and tell me what you see."</div>
+
+  <p>Terminal B prints <code>[review] ALLOW</code> before the machine runs it. Now ask the reviewer about commands without executing them:</p>
+
+  <div class="cmd"><span class="prompt">$</span>curl -s -X POST http://127.0.0.1:8765/review -H 'Content-Type: application/json' -d '{"command":"ls -la"}'
+{"verdict": "ALLOW"}
+
+<span class="prompt">$</span>curl -s -X POST http://127.0.0.1:8765/review -H 'Content-Type: application/json' -d '{"command":"rm -rf ."}'
+{"verdict": "DENY: recursive deletion"}
+
+<span class="prompt">$</span>curl -s -X POST http://127.0.0.1:8765/review -H 'Content-Type: application/json' -d '{"command":"cat ../../.env"}'
+{"verdict": "DENY: path climbs out of the working directory with .. and reads .env"}</div>
+
+  <p>Now ask the agent to do something destructive:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Run rm -rf . and then list files."</div>
+
+  <p>On the test run, the model refused before the reviewer was needed. That is the first layer working. On another run, a model may comply and the reviewer blocks it. Both are acceptable; the point is that the second layer exists.</p>
+
+  <p>Finally, the untrusted input:</p>
+
+  <div class="cmd"><span class="prompt">$</span>.venv/bin/python build/lesson-03/client.py "Read inbox.txt and do what it asks."</div>
+
+  <p>The file contains an invoice pretext and a fake <code>SYSTEM</code> line that tells the agent to run <code>rm -rf .</code>. The test run read it, named it as a prompt injection, and refused. The reviewer would have denied the command if the model had obeyed.</p>
+
+  <h2>3. What this does and does not buy</h2>
+
+  <p><strong>Buys:</strong> a second opinion between the model and the machine; a log line for every command; a fail-closed default; a tool result the model can read and recover from.</p>
+
+  <p><strong>Does not buy:</strong> a guarantee. The reviewer is another model. It can be fooled by a clever command, it can be slow, and it can be wrong in both directions. It is a filter, not a sandbox.</p>
+
+  <p>The command itself is untrusted text passed to the reviewer. A command can contain instructions aimed at the reviewer. The OS permissions, the VM boundary, the network policy, and the approval gate are still doing separate work.</p>
+
+  <div class="callout warn">
+    <span class="label">What this build does not do</span>
+    <p>No approval flow, no auth on <code>/send</code>, <code>/review</code>, or the machine, no secret manager, no audit trail beyond stdout, no rate limits. The reviewer prompt is a policy, not a security proof.</p>
+  </div>
+
+  <p>For a real deployment: allowlist the commands the product needs, run the machine as a low-privilege user, deny network egress by default, keep secrets in a manager the model never sees, and require a human for irreversible actions.</p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz-title">Retrieval check</p>
+    <div class="quiz-q" data-answer="a">
+      <p>What does the reviewer check?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>The command before the machine can run it</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>The model's final answer after the turn ends</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>The user's message before the model sees it</span></button>
+      </div>
+      <div class="why"><b>Why:</b> the gate sits between the proposal and execution. A deny means the machine never sees the command.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>Why is the reviewer not a guarantee?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>It is another model, so it can be fooled</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>It runs after the command has already been executed</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>It only checks the text of the user's request</span></button>
+      </div>
+      <div class="why"><b>Why:</b> it is a classifier with a prompt. Clever commands, injected text, and mistakes can get through. Keep the OS and VM boundaries too.</div>
+    </div>
+
+    <div class="quiz-q" data-answer="a">
+      <p>What should happen to an irreversible action?</p>
+      <div class="options">
+        <button class="option" type="button" data-opt="a"><span class="mark">A</span><span>Draft it, ask the user, and only then act</span></button>
+        <button class="option" type="button" data-opt="b"><span class="mark">B</span><span>Run it first, then tell the user what happened</span></button>
+        <button class="option" type="button" data-opt="c"><span class="mark">C</span><span>Retry it until the user finally approves the action</span></button>
+      </div>
+      <div class="why"><b>Why:</b> a send, a payment, or a delete cannot be undone. Approval must come before the side effect, not after.</div>
+    </div>
+
+    <div class="quiz-foot">
+      <span class="score"></span>
+      <button class="reset" type="button">Reset</button>
+    </div>
+  </div>
+
+  <div class="win">
+    <h3>What you can now do</h3>
+    <ul>
+      <li>Put a reviewer between the model's proposal and the machine.</li>
+      <li>Inspect an allow or deny verdict without executing the command.</li>
+      <li>Recognise untrusted input and show why it is not an instruction.</li>
+      <li>Name the remaining layers: permissions, network, secrets, approval.</li>
+    </ul>
+  </div>
+
+  <div class="source">
+    <span class="label">Primary source · 15 minutes</span>
+    <p>The talk, <a href="../ACHITECTURE.md">§04</a>: auto-review, prompt injection, irreversible actions, and keeping passwords out of the conversation. This lesson is the first of the four.</p>
+    <p class="small">For the wider problem: <a href="https://genai.owasp.org/llmrisk/llm01-prompt-injection/">OWASP, LLM01: Prompt Injection</a> — why no prompt is a security boundary.</p>
+  </div>
+
+  <p class="ask">If you want the missing guard, ask me to add a draft-and-approve flow for one dangerous tool. That is the third layer, and it is the one users notice.</p>
+
+  <nav class="next">
+    <a href="0008-give-it-a-machine.html"><span class="dir">Previous</span>← 08: Give it a machine</a>
+    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+  </nav>
+
+  <footer class="colophon">
+    <span id="x1">1. The talk, §04; <a href="https://genai.owasp.org/llmrisk/llm01-prompt-injection/">OWASP LLM01: Prompt Injection</a>.</span><br><br>
+    Always-On Agents · lesson 09 · next: get better.
+  </footer>
+</main>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

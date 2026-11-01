@@ -34,6 +34,9 @@ Curated sources for building a persistent, proactive agent. Knowledge sources gr
 - [DeepSeek: context caching](https://api-docs.deepseek.com/guides/kv_cache)
   Prefix-unit caching, the `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` fields, and the best-effort caveat. Use for: lesson 05's measurement, and any claim about cache behaviour on this stack.
 
+- [OWASP LLM01: Prompt Injection](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)
+  Why untrusted text is not an instruction, and why prompts are not a security boundary. Use for: lesson 09's threat model and any review of the input path.
+
 - [Anthropic: prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
   How cache prefixes work and what invalidates them. Use for: the stable-prefix rule and the "cache miss is a bug" discussion.
 
