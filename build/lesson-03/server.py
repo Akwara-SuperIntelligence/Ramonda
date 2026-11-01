@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import threading
+import urllib.request
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +32,7 @@ MEMORY = HERE / "memory"
 PROFILE = MEMORY / "profile.md"
 LOGS = MEMORY / "log"
 HOST, PORT = "127.0.0.1", 8765
+COMPUTER = os.environ.get("COMPUTER_URL", "").rstrip("/")
 
 SYSTEM = """You are an agent on a server. You have a shell in your workspace.
 Work step by step: inspect, write, verify.
@@ -157,6 +159,14 @@ def model() -> tuple[OpenAI, str]:
 
 
 def execute(command: str) -> str:
+    if COMPUTER:
+        request = urllib.request.Request(
+            COMPUTER + "/run",
+            data=json.dumps({"command": command}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.load(response)["output"]
     try:
         proc = subprocess.run(
             command, shell=True, cwd=WORKSPACE, capture_output=True, text=True, timeout=30

@@ -11,3 +11,8 @@ __pycache__/
 build/*/state/
 build/*/workspace/
 .preview/
+
+# agent memory and lesson 08 machine state
+build/*/memory/
+build/lesson-08/box/
+build/lesson-08/snapshot/
