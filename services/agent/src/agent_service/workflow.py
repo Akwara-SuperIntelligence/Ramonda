@@ -29,7 +29,7 @@ with workflow.unsafe.imports_passed_through():
         call_model,
         load_history,
         run_tool,
-        save_turn,
+        send_user,
     )
 
 
@@ -79,7 +79,7 @@ class RunWorkflow:
 
             if reply.kind == "final":
                 await workflow.execute_activity(
-                    save_turn,
+                    send_user,
                     args=[
                         request.org_id,
                         request.conversation_id,

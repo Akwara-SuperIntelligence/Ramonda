@@ -23,15 +23,16 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from agent_service import activities
-from agent_service.activities import call_model, load_history, run_tool, save_turn
+from agent_service.activities import call_model, load_history, run_tool, send_user
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
 from agent_service.events import SEND_MESSAGE, Envelope
+from agent_service.relay import relay_once
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
 
-ACTIVITIES = [call_model, load_history, run_tool, save_turn]
+ACTIVITIES = [call_model, load_history, run_tool, send_user]
 
 
 def _fake_model(monkeypatch, *replies: str) -> list[dict]:
@@ -83,6 +84,9 @@ def test_a_turn_is_saved_once(monkeypatch):
     token = f"local:run:{conv}:0:0"
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (token,))
+    ) == 1
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"local:run:{conv}:0:save",))
     ) == 1
 
 
@@ -160,3 +164,21 @@ def test_an_event_starts_one_turn(monkeypatch):
             (conv,),
         )
     ) == 2
+
+
+def test_relay_publishes_each_row_once():
+    class Producer:
+        def __init__(self):
+            self.sent: list[tuple[str, bytes]] = []
+
+        async def send_and_wait(self, topic: str, value: bytes) -> None:
+            self.sent.append((topic, value))
+
+    producer = Producer()
+    asyncio.run(relay_once(producer))  # drain rows left by other tests
+    token = f"relay-{uuid4().hex}"
+    asyncio.run(send_user("acme", "relay", 0, "u", "a", token))
+
+    assert asyncio.run(relay_once(producer)) == 1
+    assert producer.sent[-1][0] == "agent.messages"
+    assert asyncio.run(relay_once(producer)) == 0

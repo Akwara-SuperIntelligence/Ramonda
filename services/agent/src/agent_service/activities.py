@@ -17,10 +17,13 @@ import json
 import os
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
 from temporalio import activity
+
+from agent_service.events import MESSAGE_COMPOSED, MESSAGE_TOPIC, Envelope
 
 SYSTEM = """You are an agent on a server. You have one tool: echo.
 Reply with one JSON object and nothing else.
@@ -159,18 +162,27 @@ async def load_history(org_id: str, conversation_id: str) -> list[str]:
 
 
 @activity.defn
-async def save_turn(
+async def send_user(
     org_id: str,
     conversation_id: str,
     seq: int,
     user_text: str,
-    assistant_text: str,
+    text: str,
     effect_token: str,
 ) -> None:
-    """Append one turn exactly once.
+    """Store the turn and queue the message, atomically.
 
-    Sources: talk §03 (state is persisted on the server), lesson 07.
+    Sources: talk §04 (one tool crosses the client boundary); EDA §4.2
+    (`agent.message.composed`), EDA §5 (outbox, not a dual write); lesson 07.
     """
+    envelope = Envelope(
+        event_id=effect_token,
+        type=MESSAGE_COMPOSED,
+        org_id=org_id,
+        subject={"conversation_id": conversation_id},
+        payload={"text": text},
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+    )
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
             if not await _claim(conn, effect_token, "turn", user_text):
@@ -180,7 +192,11 @@ async def save_turn(
                 " values (%s, %s, %s, 'user', %s), (%s, %s, %s, 'assistant', %s)"
                 " on conflict do nothing",
                 (org_id, conversation_id, seq, user_text,
-                 org_id, conversation_id, seq, assistant_text),
+                 org_id, conversation_id, seq, text),
+            )
+            await conn.execute(
+                "insert into outbox (id, topic, payload) values (%s, %s, %s)",
+                (effect_token, MESSAGE_TOPIC, envelope.to_json().decode()),
             )
 
 
