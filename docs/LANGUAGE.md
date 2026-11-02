@@ -5,8 +5,8 @@ The architecture is in [EDA.md](EDA.md); the full inventory is in
 [BUILD.md](BUILD.md); the product is in [ACHITECTURE.md](ACHITECTURE.md).
 
 Supersedes earlier drafts of this split: the durable-execution engine is not ours
-(Temporal), and the client gateway, LLM gateway, sandbox, identity, and
-retrieval are separate services rather than sidecars.
+(Temporal), and the edge gateway, LLM gateway, sandbox, identity, and retrieval
+are separate services rather than sidecars.
 
 ## The rule
 
@@ -69,15 +69,21 @@ Language follows **rate of change × blast radius**, not performance.
 | Kafka or Redpanda | **Adopt** | Protocol choice, not code we write |
 | Schema registry | **Adopt**: Apicurio | Contract storage |
 
+## Edge gateway
+
+Rust, decided. It terminates every client connection and resolves tenant context
+before any product service sees the request. It is stateless, so it ships and
+scales on its own. See [BUILD.md](BUILD.md) §6.1.
+
 ## Rust, ranked by when it pays
 
 1. **Sandbox control plane and guest agent** — pays at the first additional
    tenant or the first snapshot requirement. `axum`, `tokio`, `tonic`,
    Firecracker's unix-socket HTTP API, `tokio-vsock`, `seccompiler`,
    `chromiumoxide` for CDP.
-2. **Secret broker and egress proxy** — pays at the first real credential.
-3. **Client gateway**, if channels remain ours — pays around thousands of
-   concurrent sockets. Stateless, so postponing is safe.
+2. **Edge gateway** — decided Rust. Long-lived client connections, streaming, and
+   tenant resolution at the door.
+3. **Secret broker and egress proxy** — pays at the first real credential.
 4. **Accessibility-tree extraction and pruning in the guest** — pays when browser
    control becomes core, because it turns screenshots into cheap diffs.
 
@@ -100,7 +106,7 @@ changes weekly and the latency belongs to the model.
 | Row | Before | Now |
 |---|---|---|
 | Durable execution engine | Rust if built | Bought: Temporal (Go server) |
-| Client gateway | Rust in this service | Platform service, or Python here |
+| Edge gateway | Rust only if measured | Rust, decided |
 | LLM gateway | Rust row | Platform service, not ours |
 | Sandbox | Rust sidecar | Rust **platform** service |
 | Bus consumer | Absent | Python here; Rust only on measured pressure |

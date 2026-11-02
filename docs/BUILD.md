@@ -35,7 +35,7 @@ service; this document wins for the inventory. Language choices follow
 
 | Service | Owner | Language | State | Criticality |
 |---|---|---|---|---|
-| Edge gateway | Us | Python, Rust if measured | Stateless | Critical |
+| Edge gateway | Us | Rust | Stateless | Critical |
 | Agent service | Us | Python | Temporal, Postgres | Critical |
 | Sandbox platform | Us | Rust | Hosts, object store | High |
 | Retrieval service | Us or ingestion team | Python | Read-only | High |
@@ -133,7 +133,8 @@ record.
 **Depends on.** Identity provider, agent service, approvals service, Kafka,
 schema registry.
 
-**Language.** Python; Rust only if socket pressure demands it.
+**Language.** Rust. It terminates every client connection, so it is the one
+service where connection count, not model latency, sets the cost.
 
 **Failure.** Rejects with 503 rather than serving partial context. Streams resume
 with `Last-Event-ID`.
@@ -445,5 +446,6 @@ design. They exist; they are not specified here.
 - Owner of channels and delivery: shared platform or this product?
 - Identity provider: Zitadel or Keycloak?
 - BYOC packaging: Helm chart only, or an operator the customer runs?
+- Whether the edge gateway lives in this repository or its own.
 - Event log retention window, and what is archived where.
 - Whether the evals service reads the agent database or only the event archive.

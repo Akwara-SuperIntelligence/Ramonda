@@ -4,9 +4,9 @@ Scope: **one service** — the always-on agent — as a participant in a larger
 microservice, event-driven system. Not the organisation ingestion pipeline, not
 the graph-vector store, not the channels. The agent's internals are in
 [ACHITECTURE.md](ACHITECTURE.md) and
-[reference/architecture-map.html](reference/architecture-map.html); the
+[reference/architecture-map.html](../reference/architecture-map.html); the
 Rust/Python split is in [LANGUAGE.md](LANGUAGE.md); the full service inventory is
-in [BUILD.md](BUILD.md). Vocabulary follows [GLOSSARY.md](GLOSSARY.md).
+in [BUILD.md](BUILD.md). Vocabulary follows [GLOSSARY.md](../GLOSSARY.md).
 
 The service keeps the shape from the talk: thin client, thick server, one
 `send_user` boundary, one durable run per turn, a disposable computer, memory as
@@ -363,10 +363,10 @@ service to function.
 
 - [ACHITECTURE.md](ACHITECTURE.md) — the source talk, sections 01–06.
 - [BUILD.md](BUILD.md) — the full service inventory and definitions of done.
-- [reference/architecture-map.html](reference/architecture-map.html) — the
+- [reference/architecture-map.html](../reference/architecture-map.html) — the
   one-page map of the product.
 - [LANGUAGE.md](LANGUAGE.md) — what is Rust and what is Python, and why.
-- [RESOURCES.md](RESOURCES.md) — Temporal, 12-Factor Agents, Firecracker,
+- [RESOURCES.md](../course/RESOURCES.md) — Temporal, 12-Factor Agents, Firecracker,
   context engineering.
 - [HelixDB multi-tenancy](https://docs.helix-db.com/database/helix-cloud/operate/multi-tenancy)
   and [deployment options](https://docs.helix-db.com/database/helix-db/start-here/run-modes).
