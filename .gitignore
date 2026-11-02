@@ -8,11 +8,11 @@ __pycache__/
 .DS_Store
 
 # teaching workspace build artifacts
-build/*/state/
-build/*/workspace/
+course/build/*/state/
+course/build/*/workspace/
 .preview/
 
 # agent memory and lesson 08 machine state
-build/*/memory/
-build/lesson-08/box/
-build/lesson-08/snapshot/
+course/build/*/memory/
+course/build/lesson-08/box/
+course/build/lesson-08/snapshot/

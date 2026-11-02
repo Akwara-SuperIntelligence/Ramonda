@@ -9,14 +9,14 @@
 <body>
 <main class="wrap">
 
-  <p class="kicker"><a href="../reference/architecture-map.html">Always-On Agents</a> · Lesson 05</p>
+  <p class="kicker"><a href="../../reference/architecture-map.html">Always-On Agents</a> · Lesson 05</p>
   <h1>Stay lean</h1>
   <p class="lede">Long context is not more intelligence. It is a larger bill and weaker recall. Most tokens should be cached, and most content should not be in the context at all.</p>
   <div class="meta">
     <span>Time: <b>45 min</b></span>
     <span>Build: <b>measure the cache</b></span>
     <span>Stack: <b>Python + DeepSeek</b></span>
-    <span>Map: <b><a href="../reference/architecture-map.html#context">staying lean</a></b></span>
+    <span>Map: <b><a href="../../reference/architecture-map.html#context">staying lean</a></b></span>
   </div>
 
   <p>The agent now runs for days. Every turn resends the conversation. Left alone, the context grows until it is expensive, slow, and worse at recall. The talk calls the discipline <strong>context engineering</strong>, and treats a cache miss as a bug. [talk §05]</p>
@@ -193,14 +193,14 @@ unstable 3 prompt= 3625  hit=    0  miss= 3625</code></pre>
   <div class="source">
     <span class="label">Primary source · 20 minutes</span>
     <p><a href="https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents">Anthropic, "Effective context engineering for AI agents"</a>. Read the anatomy, context rot, compaction, and note-taking sections. This lesson is a build on top of that essay.</p>
-    <p class="small">For the cache mechanics: <a href="https://api-docs.deepseek.com/guides/kv_cache">DeepSeek, Context Caching</a> — prefix units, hit fields, and the best-effort caveat. The talk's version is <a href="../ACHITECTURE.md">§05</a>.</p>
+    <p class="small">For the cache mechanics: <a href="https://api-docs.deepseek.com/guides/kv_cache">DeepSeek, Context Caching</a> — prefix units, hit fields, and the best-effort caveat. The talk's version is <a href="../../docs/ACHITECTURE.md">§05</a>.</p>
   </div>
 
   <p class="ask">If you want the other half of this lesson, ask me to add a compaction step to the agent and a long-output tool. That would let you watch the context shrink and the work continue.</p>
 
   <nav class="next">
     <a href="0004-wake-on-events.html"><span class="dir">Previous</span>← 04: Wake on events</a>
-    <a href="../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
+    <a href="../../reference/architecture-map.html"><span class="dir">Reference</span>The whole map →</a>
   </nav>
 
   <footer class="colophon">
