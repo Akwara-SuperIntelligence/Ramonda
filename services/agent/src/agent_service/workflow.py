@@ -40,6 +40,7 @@ class RunRequest:
     conversation_id: str
     text: str
     seq: int = 0
+    org_id: str = "local"
     max_steps: int = 6
 
 
@@ -63,7 +64,7 @@ class RunWorkflow:
     async def run(self, request: RunRequest) -> RunResult:
         history: list[str] = await workflow.execute_activity(
             load_history,
-            args=[request.conversation_id],
+            args=[request.org_id, request.conversation_id],
             start_to_close_timeout=timedelta(seconds=10),
         )
         history.append(f"user: {request.text}")
@@ -80,11 +81,12 @@ class RunWorkflow:
                 await workflow.execute_activity(
                     save_turn,
                     args=[
+                        request.org_id,
                         request.conversation_id,
                         request.seq,
                         request.text,
                         reply.text,
-                        f"{run_id}:save",
+                        f"{request.org_id}:{run_id}:save",
                     ],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
@@ -96,7 +98,7 @@ class RunWorkflow:
 
             result: ToolResult = await workflow.execute_activity(
                 run_tool,
-                args=[reply.tool, reply.argument, f"{run_id}:{step}"],
+                args=[reply.tool, reply.argument, f"{request.org_id}:{run_id}:{step}"],
                 start_to_close_timeout=timedelta(seconds=10),
             )
             history.append(f"tool {reply.tool}: {result.output}")

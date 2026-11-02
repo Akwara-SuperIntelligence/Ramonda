@@ -24,6 +24,9 @@ from temporalio.worker import Worker
 
 from agent_service import activities
 from agent_service.activities import call_model, load_history, run_tool, save_turn
+from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
+from agent_service.consumer import handle
+from agent_service.events import SEND_MESSAGE, Envelope
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
@@ -77,7 +80,7 @@ def test_a_turn_is_saved_once(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from messages where conversation_id = %s", (conv,))
     ) == 2
-    token = f"run:{conv}:0:0"
+    token = f"local:run:{conv}:0:0"
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (token,))
     ) == 1
@@ -121,3 +124,39 @@ def test_step_budget_is_enforced(monkeypatch):
 
     with pytest.raises(WorkflowFailureError):
         asyncio.run(_run(RunRequest(conv, "hello", seq=0, max_steps=1), f"run:{conv}:0"))
+
+
+def test_an_event_starts_one_turn(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "echo", "argument": "hi"}', '{"final": "done"}')
+    envelope = Envelope(
+        event_id=f"e-{uuid4().hex}",
+        type=SEND_MESSAGE,
+        org_id="acme",
+        subject={"conversation_id": conv},
+        payload={"text": "hello"},
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                first = await handle(env.client, envelope)
+                second = await handle(env.client, envelope)
+                await first.result()
+                return second
+
+    assert asyncio.run(scenario()) is None
+    assert asyncio.run(
+        _scalar("select count(*) from inbox where event_id = %s", (envelope.event_id,))
+    ) == 1
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id = %s and org_id = 'acme'",
+            (conv,),
+        )
+    ) == 2

@@ -53,6 +53,10 @@ Every increment names its sources. This table is the running index.
 | talk §05 — memory lives outside the context window | `activities.py` (`load_history`, `save_turn`) | History is read from Postgres, not carried in the input |
 | lesson 07 — memory is stored so it can be recalled | `workflow.py`, `migrations/001_init.sql` | A turn is appended once, keyed by `(conversation, seq)` |
 | talk §02 — the model chooses, the harness executes | `activities.py` | Real DeepSeek call replaces the scripted reply |
+| talk §03 — the agent wakes on an event | `consumer.py` | A Kafka topic replaces the CLI as the trigger |
+| EDA §4.1 — the event envelope | `events.py` | The first working contract between services |
+| EDA §5 — dedupe before the workflow | `consumer.py`, `migrations/002_inbox.sql` | The inbox makes redelivery a no-op |
+| EDA §4.3 — commands are the only write path | `consumer.py` | `SendMessage` is the only accepted event |
 
 ## Verified
 
@@ -64,10 +68,13 @@ A duplicate effect token writes nothing, and a turn is saved at most once.
 Two live turns ran through the Docker stack. Turn 1 said "My name is Hassan";
 turn 2 answered "Hassan" from the stored conversation.
 
+An event published to Redpanda started a turn with `org_id=acme`. Delivering the
+same event again produced no second turn.
+
 ## Setup
 
 The venv lives at the repository root and uses Python 3.12. Postgres, Temporal,
-and the UI run in Docker.
+the UI, and Redpanda run in Docker.
 
 ```
 make up                                      # from the repo root
@@ -80,12 +87,23 @@ make up                                      # from the repo root
 ../../.venv/bin/python -m pytest             # from this directory
 ```
 
-To run a real turn:
+To run a real turn, start the worker, then either the CLI or the consumer:
 
 ```
-../../.venv/bin/python -m agent_service.worker       # terminal 1
-../../.venv/bin/python -m agent_service.cli "hello"  # terminal 2
+../../.venv/bin/python -m agent_service.worker        # terminal 1
+../../.venv/bin/python -m agent_service.consumer      # terminal 2
+../../.venv/bin/python -m agent_service.cli "hello"   # terminal 3
 ```
 
-The worker and CLI read `TEMPORAL_ADDRESS` (default `localhost:7233`) and
-`DATABASE_URL` (default `postgresql://ramonda:ramonda@127.0.0.1:5432/agent`).
+Publish an event to `agent.commands`:
+
+```
+echo '{"event_id":"e1","type":"agent.command.send_message","org_id":"acme",
+"subject":{"conversation_id":"c1"},"payload":{"text":"hello"}}' \
+  | docker compose exec -T redpanda rpk topic produce agent.commands
+```
+
+The worker, consumer, and CLI read `TEMPORAL_ADDRESS` (default
+`localhost:7233`), `DATABASE_URL` (default
+`postgresql://ramonda:ramonda@127.0.0.1:5432/agent`), and `KAFKA_BROKERS`
+(default `localhost:9092`).
