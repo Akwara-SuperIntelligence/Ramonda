@@ -37,3 +37,44 @@ tests/
 migrations/
 Dockerfile
 ```
+
+## Coverage
+
+Every increment names its sources. This table is the running index.
+
+| Source | Where it lives here | Delta |
+|---|---|---|
+| talk §03 — durable workflow, resume at the failed step | `src/agent_service/workflow.py` | Temporal replaces the hand-rolled journal |
+| talk §04 — the harness executes tool calls | `src/agent_service/activities.py` | The model is an activity, not a workflow line |
+| lesson 01 — a turn is three steps, repeated | `workflow.py`, `tests/test_run.py` | The steps are activities |
+| lesson 02 — write the intent down first | `workflow.py` | The event history is the journal |
+| lesson 03 — the process is not the agent | `worker.py`, `cli.py` | A worker replaces the threaded HTTP server |
+
+## Verified
+
+A worker was killed with `SIGKILL` while 108 turns were in flight. A new worker
+completed all 200, with no duplicate or lost turn.
+
+## Setup
+
+The venv lives at the repository root and uses Python 3.12.
+
+```
+../../.venv/bin/pip install -e ".[dev]"    # from this directory, once
+```
+
+## Run
+
+```
+../../.venv/bin/python -m pytest           # from this directory
+```
+
+To run a real turn, a Temporal server is needed:
+
+```
+temporal server start-dev                   # terminal 1
+../../.venv/bin/python -m agent_service.worker      # terminal 2
+../../.venv/bin/python -m agent_service.cli "hello" # terminal 3
+```
+
+The worker and CLI read `TEMPORAL_ADDRESS`, default `localhost:7233`.
