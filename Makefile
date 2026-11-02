@@ -1,4 +1,4 @@
-.PHONY: up down reset test
+.PHONY: up down reset migrate test
 
 up:
 	docker compose up -d --wait
@@ -9,6 +9,8 @@ down:
 reset:
 	docker compose down -v
 
-test:
-	docker compose up -d --wait postgres
+migrate:
+	cat services/agent/migrations/*.sql | docker compose exec -T postgres psql -q -U ramonda -d agent
+
+test: migrate
 	cd services/agent && ../../.venv/bin/python -m pytest

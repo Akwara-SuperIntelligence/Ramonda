@@ -28,8 +28,7 @@ Call the tool: {"tool": "echo", "argument": "<text>"}
 Answer: {"final": "<text>"}
 """
 
-# shortcut: one tenant until the edge supplies org_id; the column exists now.
-ORG_ID = os.environ.get("AGENT_ORG_ID", "local")
+# Tenant now arrives in the request; the column existed from day one.
 
 
 @dataclass
@@ -66,13 +65,13 @@ async def _claim(conn: psycopg.AsyncConnection, token: str, kind: str, payload: 
     return await cursor.fetchone() is not None
 
 
-async def next_seq(conversation_id: str) -> int:
+async def next_seq(org_id: str, conversation_id: str) -> int:
     """The next turn number for a conversation. Read by the caller, not the workflow."""
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         cursor = await conn.execute(
             "select coalesce(max(seq) + 1, 0) from messages"
             " where org_id = %s and conversation_id = %s",
-            (ORG_ID, conversation_id),
+            (org_id, conversation_id),
         )
         return (await cursor.fetchone())[0]
 
@@ -144,7 +143,7 @@ async def call_model(step: int, history: list[str]) -> ModelReply:
 
 
 @activity.defn
-async def load_history(conversation_id: str) -> list[str]:
+async def load_history(org_id: str, conversation_id: str) -> list[str]:
     """The conversation so far, oldest first.
 
     Sources: talk §05 (memory is layered), lesson 07 (three layers).
@@ -154,14 +153,19 @@ async def load_history(conversation_id: str) -> list[str]:
             "select role, content from messages"
             " where org_id = %s and conversation_id = %s"
             " order by seq, case role when 'user' then 0 else 1 end",
-            (ORG_ID, conversation_id),
+            (org_id, conversation_id),
         )
         return [f"{role}: {content}" async for role, content in cursor]
 
 
 @activity.defn
 async def save_turn(
-    conversation_id: str, seq: int, user_text: str, assistant_text: str, effect_token: str
+    org_id: str,
+    conversation_id: str,
+    seq: int,
+    user_text: str,
+    assistant_text: str,
+    effect_token: str,
 ) -> None:
     """Append one turn exactly once.
 
@@ -175,8 +179,8 @@ async def save_turn(
                 "insert into messages (org_id, conversation_id, seq, role, content)"
                 " values (%s, %s, %s, 'user', %s), (%s, %s, %s, 'assistant', %s)"
                 " on conflict do nothing",
-                (ORG_ID, conversation_id, seq, user_text,
-                 ORG_ID, conversation_id, seq, assistant_text),
+                (org_id, conversation_id, seq, user_text,
+                 org_id, conversation_id, seq, assistant_text),
             )
 
 

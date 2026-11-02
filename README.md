@@ -80,7 +80,7 @@ course lesson 08 → `course/build/lesson-08/computer.py` →
 README.md        this page
 GLOSSARY.md      vocabulary, shared by both tracks
 AGENTS.md        rules for AI agents working here
-compose.yaml     Postgres, Temporal, and the UI for local development
+compose.yaml     Postgres, Temporal, UI, and Redpanda for development
 Makefile         up, down, reset, test
 docs/            the design: ACHITECTURE, EDA, BUILD, LANGUAGE, and adr/
 reference/       one-page maps and the glossary as HTML
