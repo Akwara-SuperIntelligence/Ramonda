@@ -15,6 +15,8 @@ import json
 from dataclasses import asdict, dataclass
 
 SEND_MESSAGE = "agent.command.send_message"
+MESSAGE_COMPOSED = "agent.message.composed"
+MESSAGE_TOPIC = "agent.messages"
 
 
 @dataclass

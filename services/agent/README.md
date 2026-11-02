@@ -57,6 +57,9 @@ Every increment names its sources. This table is the running index.
 | EDA §4.1 — the event envelope | `events.py` | The first working contract between services |
 | EDA §5 — dedupe before the workflow | `consumer.py`, `migrations/002_inbox.sql` | The inbox makes redelivery a no-op |
 | EDA §4.3 — commands are the only write path | `consumer.py` | `SendMessage` is the only accepted event |
+| talk §04 — one tool crosses the client boundary | `activities.py` (`send_user`) | The final answer becomes a message event |
+| EDA §4.2 — `agent.message.composed` | `activities.py`, `relay.py` | The reply is published, not returned |
+| EDA §5 — outbox, not a dual write | `migrations/003_outbox.sql`, `relay.py` | The turn and the event commit together |
 
 ## Verified
 
@@ -70,6 +73,9 @@ turn 2 answered "Hassan" from the stored conversation.
 
 An event published to Redpanda started a turn with `org_id=acme`. Delivering the
 same event again produced no second turn.
+
+The same turn wrote one outbox row. The relay published it, and the delivery
+client printed `hello` from `agent.message.composed`.
 
 ## Setup
 
@@ -92,7 +98,9 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ```
 ../../.venv/bin/python -m agent_service.worker        # terminal 1
 ../../.venv/bin/python -m agent_service.consumer      # terminal 2
-../../.venv/bin/python -m agent_service.cli "hello"   # terminal 3
+../../.venv/bin/python -m agent_service.relay         # terminal 3
+../../.venv/bin/python -m agent_service.delivery      # terminal 4
+../../.venv/bin/python -m agent_service.cli "hello"   # or publish an event
 ```
 
 Publish an event to `agent.commands`:
