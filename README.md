@@ -80,10 +80,12 @@ course lesson 08 → `course/build/lesson-08/computer.py` →
 README.md        this page
 GLOSSARY.md      vocabulary, shared by both tracks
 AGENTS.md        rules for AI agents working here
+compose.yaml     Postgres, Temporal, and the UI for local development
+Makefile         up, down, reset, test
 docs/            the design: ACHITECTURE, EDA, BUILD, LANGUAGE, and adr/
 reference/       one-page maps and the glossary as HTML
 services/        the product. One directory per service
-  agent/         the agent service
+  agent/         the agent service, with its migrations
 course/          frozen course material
   lessons/       ten lessons
   build/         worked code, one directory per lesson
@@ -104,7 +106,9 @@ defined where they are first used in [docs/EDA.md](docs/EDA.md) and
 
 ## Status
 
-`docs/` describes the target system. `services/agent/` is where it gets built.
+`docs/` describes the target system. `services/agent/` holds the first working
+slice: a durable turn, a real model call, and Postgres-backed conversation state.
+It is not production yet.
 Production code does not exist yet.
 
 `course/build/` is course code: standard library only, one file per lesson, and

@@ -5,8 +5,8 @@ Sources
     talk §04 — one boundary crosses to the server
 
 Delta
-    A command replaces the lesson's HTTP client. The boundary is the same: the
-    client sends text and receives text.
+    The client reads the next turn number from the store, so the workflow ID is
+    `run:{conversation}:{seq}` and a second turn does not collide with the first.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import os
 
 from temporalio.client import Client
 
+from agent_service.activities import next_seq
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
 
@@ -24,10 +25,11 @@ from agent_service.workflow import RunRequest, RunWorkflow
 async def start(conversation_id: str, text: str) -> None:
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     client = await Client.connect(address)
+    seq = await next_seq(conversation_id)
     handle = await client.start_workflow(
         RunWorkflow.run,
-        RunRequest(conversation_id=conversation_id, text=text),
-        id=f"run:{conversation_id}:0",
+        RunRequest(conversation_id=conversation_id, text=text, seq=seq),
+        id=f"run:{conversation_id}:{seq}",
         task_queue=TASK_QUEUE,
     )
     result = await handle.result()

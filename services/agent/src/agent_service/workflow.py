@@ -4,13 +4,14 @@ Sources
     talk §03 — a durable workflow, not a job queue: it resumes at the step that
                failed instead of replaying from the start
     talk §04 — the loop lives on the server, and the model only names tools
-    lesson 02 — write the intent down before the effect, so a restart can
-               continue rather than guess
+    talk §05 — the conversation is remembered outside the context window
+    lesson 02 — write the intent down before the effect
+    lesson 07 — memory has layers, and the log is one of them
 
 Delta
-    Temporal replaces the hand-rolled journal from lesson 02. This workflow is
-    the journal: it holds control flow and nothing else. Every effect is an
-    activity whose result is recorded in the event history.
+    Temporal replaces the hand-rolled journal. History and the finished turn
+    live in Postgres and arrive here as activity results, so the workflow stays
+    deterministic and carries no transcript in its input.
 """
 
 from __future__ import annotations
@@ -22,21 +23,29 @@ from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
-    from agent_service.activities import ModelReply, ToolResult, call_model, run_tool
+    from agent_service.activities import (
+        ModelReply,
+        ToolResult,
+        call_model,
+        load_history,
+        run_tool,
+        save_turn,
+    )
 
 
 @dataclass
 class RunRequest:
-    """What starts a run."""
+    """What starts a turn."""
 
     conversation_id: str
     text: str
+    seq: int = 0
     max_steps: int = 6
 
 
 @dataclass
 class RunResult:
-    """What a finished run returns."""
+    """What a finished turn returns."""
 
     conversation_id: str
     reply: str
@@ -45,17 +54,19 @@ class RunResult:
 
 @workflow.defn
 class RunWorkflow:
-    """One turn: model, tool, repeat, stop.
+    """One turn: load, model, tool, repeat, save, stop.
 
-    Sources: talk §03 and §04; lesson 01.
-
-    Delta: the loop is now a workflow, so a killed worker resumes here instead
-    of losing the turn.
+    Sources: talk §03 and §04; lessons 01 and 07.
     """
 
     @workflow.run
     async def run(self, request: RunRequest) -> RunResult:
-        history = [f"user: {request.text}"]
+        history: list[str] = await workflow.execute_activity(
+            load_history,
+            args=[request.conversation_id],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        history.append(f"user: {request.text}")
         run_id = workflow.info().workflow_id
 
         for step in range(request.max_steps):
@@ -66,6 +77,17 @@ class RunWorkflow:
             )
 
             if reply.kind == "final":
+                await workflow.execute_activity(
+                    save_turn,
+                    args=[
+                        request.conversation_id,
+                        request.seq,
+                        request.text,
+                        reply.text,
+                        f"{run_id}:save",
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
                 return RunResult(
                     conversation_id=request.conversation_id,
                     reply=reply.text,
