@@ -18,10 +18,21 @@ from temporalio.client import WorkflowFailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from agent_service import activities
 from agent_service.activities import call_model, run_tool
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
+
+
+def _fake_model(monkeypatch, *replies: str) -> None:
+    """Answer each model call from a script, so tests never touch the network."""
+    script = iter(replies)
+    monkeypatch.setattr(
+        activities,
+        "_post",
+        lambda payload: {"choices": [{"message": {"content": next(script)}}]},
+    )
 
 
 async def _run(request: RunRequest, workflow_id: str = "run:c1:0"):
@@ -42,12 +53,13 @@ async def _run(request: RunRequest, workflow_id: str = "run:c1:0"):
 
 def test_a_turn_runs_one_tool_then_answers(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_EFFECTS_DIR", str(tmp_path))
+    _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}', '{"final": "done"}')
 
     result = asyncio.run(_run(RunRequest("c1", "hello")))
 
     assert result.conversation_id == "c1"
     assert result.steps == 2
-    assert result.reply == "done in 2 context entries"
+    assert result.reply == "done"
     assert len(list(tmp_path.iterdir())) == 1
 
 
@@ -64,6 +76,7 @@ def test_a_duplicate_token_writes_once(tmp_path, monkeypatch):
 
 def test_step_budget_is_enforced(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENT_EFFECTS_DIR", str(tmp_path))
+    _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}')
 
     with pytest.raises(WorkflowFailureError):
         asyncio.run(_run(RunRequest("c1", "hello", max_steps=1)))

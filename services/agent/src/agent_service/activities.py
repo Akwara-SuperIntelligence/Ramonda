@@ -14,11 +14,19 @@ Delta
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from temporalio import activity
+
+SYSTEM = """You are an agent on a server. You have one tool: echo.
+Reply with one JSON object and nothing else.
+Call the tool: {"tool": "echo", "argument": "<text>"}
+Answer: {"final": "<text>"}
+"""
 
 
 @dataclass
@@ -37,6 +45,51 @@ class ToolResult:
 
     ok: bool
     output: str
+
+
+def _load_env() -> None:
+    for folder in Path(__file__).resolve().parents:
+        env = folder / ".env"
+        if env.is_file():
+            for line in env.read_text().splitlines():
+                key, _, value = line.partition("=")
+                if key and not key.startswith("#"):
+                    os.environ.setdefault(key.strip(), value.strip())
+            return
+
+
+def _api_key() -> str:
+    key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        _load_env()
+        key = os.environ.get("DEEPSEEK_API_KEY")
+    if not key:
+        raise RuntimeError("DEEPSEEK_API_KEY is not set; put it in .env at the repo root")
+    return key
+
+
+def _post(payload: dict) -> dict:
+    request = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_api_key()}",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def _parse_reply(text: str) -> ModelReply:
+    raw = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return ModelReply(kind="final", text=text)
+    if "tool" in data:
+        return ModelReply(kind="tool", tool=data["tool"], argument=str(data.get("argument", "")))
+    return ModelReply(kind="final", text=str(data.get("final", raw)))
 
 
 def _effects_dir() -> Path:
@@ -65,16 +118,26 @@ def _claim(token: str, payload: str) -> bool:
 
 @activity.defn
 async def call_model(step: int, history: list[str]) -> ModelReply:
-    """A scripted model, so the loop is testable before it is smart.
+    """Ask the real model what to do next.
 
-    Sources: talk §04 (the model selects a tool call), lesson 01.
-    Delta: increment 2 replaces this body with a real model client. The
-    workflow and its tests do not change, because the model is already an
-    activity rather than a line of workflow code.
+    Sources: talk §04 (the model selects a tool call), talk §05 (a stable
+    system prompt keeps the prefix cacheable), lesson 01.
+
+    Delta: the scripted model is gone. The workflow and its interface did not
+    change, because the model was already an activity.
     """
-    if step == 0:
-        return ModelReply(kind="tool", tool="echo", argument=history[-1])
-    return ModelReply(kind="final", text=f"done in {len(history)} context entries")
+    body = _post(
+        {
+            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "messages": [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": "\n".join(history)},
+            ],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
+    )
+    return _parse_reply(body["choices"][0]["message"]["content"])
 
 
 @activity.defn
