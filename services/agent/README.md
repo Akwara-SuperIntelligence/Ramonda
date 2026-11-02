@@ -50,6 +50,8 @@ Every increment names its sources. This table is the running index.
 | lesson 02 — write the intent down first | `workflow.py` | The event history is the journal |
 | lesson 03 — the process is not the agent | `worker.py`, `cli.py` | A worker replaces the threaded HTTP server |
 | EDA §5 — every effect carries a token | `activities.py` | Marker file is the effect; a repeat is a no-op |
+| talk §05 — a stable prefix stays cacheable | `activities.py` | Fixed system prompt, temperature 0 |
+| talk §02 — the model chooses, the harness executes | `activities.py` | Real DeepSeek call replaces the scripted reply |
 
 ## Verified
 
@@ -58,6 +60,9 @@ completed all 200, with no duplicate or lost turn.
 
 A duplicate effect token writes nothing, and a marker is only linked into place
 after its content is complete, so a crash cannot leave half an effect.
+
+One live turn ran through server, worker, and CLI: the model called `echo` and
+answered with its result.
 
 ## Setup
 
