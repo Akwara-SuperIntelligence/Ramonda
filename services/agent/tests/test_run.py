@@ -23,16 +23,23 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from agent_service import activities
-from agent_service.activities import call_model, load_history, run_tool, send_user
+from agent_service.activities import (
+    call_model,
+    expire_approval,
+    load_history,
+    request_approval,
+    run_tool,
+    send_user,
+)
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
-from agent_service.events import SEND_MESSAGE, Envelope
+from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, Envelope
 from agent_service.relay import relay_once
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
 
-ACTIVITIES = [call_model, load_history, run_tool, send_user]
+ACTIVITIES = [call_model, expire_approval, load_history, request_approval, run_tool, send_user]
 
 
 def _fake_model(monkeypatch, *replies: str) -> list[dict]:
@@ -182,3 +189,82 @@ def test_relay_publishes_each_row_once():
     assert asyncio.run(relay_once(producer)) == 1
     assert producer.sent[-1][0] == "agent.messages"
     assert asyncio.run(relay_once(producer)) == 0
+
+
+def _approval_id(conv: str) -> str:
+    return f"local:run:{conv}:0:0:approval"
+
+
+async def _start_and_resolve(conv: str, decision: str | None):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue=SERVICE_QUEUE,
+            workflows=[RunWorkflow],
+            activities=ACTIVITIES,
+        ):
+            wf = await env.client.start_workflow(
+                RunWorkflow.run,
+                RunRequest(conv, "send mail", seq=0),
+                id=f"run:{conv}:0",
+                task_queue=SERVICE_QUEUE,
+            )
+            if decision is not None:
+                for _ in range(200):
+                    if await _scalar(
+                        "select count(*) from approvals where id = %s",
+                        (_approval_id(conv),),
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
+                await handle(
+                    env.client,
+                    Envelope(
+                        event_id=f"resolve:{conv}",
+                        type=APPROVAL_RESOLVED,
+                        org_id="local",
+                        subject={"approval_id": _approval_id(conv)},
+                        payload={"approval_id": _approval_id(conv), "decision": decision},
+                    ),
+                )
+            return await wf.result()
+
+
+def test_an_irreversible_tool_runs_only_after_approval(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b"}', '{"final": "sent"}')
+
+    result = asyncio.run(_start_and_resolve(conv, "approved"))
+
+    assert result.reply == "sent"
+    assert asyncio.run(
+        _scalar("select count(*) from effects where token = %s", (f"local:run:{conv}:0:0",))
+    ) == 1
+    assert asyncio.run(
+        _scalar("select status from approvals where id = %s", (_approval_id(conv),))
+    ) == "approved"
+
+
+def test_a_denied_tool_does_not_run(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b"}', '{"final": "ok"}')
+
+    asyncio.run(_start_and_resolve(conv, "denied"))
+
+    assert asyncio.run(
+        _scalar("select count(*) from effects where token = %s", (f"local:run:{conv}:0:0",))
+    ) == 0
+
+
+def test_an_unanswered_approval_expires(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b"}', '{"final": "ok"}')
+
+    asyncio.run(_start_and_resolve(conv, None))
+
+    assert asyncio.run(
+        _scalar("select status from approvals where id = %s", (_approval_id(conv),))
+    ) == "expired"
+    assert asyncio.run(
+        _scalar("select count(*) from effects where token = %s", (f"local:run:{conv}:0:0",))
+    ) == 0

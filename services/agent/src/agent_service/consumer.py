@@ -1,13 +1,14 @@
-"""The consumer: a bus event starts a turn.
+"""The consumer: bus events start turns and resolve approvals.
 
 Sources
     talk §03 — the agent wakes on an event it did not ask for
+    talk §04 — draft, ask, then act
+    EDA §4.3 — commands are the only write path from outside
     EDA §5 — dedupe before the workflow, so redelivery is a no-op
-    EDA §4.3 — `SendMessage` is the only write path from outside
 
 Delta
-    The CLI was the only trigger. Now a Kafka topic is, and the inbox table
-    makes at-least-once delivery harmless.
+    A second command type. An approval resolution flips the row at most once
+    and signals the waiting workflow.
 """
 
 from __future__ import annotations
@@ -21,11 +22,12 @@ from temporalio.client import Client, WorkflowHandle
 from temporalio.common import WorkflowIDConflictPolicy
 
 from agent_service.activities import _dsn, next_seq
-from agent_service.events import SEND_MESSAGE, Envelope
+from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, Envelope
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TOPIC = "agent.commands"
+DECISIONS = ("approved", "denied")
 
 
 async def _claim(envelope: Envelope) -> bool:
@@ -38,22 +40,14 @@ async def _claim(envelope: Envelope) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
-    """Start one turn from one event. None if the event was already handled."""
-    if envelope.type != SEND_MESSAGE:
-        raise ValueError(f"unsupported event type: {envelope.type}")
+async def _start(client: Client, envelope: Envelope) -> WorkflowHandle:
     conversation_id = envelope.subject["conversation_id"]
-    text = envelope.payload["text"]
-
-    if not await _claim(envelope):
-        return None
-
     seq = await next_seq(envelope.org_id, conversation_id)
     return await client.start_workflow(
         RunWorkflow.run,
         RunRequest(
             conversation_id=conversation_id,
-            text=text,
+            text=envelope.payload["text"],
             seq=seq,
             org_id=envelope.org_id,
         ),
@@ -61,6 +55,36 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
         task_queue=TASK_QUEUE,
         id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
     )
+
+
+async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
+    approval_id = envelope.payload["approval_id"]
+    decision = envelope.payload["decision"]
+    if decision not in DECISIONS:
+        raise ValueError(f"unknown decision: {decision}")
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "update approvals set status = %s, resolved_at = now()"
+            " where id = %s and status = 'pending' returning workflow_id",
+            (decision, approval_id),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return None
+    handle = client.get_workflow_handle(row[0])
+    await handle.signal("resolve", args=[decision, approval_id])
+    return handle
+
+
+async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
+    """Handle one command. None if it was already handled or had no effect."""
+    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED):
+        raise ValueError(f"unsupported event type: {envelope.type}")
+    if not await _claim(envelope):
+        return None
+    if envelope.type == APPROVAL_RESOLVED:
+        return await _resolve(client, envelope)
+    return await _start(client, envelope)
 
 
 async def main() -> None:

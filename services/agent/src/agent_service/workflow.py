@@ -16,6 +16,7 @@ Delta
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -24,10 +25,13 @@ from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from agent_service.activities import (
+        NEEDS_APPROVAL,
         ModelReply,
         ToolResult,
         call_model,
+        expire_approval,
         load_history,
+        request_approval,
         run_tool,
         send_user,
     )
@@ -57,8 +61,17 @@ class RunResult:
 class RunWorkflow:
     """One turn: load, model, tool, repeat, save, stop.
 
-    Sources: talk §03 and §04; lessons 01 and 07.
+    Sources: talk §03 and §04; lessons 01, 07, and 09.
     """
+
+    def __init__(self) -> None:
+        self._approval_id: str | None = None
+        self._decision: str | None = None
+
+    @workflow.signal
+    def resolve(self, decision: str, approval_id: str) -> None:
+        if approval_id == self._approval_id:
+            self._decision = decision
 
     @workflow.run
     async def run(self, request: RunRequest) -> RunResult:
@@ -95,6 +108,39 @@ class RunWorkflow:
                     reply=reply.text,
                     steps=step + 1,
                 )
+
+            if NEEDS_APPROVAL.get(reply.tool):
+                approval_id = f"{request.org_id}:{run_id}:{step}:approval"
+                self._approval_id = approval_id
+                self._decision = None
+                await workflow.execute_activity(
+                    request_approval,
+                    args=[
+                        request.org_id,
+                        request.conversation_id,
+                        run_id,
+                        reply.tool,
+                        reply.argument,
+                        approval_id,
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                try:
+                    await workflow.wait_condition(
+                        lambda: self._decision is not None,
+                        timeout=timedelta(minutes=10),
+                    )
+                    decision = self._decision
+                except asyncio.TimeoutError:
+                    decision = "expired"
+                    await workflow.execute_activity(
+                        expire_approval,
+                        args=[approval_id],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                if decision != "approved":
+                    history.append(f"tool {reply.tool}: denied ({decision})")
+                    continue
 
             result: ToolResult = await workflow.execute_activity(
                 run_tool,

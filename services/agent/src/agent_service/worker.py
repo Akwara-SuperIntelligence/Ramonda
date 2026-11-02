@@ -17,7 +17,14 @@ import os
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from agent_service.activities import call_model, load_history, run_tool, send_user
+from agent_service.activities import (
+    call_model,
+    expire_approval,
+    load_history,
+    request_approval,
+    run_tool,
+    send_user,
+)
 from agent_service.workflow import RunWorkflow
 
 TASK_QUEUE = "agent-orchestrator"
@@ -30,7 +37,7 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[RunWorkflow],
-        activities=[call_model, load_history, run_tool, send_user],
+        activities=[call_model, expire_approval, load_history, request_approval, run_tool, send_user],
     )
     print(f"worker ready: {TASK_QUEUE} on {address}", flush=True)
     await worker.run()

@@ -60,6 +60,9 @@ Every increment names its sources. This table is the running index.
 | talk §04 — one tool crosses the client boundary | `activities.py` (`send_user`) | The final answer becomes a message event |
 | EDA §4.2 — `agent.message.composed` | `activities.py`, `relay.py` | The reply is published, not returned |
 | EDA §5 — outbox, not a dual write | `migrations/003_outbox.sql`, `relay.py` | The turn and the event commit together |
+| talk §04 — draft, ask, then act | `workflow.py`, `activities.py` | `send_email` waits on a signal |
+| lesson 09 — three guards | `activities.py`, `consumer.py` | Policy, deadline, single-use resolution |
+| EDA §4.2 — approval events | `events.py`, `migrations/004_approvals.sql` | Requested and resolved are separate events |
 
 ## Verified
 
@@ -76,6 +79,9 @@ same event again produced no second turn.
 
 The same turn wrote one outbox row. The relay published it, and the delivery
 client printed `hello` from `agent.message.composed`.
+
+A live `send_email` stopped at an approval. Approving ran the effect once;
+denying a second request ran nothing; an unanswered request expires in the test.
 
 ## Setup
 
@@ -101,6 +107,7 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.relay         # terminal 3
 ../../.venv/bin/python -m agent_service.delivery      # terminal 4
 ../../.venv/bin/python -m agent_service.cli "hello"   # or publish an event
+../../.venv/bin/python -m agent_service.approve <id> approved
 ```
 
 Publish an event to `agent.commands`:

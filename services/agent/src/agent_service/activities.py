@@ -23,11 +23,21 @@ from pathlib import Path
 import psycopg
 from temporalio import activity
 
-from agent_service.events import MESSAGE_COMPOSED, MESSAGE_TOPIC, Envelope
+from agent_service.events import (
+    APPROVAL_REQUESTED,
+    APPROVAL_TOPIC,
+    MESSAGE_COMPOSED,
+    MESSAGE_TOPIC,
+    Envelope,
+)
 
-SYSTEM = """You are an agent on a server. You have one tool: echo.
+# One line of policy. Add a tool here when it can do something irreversible.
+NEEDS_APPROVAL = {"send_email": True}
+
+SYSTEM = """You are an agent on a server. You have two tools.
 Reply with one JSON object and nothing else.
-Call the tool: {"tool": "echo", "argument": "<text>"}
+echo: {"tool": "echo", "argument": "<text>"}
+send_email: {"tool": "send_email", "argument": "<address> <text>"}
 Answer: {"final": "<text>"}
 """
 
@@ -201,13 +211,60 @@ async def send_user(
 
 
 @activity.defn
+async def request_approval(
+    org_id: str,
+    conversation_id: str,
+    workflow_id: str,
+    action: str,
+    arguments: str,
+    approval_id: str,
+) -> None:
+    """Ask a human, and queue the request as an event.
+
+    Sources: talk §04 (draft, ask, then act); lesson 09 (three guards).
+    """
+    envelope = Envelope(
+        event_id=approval_id,
+        type=APPROVAL_REQUESTED,
+        org_id=org_id,
+        subject={"conversation_id": conversation_id, "workflow_id": workflow_id},
+        payload={"action": action, "arguments": arguments},
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+    )
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "insert into approvals"
+                " (id, org_id, conversation_id, workflow_id, action, arguments)"
+                " values (%s, %s, %s, %s, %s, %s) on conflict do nothing",
+                (approval_id, org_id, conversation_id, workflow_id, action, arguments),
+            )
+            await conn.execute(
+                "insert into outbox (id, topic, payload) values (%s, %s, %s)"
+                " on conflict do nothing",
+                (approval_id, APPROVAL_TOPIC, envelope.to_json().decode()),
+            )
+
+
+@activity.defn
+async def expire_approval(approval_id: str) -> None:
+    """The deadline passed. Record it; the run continues without the effect."""
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "update approvals set status = 'expired', resolved_at = now()"
+            " where id = %s and status = 'pending'",
+            (approval_id,),
+        )
+
+
+@activity.defn
 async def run_tool(name: str, argument: str, effect_token: str) -> ToolResult:
     """Execute one tool call, at most once per token.
 
     Sources: talk §04 (the harness, not the model, executes tools); EDA §5
     (every effect carries a token, so a retry is safe).
     """
-    if name == "echo":
+    if name in ("echo", "send_email"):
         async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
             await _claim(conn, effect_token, name, argument)
         return ToolResult(ok=True, output=argument)
