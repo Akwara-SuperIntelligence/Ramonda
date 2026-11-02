@@ -3,8 +3,10 @@ token.json
 .env
 out/
 .venv/
+.tools/
 __pycache__/
 *.pyc
+.pytest_cache/
 .DS_Store
 
 # teaching workspace build artifacts
