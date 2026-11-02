@@ -49,8 +49,9 @@ Every increment names its sources. This table is the running index.
 | lesson 01 — a turn is three steps, repeated | `workflow.py`, `tests/test_run.py` | The steps are activities |
 | lesson 02 — write the intent down first | `workflow.py` | The event history is the journal |
 | lesson 03 — the process is not the agent | `worker.py`, `cli.py` | A worker replaces the threaded HTTP server |
-| EDA §5 — every effect carries a token | `activities.py` | Marker file is the effect; a repeat is a no-op |
-| talk §05 — a stable prefix stays cacheable | `activities.py` | Fixed system prompt, temperature 0 |
+| EDA §5 — every effect carries a token | `activities.py`, `migrations/001_init.sql` | The effects table is the claim; a repeat is a no-op |
+| talk §05 — memory lives outside the context window | `activities.py` (`load_history`, `save_turn`) | History is read from Postgres, not carried in the input |
+| lesson 07 — memory is stored so it can be recalled | `workflow.py`, `migrations/001_init.sql` | A turn is appended once, keyed by `(conversation, seq)` |
 | talk §02 — the model chooses, the harness executes | `activities.py` | Real DeepSeek call replaces the scripted reply |
 
 ## Verified
@@ -58,32 +59,33 @@ Every increment names its sources. This table is the running index.
 A worker was killed with `SIGKILL` while 108 turns were in flight. A new worker
 completed all 200, with no duplicate or lost turn.
 
-A duplicate effect token writes nothing, and a marker is only linked into place
-after its content is complete, so a crash cannot leave half an effect.
+A duplicate effect token writes nothing, and a turn is saved at most once.
 
-One live turn ran through server, worker, and CLI: the model called `echo` and
-answered with its result.
+Two live turns ran through the Docker stack. Turn 1 said "My name is Hassan";
+turn 2 answered "Hassan" from the stored conversation.
 
 ## Setup
 
-The venv lives at the repository root and uses Python 3.12.
+The venv lives at the repository root and uses Python 3.12. Postgres, Temporal,
+and the UI run in Docker.
 
 ```
-../../.venv/bin/pip install -e ".[dev]"    # from this directory, once
+make up                                      # from the repo root
+../../.venv/bin/pip install -e ".[dev]"      # from this directory, once
 ```
 
 ## Run
 
 ```
-../../.venv/bin/python -m pytest           # from this directory
+../../.venv/bin/python -m pytest             # from this directory
 ```
 
-To run a real turn, a Temporal server is needed:
+To run a real turn:
 
 ```
-temporal server start-dev                   # terminal 1
-../../.venv/bin/python -m agent_service.worker      # terminal 2
-../../.venv/bin/python -m agent_service.cli "hello" # terminal 3
+../../.venv/bin/python -m agent_service.worker       # terminal 1
+../../.venv/bin/python -m agent_service.cli "hello"  # terminal 2
 ```
 
-The worker and CLI read `TEMPORAL_ADDRESS`, default `localhost:7233`.
+The worker and CLI read `TEMPORAL_ADDRESS` (default `localhost:7233`) and
+`DATABASE_URL` (default `postgresql://ramonda:ramonda@127.0.0.1:5432/agent`).
