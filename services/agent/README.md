@@ -49,11 +49,15 @@ Every increment names its sources. This table is the running index.
 | lesson 01 — a turn is three steps, repeated | `workflow.py`, `tests/test_run.py` | The steps are activities |
 | lesson 02 — write the intent down first | `workflow.py` | The event history is the journal |
 | lesson 03 — the process is not the agent | `worker.py`, `cli.py` | A worker replaces the threaded HTTP server |
+| EDA §5 — every effect carries a token | `activities.py` | Marker file is the effect; a repeat is a no-op |
 
 ## Verified
 
 A worker was killed with `SIGKILL` while 108 turns were in flight. A new worker
 completed all 200, with no duplicate or lost turn.
+
+A duplicate effect token writes nothing, and a marker is only linked into place
+after its content is complete, so a crash cannot leave half an effect.
 
 ## Setup
 

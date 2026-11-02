@@ -40,14 +40,30 @@ async def _run(request: RunRequest, workflow_id: str = "run:c1:0"):
             )
 
 
-def test_a_turn_runs_one_tool_then_answers():
+def test_a_turn_runs_one_tool_then_answers(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_EFFECTS_DIR", str(tmp_path))
+
     result = asyncio.run(_run(RunRequest("c1", "hello")))
 
     assert result.conversation_id == "c1"
     assert result.steps == 2
     assert result.reply == "done in 2 context entries"
+    assert len(list(tmp_path.iterdir())) == 1
 
 
-def test_step_budget_is_enforced():
+def test_a_duplicate_token_writes_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_EFFECTS_DIR", str(tmp_path))
+
+    asyncio.run(run_tool("echo", "first", "run:c1:0"))
+    asyncio.run(run_tool("echo", "second", "run:c1:0"))
+
+    markers = list(tmp_path.iterdir())
+    assert len(markers) == 1
+    assert markers[0].read_text() == "first"
+
+
+def test_step_budget_is_enforced(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_EFFECTS_DIR", str(tmp_path))
+
     with pytest.raises(WorkflowFailureError):
         asyncio.run(_run(RunRequest("c1", "hello", max_steps=1)))
