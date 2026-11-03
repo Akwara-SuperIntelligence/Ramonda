@@ -16,6 +16,7 @@ from dataclasses import asdict, dataclass
 
 SEND_MESSAGE = "agent.command.send_message"
 APPROVAL_RESOLVED = "agent.command.approval_resolved"
+TYPING = "agent.command.typing"
 MESSAGE_COMPOSED = "agent.message.composed"
 APPROVAL_REQUESTED = "agent.approval.requested"
 MESSAGE_TOPIC = "agent.messages"

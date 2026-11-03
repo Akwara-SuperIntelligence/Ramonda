@@ -34,6 +34,7 @@ with workflow.unsafe.imports_passed_through():
         expire_approval,
         load_history,
         next_turn,
+        pin_prompt,
         release_lock,
         request_approval,
         run_tool,
@@ -89,6 +90,11 @@ class RunWorkflow:
             await workflow.sleep(1)
 
         try:
+            prompt_version: str = await workflow.execute_activity(
+                pin_prompt,
+                args=[request.org_id, request.conversation_id],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
             seq: int = await workflow.execute_activity(
                 next_turn,
                 args=[request.org_id, request.conversation_id],
@@ -99,17 +105,27 @@ class RunWorkflow:
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=120),
             )
-            history: list[dict] = await workflow.execute_activity(
+            loaded = await workflow.execute_activity(
                 load_history,
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=10),
             )
+            history: list[dict] = loaded.messages
+            memory_hash: str = loaded.memory_hash
             history.append({"role": "user", "content": request.text})
 
             for step in range(request.max_steps):
                 reply: ModelReply = await workflow.execute_activity(
                     call_model,
-                    args=[request.org_id, request.conversation_id, seq, step, history],
+                    args=[
+                        request.org_id,
+                        request.conversation_id,
+                        seq,
+                        step,
+                        prompt_version,
+                        memory_hash,
+                        history,
+                    ],
                     start_to_close_timeout=timedelta(seconds=30),
                 )
 

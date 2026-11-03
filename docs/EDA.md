@@ -154,6 +154,7 @@ domain data; it belongs in spans. The bus is for facts other services act on.
 | `CancelRun` | UI, policy | Graceful yield, then cancel |
 | `ResolveApproval` | Approvals service | Unblocks a waiting gate |
 | `UpdateRoutine` | UI, admin | Create or change a Temporal Schedule |
+| `Typing` | Clients | Warm the pinned prompt prefix; no turn starts |
 
 Commands are idempotent on `command_id`, carry a reply event, and are the only
 write path from outside. Everything else is read-only.

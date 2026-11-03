@@ -23,6 +23,7 @@ from pathlib import Path
 
 import psycopg
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from agent_service.events import (
     APPROVAL_REQUESTED,
@@ -56,7 +57,22 @@ TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>
 Answer: {"final": "<text>"}"""
 
 SYSTEM = RULES + "\n\n" + TOOLS
-PROMPT_HASH = hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]
+
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+# A deploy adds a version and keeps the old ones, so running conversations
+# keep the text they started with.
+PROMPT_VERSION = "1"
+PROMPTS = {
+    PROMPT_VERSION: {
+        "system": SYSTEM,
+        "rules": _hash(RULES),
+        "tools": _hash(TOOLS),
+    },
+}
 
 COMPACT_AFTER = 20
 KEEP_TURNS = 6
@@ -82,6 +98,14 @@ class ToolResult:
 
     ok: bool
     output: str
+
+
+@dataclass
+class History:
+    """The conversation so far, plus a hash of its memory summary."""
+
+    messages: list[dict]
+    memory_hash: str
 
 
 def _dsn() -> str:
@@ -127,6 +151,34 @@ async def release_lock(org_id: str, conversation_id: str, workflow_id: str) -> N
             " where org_id = %s and conversation_id = %s and workflow_id = %s",
             (org_id, conversation_id, workflow_id),
         )
+
+
+@activity.defn
+async def pin_prompt(org_id: str, conversation_id: str) -> str:
+    """The prompt version this conversation started with.
+
+    A deploy moves PROMPT_VERSION; a running conversation keeps its row.
+    """
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "insert into conversations (org_id, conversation_id, prompt_version)"
+            " values (%s, %s, %s) on conflict do nothing",
+            (org_id, conversation_id, PROMPT_VERSION),
+        )
+        cursor = await conn.execute(
+            "select prompt_version from conversations"
+            " where org_id = %s and conversation_id = %s",
+            (org_id, conversation_id),
+        )
+        version = (await cursor.fetchone())[0]
+        if not version:
+            await conn.execute(
+                "update conversations set prompt_version = %s"
+                " where org_id = %s and conversation_id = %s",
+                (PROMPT_VERSION, org_id, conversation_id),
+            )
+            version = PROMPT_VERSION
+        return version
 
 
 @activity.defn
@@ -208,18 +260,29 @@ def _summarize(text: str) -> str:
 
 @activity.defn
 async def call_model(
-    org_id: str, conversation_id: str, seq: int, step: int, history: list[dict]
+    org_id: str,
+    conversation_id: str,
+    seq: int,
+    step: int,
+    prompt_version: str,
+    memory_hash: str,
+    history: list[dict],
 ) -> ModelReply:
     """Ask the real model what to do next, and record what it cost.
 
     Sources: talk §04 (the model selects a tool call), talk §05 (a stable
     system prompt keeps the prefix cacheable), lesson 01.
     """
+    prompt = PROMPTS.get(prompt_version)
+    if prompt is None:
+        raise ApplicationError(
+            f"unknown prompt version: {prompt_version}", non_retryable=True
+        )
     model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
     body = _post(
         {
             "model": model,
-            "messages": [{"role": "system", "content": SYSTEM}, *history],
+            "messages": [{"role": "system", "content": prompt["system"]}, *history],
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
@@ -228,10 +291,13 @@ async def call_model(
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         await conn.execute(
             "insert into model_calls (org_id, conversation_id, seq, step, model,"
-            " prompt_hash, prompt_tokens, cache_hit, cache_miss, completion_tokens)"
-            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " prompt_version, prompt_hash, hash_rules, hash_tools, hash_memory,"
+            " prompt_tokens, cache_hit, cache_miss, completion_tokens)"
+            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             " on conflict (org_id, conversation_id, seq, step) do update set"
-            " model = excluded.model, prompt_hash = excluded.prompt_hash,"
+            " model = excluded.model, prompt_version = excluded.prompt_version,"
+            " prompt_hash = excluded.prompt_hash, hash_rules = excluded.hash_rules,"
+            " hash_tools = excluded.hash_tools, hash_memory = excluded.hash_memory,"
             " prompt_tokens = excluded.prompt_tokens, cache_hit = excluded.cache_hit,"
             " cache_miss = excluded.cache_miss,"
             " completion_tokens = excluded.completion_tokens",
@@ -241,7 +307,11 @@ async def call_model(
                 seq,
                 step,
                 model,
-                PROMPT_HASH,
+                prompt_version,
+                _hash(prompt["system"]),
+                prompt["rules"],
+                prompt["tools"],
+                memory_hash,
                 usage.get("prompt_tokens", 0),
                 usage.get("prompt_cache_hit_tokens", 0),
                 usage.get("prompt_cache_miss_tokens", 0),
@@ -249,6 +319,28 @@ async def call_model(
             ),
         )
     return _parse_reply(body["choices"][0]["message"]["content"])
+
+
+async def prewarm(org_id: str, conversation_id: str) -> None:
+    """Warm the prefix when the client says the user is typing.
+
+    Sources: talk §05 — pre-warm the cache like a prefetched link.
+    """
+    version = await pin_prompt(org_id, conversation_id)
+    prompt = PROMPTS.get(version)
+    if prompt is None:
+        return
+    _post(
+        {
+            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "messages": [
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": "warmup"},
+            ],
+            "temperature": 0,
+            "max_tokens": 1,
+        }
+    )
 
 
 @activity.defn
@@ -295,7 +387,7 @@ async def compact(org_id: str, conversation_id: str) -> None:
 
 
 @activity.defn
-async def load_history(org_id: str, conversation_id: str) -> list[dict]:
+async def load_history(org_id: str, conversation_id: str) -> History:
     """The conversation so far, oldest first, with any summary first.
 
     Sources: talk §05 (memory is layered), lesson 07 (three layers).
@@ -322,7 +414,7 @@ async def load_history(org_id: str, conversation_id: str) -> list[dict]:
                 history.append({"role": "user", "content": f"tool result: {content}"})
             else:
                 history.append({"role": role, "content": content})
-        return history
+        return History(messages=history, memory_hash=_hash(summary))
 
 
 @activity.defn

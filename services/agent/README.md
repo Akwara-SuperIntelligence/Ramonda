@@ -69,6 +69,9 @@ Every increment names its sources. This table is the running index.
 | talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
 | talk §05 — stable section order | `activities.py` (`RULES`, `TOOLS`, `PROMPT_HASH`) | The prefix hash is recorded with every call |
 | talk §04 — tool search | `activities.py` (`TOOL_SCHEMAS`, `get_tool_schema`) | Names in the prompt, schema fetched on demand |
+| talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
+| talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |
+| talk §05 — pre-warm on typing | `consumer.py`, `activities.py` (`prewarm`) | One warm call, no turn |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 
 ## Verified
@@ -120,9 +123,8 @@ recorded here so a later change does not assume more than the code provides.
 - **The prompt cache is size-gated.** Below roughly 250 tokens this provider
   records no hits at all; above that it caches in blocks. The hit ratio stays
   near zero for short conversations and rises as they grow.
-- **The prompt is not pinned per conversation.** A deploy changes `SYSTEM` for
-  running conversations, so the prefix moves and the next call misses. The talk
-  says running conversations should keep the old text. Provider windows and our
+- **Pre-warm depends on the client.** A typing event must be published for the
+  prefix to warm. Nothing else sends it yet. Provider windows and our
   measurements are in [docs/CACHING.md](../../docs/CACHING.md).
 - **The lock lease is one hour.** A terminated workflow leaves its row until
   expiry, and a turn longer than the lease can overlap with the next one. Renew
