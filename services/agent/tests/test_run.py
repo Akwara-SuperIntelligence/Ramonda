@@ -850,3 +850,17 @@ def test_two_json_actions_in_one_reply_take_the_first():
     assert reply.kind == "tool"
     assert reply.tool == "get_tool_schema"
     assert reply.argument == "delegate"
+
+
+def test_every_tool_spec_has_exactly_one_handler():
+    from agent_service import workflow as workflow_module
+
+    activity = {t.name for t in activities.TOOL_SPECS if t.site == "activity"}
+    flow = {t.name for t in activities.TOOL_SPECS if t.site == "workflow"}
+
+    assert activity == set(activities.ACTIVITY_TOOLS)
+    assert flow == set(workflow_module.WORKFLOW_TOOL_NAMES)
+    assert all(t.schema for t in activities.TOOL_SPECS)
+    assert set(activities.NEEDS_APPROVAL) == {t.name for t in activities.TOOL_SPECS if t.approval}
+    for spec in activities.TOOL_SPECS:
+        assert spec.name in activities.RULES

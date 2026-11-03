@@ -26,6 +26,11 @@ from temporalio.exceptions import ApplicationError
 
 HELPER_QUEUE = "agent-helper"
 
+# Workflow-site tools act on child handles, so they live here, not in activities.
+WORKFLOW_TOOL_NAMES = frozenset(
+    {"delegate", "collect", "helpers", "message_helper", "stop_helper"}
+)
+
 with workflow.unsafe.imports_passed_through():
     from agent_service.activities import (
         NEEDS_APPROVAL,
@@ -183,6 +188,61 @@ class RunWorkflow:
         if approval_id == self._approval_id:
             self._decision = decision
 
+    async def _workflow_tool(
+        self, reply: ModelReply, request: RunRequest, run_id: str, step: int, prompt_version: str
+    ) -> str:
+        if reply.tool == "delegate":
+            helper_id = f"helper:{run_id}:{step}"
+            handle = await workflow.start_child_workflow(
+                HelperWorkflow.run,
+                HelperTask(
+                    org_id=request.org_id,
+                    conversation_id=request.conversation_id,
+                    parent_step=step,
+                    prompt_version=prompt_version,
+                    task=reply.argument,
+                ),
+                id=helper_id,
+                task_queue=HELPER_QUEUE,
+            )
+            self._pending[helper_id] = handle
+            return f"started {helper_id}"
+
+        if reply.tool == "collect":
+            ids = list(self._pending) if reply.argument == "all" else [reply.argument]
+            lines = []
+            for helper_id in ids:
+                child = self._pending.pop(helper_id, None)
+                if child is None:
+                    lines.append(f"{helper_id}: unknown helper")
+                    continue
+                try:
+                    report = await child
+                except Exception as exc:
+                    report = f"helper failed: {type(exc).__name__}"
+                lines.append(f"{helper_id}: {report}")
+            return "\n".join(lines) or "no helpers"
+
+        if reply.tool == "helpers":
+            return ", ".join(self._pending) or "none running"
+
+        if reply.tool == "message_helper":
+            helper_id, _, text = reply.argument.partition(" ")
+            child = self._pending.get(helper_id)
+            if child is None:
+                return f"unknown helper: {helper_id}"
+            await child.signal("message", text)
+            return "sent"
+
+        if reply.tool == "stop_helper":
+            child = self._pending.get(reply.argument)
+            if child is None:
+                return f"unknown helper: {reply.argument}"
+            await child.signal("stop")
+            return f"stop sent: {reply.argument}"
+
+        raise ApplicationError(f"unhandled workflow tool: {reply.tool}", non_retryable=True)
+
     @workflow.run
     async def run(self, request: RunRequest) -> RunResult:
         run_id = workflow.info().workflow_id
@@ -317,53 +377,10 @@ class RunWorkflow:
                         )
                         continue
 
-                if reply.tool == "delegate":
-                    helper_id = f"helper:{run_id}:{step}"
-                    handle = await workflow.start_child_workflow(
-                        HelperWorkflow.run,
-                        HelperTask(
-                            org_id=request.org_id,
-                            conversation_id=request.conversation_id,
-                            parent_step=step,
-                            prompt_version=prompt_version,
-                            task=reply.argument,
-                        ),
-                        id=helper_id,
-                        task_queue=HELPER_QUEUE,
+                if reply.tool in WORKFLOW_TOOL_NAMES:
+                    tool_out = await self._workflow_tool(
+                        reply, request, run_id, step, prompt_version
                     )
-                    self._pending[helper_id] = handle
-                    tool_out = f"started {helper_id}"
-                elif reply.tool == "collect":
-                    ids = list(self._pending) if reply.argument == "all" else [reply.argument]
-                    lines = []
-                    for hid in ids:
-                        child = self._pending.pop(hid, None)
-                        if child is None:
-                            lines.append(f"{hid}: unknown helper")
-                            continue
-                        try:
-                            report = await child
-                        except Exception as exc:
-                            report = f"helper failed: {type(exc).__name__}"
-                        lines.append(f"{hid}: {report}")
-                    tool_out = "\n".join(lines) or "no helpers"
-                elif reply.tool == "helpers":
-                    tool_out = ", ".join(self._pending) or "none running"
-                elif reply.tool == "message_helper":
-                    helper_id, _, text = reply.argument.partition(" ")
-                    child = self._pending.get(helper_id)
-                    if child is None:
-                        tool_out = f"unknown helper: {helper_id}"
-                    else:
-                        await child.signal("message", text)
-                        tool_out = "sent"
-                elif reply.tool == "stop_helper":
-                    child = self._pending.get(reply.argument)
-                    if child is None:
-                        tool_out = f"unknown helper: {reply.argument}"
-                    else:
-                        await child.signal("stop")
-                        tool_out = f"stop sent: {reply.argument}"
                 else:
                     result: ToolResult = await workflow.execute_activity(
                         run_tool,
