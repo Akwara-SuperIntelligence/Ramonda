@@ -33,25 +33,62 @@ from agent_service.events import (
     Envelope,
 )
 
-# One line of policy. Add a tool here when it can do something irreversible.
-NEEDS_APPROVAL = {"send_email": True}
+@dataclass(frozen=True)
+class ToolSpec:
+    """One tool: the name the model says, its schema, its policy, where it runs."""
 
-# Ordered sections: move the prefix and the provider cache is lost.
-# Names only. Schemas are fetched with get_tool_schema, so the prefix stays small.
-TOOL_SCHEMAS = {
-    "echo": 'echo: {"tool": "echo", "argument": "<text>"}',
-    "send_email": 'send_email: {"tool": "send_email", "argument": "<address> <text>"}',
-    "read_file": 'read_file: {"tool": "read_file", "argument": "<name from a stored output>"}',
-    "remember": 'remember: {"tool": "remember", "argument": "<durable fact>"}',
-    "note": 'note: {"tool": "note", "argument": "<temporary note>"}',
-    "recall": 'recall: {"tool": "recall", "argument": "<search text>"}',
-    "read_skill": 'read_skill: {"tool": "read_skill", "argument": "<skill name>"}',
-    "delegate": 'delegate: {"tool": "delegate", "argument": "<a self-contained task>"}',
-    "collect": 'collect: {"tool": "collect", "argument": "<helper id or all>"}',
-    "helpers": 'helpers: {"tool": "helpers", "argument": ""}',
-    "message_helper": 'message_helper: {"tool": "message_helper", "argument": "<helper id> <message>"}',
-    "stop_helper": 'stop_helper: {"tool": "stop_helper", "argument": "<helper id>"}',
-}
+    name: str
+    schema: str
+    approval: bool = False
+    site: str = "activity"  # "activity" for effects, "workflow" for control flow
+
+
+# Single source. The prompt, the schema lookup, and the policy are built from it.
+TOOL_SPECS = [
+    ToolSpec("echo", 'echo: {"tool": "echo", "argument": "<text>"}'),
+    ToolSpec(
+        "send_email",
+        'send_email: {"tool": "send_email", "argument": "<address> <text>"}',
+        approval=True,
+    ),
+    ToolSpec(
+        "read_file",
+        'read_file: {"tool": "read_file", "argument": "<name from a stored output>"}',
+    ),
+    ToolSpec(
+        "get_tool_schema",
+        'get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}',
+    ),
+    ToolSpec("remember", 'remember: {"tool": "remember", "argument": "<durable fact>"}'),
+    ToolSpec("note", 'note: {"tool": "note", "argument": "<temporary note>"}'),
+    ToolSpec("recall", 'recall: {"tool": "recall", "argument": "<search text>"}'),
+    ToolSpec("read_skill", 'read_skill: {"tool": "read_skill", "argument": "<skill name>"}'),
+    ToolSpec(
+        "delegate",
+        'delegate: {"tool": "delegate", "argument": "<a self-contained task>"}',
+        site="workflow",
+    ),
+    ToolSpec(
+        "collect",
+        'collect: {"tool": "collect", "argument": "<helper id or all>"}',
+        site="workflow",
+    ),
+    ToolSpec("helpers", 'helpers: {"tool": "helpers", "argument": ""}', site="workflow"),
+    ToolSpec(
+        "message_helper",
+        'message_helper: {"tool": "message_helper", "argument": "<helper id> <message>"}',
+        site="workflow",
+    ),
+    ToolSpec(
+        "stop_helper",
+        'stop_helper: {"tool": "stop_helper", "argument": "<helper id>"}',
+        site="workflow",
+    ),
+]
+
+TOOL_NAMES = ", ".join(tool.name for tool in TOOL_SPECS)
+TOOL_SCHEMAS = {tool.name: tool.schema for tool in TOOL_SPECS}
+NEEDS_APPROVAL = {tool.name: True for tool in TOOL_SPECS if tool.approval}
 
 
 def _hash(text: str) -> str:
@@ -92,7 +129,7 @@ To call a tool: {"tool": "<name>", "argument": "<text>"}
 To answer: {"final": "<text>"}
 You may call tools over several steps before you answer.
 Do not call a tool that already succeeded in this conversation.
-Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate, collect, helpers, message_helper, stop_helper.
+Tools: """ + TOOL_NAMES + """.
 Use remember for facts that must survive. Use note for the current task.
 Call get_tool_schema with a tool name before you use a tool you do not know.
 Delegate starts a helper and returns its id; it does not wait. collect waits
@@ -662,6 +699,74 @@ async def _recall(org_id: str, conversation_id: str, query: str) -> str:
     return "\n".join(lines) or f"nothing found for: {query}"
 
 
+async def _effect(tool: str, argument: str, effect_token: str) -> ToolResult:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await _claim(conn, effect_token, tool, argument)
+
+    if len(argument) > SIZE_LIMIT:
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        stored = hashlib.sha256(effect_token.encode()).hexdigest()[:16] + ".txt"
+        (ARTIFACTS / stored).write_text(argument)
+        output = argument[:500] + f"... [stored: {stored}] ({len(argument)} chars)"
+    else:
+        output = argument
+    return ToolResult(ok=True, output=output)
+
+
+async def _echo(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    return await _effect("echo", argument, effect_token)
+
+
+async def _send_email(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    return await _effect("send_email", argument, effect_token)
+
+
+async def _read_file(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    path = ARTIFACTS / Path(argument).name
+    if not path.is_file():
+        return ToolResult(ok=False, output=f"no such file: {argument}")
+    return ToolResult(ok=True, output=path.read_text()[:4000])
+
+
+async def _read_skill(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    path = SKILLS / Path(argument).stem / "SKILL.md"
+    if not path.is_file():
+        return ToolResult(ok=False, output=f"no such skill: {argument}")
+    return ToolResult(ok=True, output=path.read_text()[:4000])
+
+
+async def _get_tool_schema(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    schema = TOOL_SCHEMAS.get(argument)
+    return ToolResult(ok=bool(schema), output=schema or f"unknown tool: {argument}")
+
+
+async def _recall_tool(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    return ToolResult(ok=True, output=await _recall(org_id, conversation_id, argument))
+
+
+async def _remember(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    await _write_memory(org_id, conversation_id, "fact", argument, effect_token)
+    return ToolResult(ok=True, output="fact stored")
+
+
+async def _note(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    await _write_memory(org_id, conversation_id, "scratch", argument, effect_token)
+    return ToolResult(ok=True, output="scratch stored")
+
+
+# One handler per name. The test checks this table against TOOL_SPECS.
+ACTIVITY_TOOLS = {
+    "echo": _echo,
+    "send_email": _send_email,
+    "read_file": _read_file,
+    "read_skill": _read_skill,
+    "get_tool_schema": _get_tool_schema,
+    "recall": _recall_tool,
+    "remember": _remember,
+    "note": _note,
+}
+
+
 @activity.defn
 async def run_tool(
     org_id: str,
@@ -675,41 +780,7 @@ async def run_tool(
     Sources: talk §04 (the harness, not the model, executes tools); talk §05
     (long output to a file); lesson 07 (memory layers); EDA §5 (effect tokens).
     """
-    if name == "get_tool_schema":
-        schema = TOOL_SCHEMAS.get(argument)
-        return ToolResult(ok=bool(schema), output=schema or f"unknown tool: {argument}")
-
-    if name == "read_file":
-        path = ARTIFACTS / Path(argument).name
-        if not path.is_file():
-            return ToolResult(ok=False, output=f"no such file: {argument}")
-        return ToolResult(ok=True, output=path.read_text()[:4000])
-
-    if name == "read_skill":
-        path = SKILLS / Path(argument).stem / "SKILL.md"
-        if not path.is_file():
-            return ToolResult(ok=False, output=f"no such skill: {argument}")
-        return ToolResult(ok=True, output=path.read_text()[:4000])
-
-    if name == "recall":
-        return ToolResult(ok=True, output=await _recall(org_id, conversation_id, argument))
-
-    if name in ("remember", "note"):
-        kind = "fact" if name == "remember" else "scratch"
-        await _write_memory(org_id, conversation_id, kind, argument, effect_token)
-        return ToolResult(ok=True, output=f"{kind} stored")
-
-    if name not in ("echo", "send_email"):
+    handler = ACTIVITY_TOOLS.get(name)
+    if handler is None:
         return ToolResult(ok=False, output=f"unknown tool: {name}")
-
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        await _claim(conn, effect_token, name, argument)
-
-    if len(argument) > SIZE_LIMIT:
-        ARTIFACTS.mkdir(parents=True, exist_ok=True)
-        stored = hashlib.sha256(effect_token.encode()).hexdigest()[:16] + ".txt"
-        (ARTIFACTS / stored).write_text(argument)
-        output = argument[:500] + f"... [stored: {stored}] ({len(argument)} chars)"
-    else:
-        output = argument
-    return ToolResult(ok=True, output=output)
+    return await handler(org_id, conversation_id, argument, effect_token)
