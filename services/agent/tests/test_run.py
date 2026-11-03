@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from contextlib import AsyncExitStack
 import re
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
 from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
 from agent_service.relay import relay_once
-from agent_service.workflow import HELPER_QUEUE, HelperWorkflow, RunRequest, RunWorkflow
+from agent_service.workflow import HELPER_QUEUE, HelperTask, HelperWorkflow, RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
 
@@ -63,6 +64,37 @@ ACTIVITIES = [
     save_tool_step,
     send_user,
 ]
+
+
+def _usage() -> dict:
+    return {
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "prompt_cache_hit_tokens": 6,
+            "prompt_cache_miss_tokens": 4,
+        }
+    }
+
+
+def _fake_router(monkeypatch, routes: list[tuple], seen: list | None = None) -> list:
+    """First matching substring wins. A callable reply gets (last, payload)."""
+    seen = [] if seen is None else seen
+
+    def fake(payload: dict) -> dict:
+        seen.append(payload)
+        last = payload["messages"][-1]["content"]
+        for key, reply in routes:
+            if key in last:
+                content = reply(last, payload) if callable(reply) else reply
+                return {
+                    "choices": [{"message": {"content": content}}],
+                    **_usage(),
+                }
+        raise AssertionError(f"no route for: {last!r}")
+
+    monkeypatch.setattr(activities, "_post", fake)
+    return seen
 
 
 def _fake_model(monkeypatch, *replies: str) -> list[dict]:
@@ -420,10 +452,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "4")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "5")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("3", "3")
+    assert (first, second) == ("4", "4")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -545,57 +577,7 @@ def test_skills_match_their_folder_and_have_a_body():
         assert body
 
 
-def test_a_delegate_call_runs_a_helper_and_saves_the_report(monkeypatch):
-    conv = f"t-{uuid4().hex}"
-    _fake_model(
-        monkeypatch,
-        '{"tool": "delegate", "argument": "count the files"}',
-        '{"final": "3 files found"}',
-        '{"final": "the helper found 3 files"}',
-    )
 
-    async def scenario():
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            async with Worker(
-                env.client,
-                task_queue=SERVICE_QUEUE,
-                workflows=[RunWorkflow],
-                activities=ACTIVITIES,
-            ):
-                async with Worker(
-                    env.client,
-                    task_queue=HELPER_QUEUE,
-                    workflows=[HelperWorkflow],
-                    activities=ACTIVITIES,
-                ):
-                    return await env.client.execute_workflow(
-                        RunWorkflow.run,
-                        RunRequest(conv, "count the files"),
-                        id=f"turn:{uuid4().hex}",
-                        task_queue=SERVICE_QUEUE,
-                    )
-
-    result = asyncio.run(scenario())
-
-    assert result.reply == "the helper found 3 files"
-    roles = asyncio.run(
-        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
-    )
-    assert roles == ["user", "tool", "assistant"]
-    tool_row = asyncio.run(
-        _scalar(
-            "select content from messages where conversation_id = %s and role = 'tool'",
-            (conv,),
-        )
-    )
-    assert "delegate(count the files) -> 3 files found" in tool_row
-    helper_calls = asyncio.run(
-        _scalar(
-            "select count(*) from model_calls where conversation_id = %s and seq < 0",
-            (conv,),
-        )
-    )
-    assert helper_calls == 1
 
 
 def test_a_helper_cannot_run_an_irreversible_tool(monkeypatch):
@@ -640,3 +622,231 @@ def test_a_helper_cannot_run_an_irreversible_tool(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from approvals where conversation_id = %s", (conv,))
     ) == 0
+
+
+def _two_workers(env_client):
+    return [
+        Worker(
+            env_client,
+            task_queue=SERVICE_QUEUE,
+            workflows=[RunWorkflow],
+            activities=ACTIVITIES,
+        ),
+        Worker(
+            env_client,
+            task_queue=HELPER_QUEUE,
+            workflows=[HelperWorkflow],
+            activities=ACTIVITIES,
+        ),
+    ]
+
+
+async def _run_with_helpers(request: RunRequest):
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with AsyncExitStack() as stack:
+            for worker in _two_workers(env.client):
+                await stack.enter_async_context(worker)
+            return await env.client.execute_workflow(
+                RunWorkflow.run,
+                request,
+                id=f"turn:{uuid4().hex}",
+                task_queue=SERVICE_QUEUE,
+            )
+
+
+def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen: list = []
+    started = {"n": 0}
+
+    def on_started(last, payload):
+        started["n"] += 1
+        if started["n"] == 1:
+            return '{"tool": "delegate", "argument": "do the B work"}'
+        return '{"tool": "collect", "argument": "all"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"final": "A report"}'),
+            ("do the B work", '{"final": "B report"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            ("started helper:", on_started),
+            ("tool result: collect", '{"final": "both reports are in"}'),
+        ],
+        seen,
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "both reports are in"
+    roles = asyncio.run(
+        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
+    )
+    assert roles == ["user", "tool", "tool", "tool", "assistant"]
+    assert any("A report" in row for row in asyncio.run(
+        _column("select content from messages where conversation_id = %s", (conv,))
+    ))
+    assert asyncio.run(
+        _scalar("select count(*) from model_calls where conversation_id = %s and seq < 0", (conv,))
+    ) == 2
+
+
+def test_a_helper_cannot_run_an_irreversible_tool(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen: list = []
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("denied (helpers cannot run irreversible tools)", '{"final": "could not send it"}'),
+            ("send the email via helper", '{"tool": "send_email", "argument": "a@b"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "send the email via helper"}'),
+            ("started helper:", '{"tool": "collect", "argument": "all"}'),
+            ("tool result: collect", '{"final": "the helper could not send it"}'),
+        ],
+        seen,
+    )
+
+    asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from effects where kind = 'send_email' and token like %s",
+            ("helper:%",),
+        )
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from approvals where conversation_id = %s", (conv,))
+    ) == 0
+
+
+def test_a_message_reaches_the_helper(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen: list = []
+
+    def after_echo(last, payload):
+        if any("the main agent says:" in m["content"] for m in payload["messages"]):
+            return '{"final": "checked the red one"}'
+        return '{"tool": "echo", "argument": "working"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            (
+                "the main agent says: check the red one",
+                '{"final": "checked the red one"}',
+            ),
+            ("tool result: echo -> working", after_echo),
+            ("do the A work", '{"tool": "echo", "argument": "working"}'),
+        ],
+        seen,
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=HELPER_QUEUE,
+                workflows=[HelperWorkflow],
+                activities=ACTIVITIES,
+            ):
+                handle = await env.client.start_workflow(
+                    HelperWorkflow.run,
+                    HelperTask(
+                        org_id="local",
+                        conversation_id=conv,
+                        parent_step=0,
+                        prompt_version=activities.PROMPT_VERSION,
+                        task="do the A work",
+                    ),
+                    id=f"helper:{uuid4().hex}",
+                    task_queue=HELPER_QUEUE,
+                )
+                await handle.signal("message", "check the red one")
+                return await handle.result()
+
+    assert asyncio.run(scenario()) == "checked the red one"
+    assert any(
+        "the main agent says: check the red one" in m["content"]
+        for payload in seen
+        for m in payload["messages"]
+    )
+
+
+def test_a_stopped_helper_reports_stopped(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen: list = []
+    stopped = {"n": 0}
+
+    def on_started(last, payload):
+        helper_id = last.split("started ")[1]
+        stopped["n"] += 1
+        return '{"tool": "stop_helper", "argument": "' + helper_id + '"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"tool": "echo", "argument": "working"}'),
+            ("tool result: echo -> working", '{"tool": "echo", "argument": "working"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            ("started helper:", on_started),
+            ("tool result: stop_helper", '{"tool": "collect", "argument": "all"}'),
+            ("tool result: collect", '{"final": "the helper was stopped"}'),
+        ],
+        seen,
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "the helper was stopped"
+    assert any("stopped" in row for row in asyncio.run(
+        _column("select content from messages where conversation_id = %s", (conv,))
+    ))
+
+
+def test_a_final_with_pending_helpers_is_refused(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen: list = []
+    started = {"n": 0}
+
+    def on_started(last, payload):
+        started["n"] += 1
+        if started["n"] == 1:
+            return '{"final": "done early"}'
+        return '{"tool": "collect", "argument": "all"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"final": "A report"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            ("started helper:", on_started),
+            ("outstanding helpers", '{"tool": "collect", "argument": "all"}'),
+            ("tool result: collect", '{"final": "now done"}'),
+        ],
+        seen,
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "now done"
+    assert any(
+        "outstanding helpers" in payload["messages"][-1]["content"]
+        for payload in seen
+    )
+    roles = asyncio.run(
+        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
+    )
+    assert roles == ["user", "tool", "tool", "assistant"]
+
+
+def test_two_json_actions_in_one_reply_take_the_first():
+    reply = activities._parse_reply(
+        '{"tool": "get_tool_schema", "argument": "delegate"}\n'
+        '{"tool": "get_tool_schema", "argument": "collect"}'
+    )
+
+    assert reply.kind == "tool"
+    assert reply.tool == "get_tool_schema"
+    assert reply.argument == "delegate"

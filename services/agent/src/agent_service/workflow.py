@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
@@ -52,7 +53,7 @@ class RunRequest:
     conversation_id: str
     text: str
     org_id: str = "local"
-    max_steps: int = 6
+    max_steps: int = 12
 
 
 @dataclass
@@ -90,12 +91,31 @@ class HelperWorkflow:
     parent transcript is untouched.
     """
 
+    def __init__(self) -> None:
+        self._stop = False
+        self._messages: list[str] = []
+
+    @workflow.signal
+    def message(self, text: str) -> None:
+        self._messages.append(text)
+
+    @workflow.signal
+    def stop(self) -> None:
+        self._stop = True
+
     @workflow.run
     async def run(self, task: HelperTask) -> str:
         run_id = workflow.info().workflow_id
         history: list[dict] = [{"role": "user", "content": task.task}]
 
         for step in range(HELPER_MAX_STEPS):
+            if self._stop:
+                return "stopped"
+            for text in self._messages:
+                history.append(
+                    {"role": "user", "content": f"the main agent says: {text}"}
+                )
+            self._messages.clear()
             reply: ModelReply = await workflow.execute_activity(
                 call_model,
                 args=[
@@ -156,6 +176,7 @@ class RunWorkflow:
     def __init__(self) -> None:
         self._approval_id: str | None = None
         self._decision: str | None = None
+        self._pending: dict[str, Any] = {}
 
     @workflow.signal
     def resolve(self, decision: str, approval_id: str) -> None:
@@ -214,6 +235,20 @@ class RunWorkflow:
                 )
 
                 if reply.kind == "final":
+                    if self._pending:
+                        # The manager closes out its helpers before reporting.
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "You have outstanding helpers: "
+                                    + ", ".join(self._pending)
+                                    + ". Collect their reports with collect, or stop "
+                                    "them with stop_helper, then answer."
+                                ),
+                            }
+                        )
+                        continue
                     await workflow.execute_activity(
                         send_user,
                         args=[
@@ -283,7 +318,8 @@ class RunWorkflow:
                         continue
 
                 if reply.tool == "delegate":
-                    report: str = await workflow.execute_child_workflow(
+                    helper_id = f"helper:{run_id}:{step}"
+                    handle = await workflow.start_child_workflow(
                         HelperWorkflow.run,
                         HelperTask(
                             org_id=request.org_id,
@@ -292,36 +328,56 @@ class RunWorkflow:
                             prompt_version=prompt_version,
                             task=reply.argument,
                         ),
-                        id=f"helper:{run_id}:{step}",
+                        id=helper_id,
                         task_queue=HELPER_QUEUE,
                     )
-                    await workflow.execute_activity(
-                        save_tool_step,
+                    self._pending[helper_id] = handle
+                    tool_out = f"started {helper_id}"
+                elif reply.tool == "collect":
+                    ids = list(self._pending) if reply.argument == "all" else [reply.argument]
+                    lines = []
+                    for hid in ids:
+                        child = self._pending.pop(hid, None)
+                        if child is None:
+                            lines.append(f"{hid}: unknown helper")
+                            continue
+                        try:
+                            report = await child
+                        except Exception as exc:
+                            report = f"helper failed: {type(exc).__name__}"
+                        lines.append(f"{hid}: {report}")
+                    tool_out = "\n".join(lines) or "no helpers"
+                elif reply.tool == "helpers":
+                    tool_out = ", ".join(self._pending) or "none running"
+                elif reply.tool == "message_helper":
+                    helper_id, _, text = reply.argument.partition(" ")
+                    child = self._pending.get(helper_id)
+                    if child is None:
+                        tool_out = f"unknown helper: {helper_id}"
+                    else:
+                        await child.signal("message", text)
+                        tool_out = "sent"
+                elif reply.tool == "stop_helper":
+                    child = self._pending.get(reply.argument)
+                    if child is None:
+                        tool_out = f"unknown helper: {reply.argument}"
+                    else:
+                        await child.signal("stop")
+                        tool_out = f"stop sent: {reply.argument}"
+                else:
+                    result: ToolResult = await workflow.execute_activity(
+                        run_tool,
                         args=[
                             request.org_id,
                             request.conversation_id,
-                            seq,
-                            step + 1,
-                            f"delegate({reply.argument}) -> {report}",
+                            reply.tool,
+                            reply.argument,
+                            f"{request.org_id}:{run_id}:{step}",
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
-                    history.append(
-                        {"role": "user", "content": f"tool result: delegate -> {report}"}
-                    )
-                    continue
+                    tool_out = result.output
 
-                result: ToolResult = await workflow.execute_activity(
-                    run_tool,
-                    args=[
-                        request.org_id,
-                        request.conversation_id,
-                        reply.tool,
-                        reply.argument,
-                        f"{request.org_id}:{run_id}:{step}",
-                    ],
-                    start_to_close_timeout=timedelta(seconds=10),
-                )
                 await workflow.execute_activity(
                     save_tool_step,
                     args=[
@@ -329,14 +385,14 @@ class RunWorkflow:
                         request.conversation_id,
                         seq,
                         step + 1,
-                        f"{reply.tool}({reply.argument}) -> {result.output}",
+                        f"{reply.tool}({reply.argument}) -> {tool_out}",
                     ],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
                 history.append(
                     {
                         "role": "user",
-                        "content": f"tool result: {reply.tool} -> {result.output}",
+                        "content": f"tool result: {reply.tool} -> {tool_out}",
                     }
                 )
 
