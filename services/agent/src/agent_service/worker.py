@@ -31,9 +31,10 @@ from agent_service.activities import (
     save_tool_step,
     send_user,
 )
-from agent_service.workflow import RunWorkflow
+from agent_service.workflow import HELPER_QUEUE, HelperWorkflow, RunWorkflow
 
 TASK_QUEUE = "agent-orchestrator"
+HELPER_QUEUE = "agent-helper"
 
 ACTIVITIES = [
     acquire_lock,
@@ -54,14 +55,22 @@ ACTIVITIES = [
 async def main() -> None:
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     client = await Client.connect(address)
-    worker = Worker(
-        client,
-        task_queue=TASK_QUEUE,
-        workflows=[RunWorkflow],
-        activities=ACTIVITIES,
-    )
-    print(f"worker ready: {TASK_QUEUE} on {address}", flush=True)
-    await worker.run()
+    workers = [
+        Worker(
+            client,
+            task_queue=TASK_QUEUE,
+            workflows=[RunWorkflow],
+            activities=ACTIVITIES,
+        ),
+        Worker(
+            client,
+            task_queue=HELPER_QUEUE,
+            workflows=[HelperWorkflow],
+            activities=ACTIVITIES,
+        ),
+    ]
+    print(f"worker ready: {TASK_QUEUE} + {HELPER_QUEUE} on {address}", flush=True)
+    await asyncio.gather(*(worker.run() for worker in workers))
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
 from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
 from agent_service.relay import relay_once
-from agent_service.workflow import RunRequest, RunWorkflow
+from agent_service.workflow import HELPER_QUEUE, HelperWorkflow, RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
 
@@ -420,10 +420,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "3")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "4")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("2", "2")
+    assert (first, second) == ("3", "3")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -543,3 +543,100 @@ def test_skills_match_their_folder_and_have_a_body():
 
         assert name == folder.name
         assert body
+
+
+def test_a_delegate_call_runs_a_helper_and_saves_the_report(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "delegate", "argument": "count the files"}',
+        '{"final": "3 files found"}',
+        '{"final": "the helper found 3 files"}',
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                async with Worker(
+                    env.client,
+                    task_queue=HELPER_QUEUE,
+                    workflows=[HelperWorkflow],
+                    activities=ACTIVITIES,
+                ):
+                    return await env.client.execute_workflow(
+                        RunWorkflow.run,
+                        RunRequest(conv, "count the files"),
+                        id=f"turn:{uuid4().hex}",
+                        task_queue=SERVICE_QUEUE,
+                    )
+
+    result = asyncio.run(scenario())
+
+    assert result.reply == "the helper found 3 files"
+    roles = asyncio.run(
+        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
+    )
+    assert roles == ["user", "tool", "assistant"]
+    tool_row = asyncio.run(
+        _scalar(
+            "select content from messages where conversation_id = %s and role = 'tool'",
+            (conv,),
+        )
+    )
+    assert "delegate(count the files) -> 3 files found" in tool_row
+    helper_calls = asyncio.run(
+        _scalar(
+            "select count(*) from model_calls where conversation_id = %s and seq < 0",
+            (conv,),
+        )
+    )
+    assert helper_calls == 1
+
+
+def test_a_helper_cannot_run_an_irreversible_tool(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "delegate", "argument": "send the email"}',
+        '{"tool": "send_email", "argument": "a@b"}',
+        '{"final": "could not send"}',
+        '{"final": "the helper could not send it"}',
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                async with Worker(
+                    env.client,
+                    task_queue=HELPER_QUEUE,
+                    workflows=[HelperWorkflow],
+                    activities=ACTIVITIES,
+                ):
+                    return await env.client.execute_workflow(
+                        RunWorkflow.run,
+                        RunRequest(conv, "send the email"),
+                        id=f"turn:{uuid4().hex}",
+                        task_queue=SERVICE_QUEUE,
+                    )
+
+    asyncio.run(scenario())
+
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from effects where token like %s and kind = 'send_email'",
+            ("helper:%",),
+        )
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from approvals where conversation_id = %s", (conv,))
+    ) == 0
