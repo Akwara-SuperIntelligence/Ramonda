@@ -4,6 +4,7 @@ token.json
 out/
 .venv/
 .tools/
+.agent/
 __pycache__/
 *.pyc
 .pytest_cache/

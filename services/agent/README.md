@@ -64,6 +64,10 @@ Every increment names its sources. This table is the running index.
 | lesson 09 — three guards | `activities.py`, `consumer.py` | Policy, deadline, single-use resolution |
 | EDA §4.2 — approval events | `events.py`, `migrations/004_approvals.sql` | Requested and resolved are separate events |
 | talk §05 — the transcript is memory | `workflow.py` (`save_tool_step`) | Tool steps are rows, ordered by step |
+| talk §05 — measure the cache | `activities.py` (`call_model`), `migrations/007_context.sql` | Hit and miss tokens stored per call |
+| talk §05 — compact inside the warm window | `activities.py` (`compact`) | Old turns become a summary after a threshold |
+| talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
+| talk §05 — stable section order | `activities.py` (`RULES`, `TOOLS`, `PROMPT_HASH`) | The prefix hash is recorded with every call |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 
 ## Verified
@@ -88,6 +92,10 @@ denying a second request ran nothing; an unanswered request expires in the test.
 A live turn stored `user`, `tool`, `assistant` in that order, so the transcript
 shows the work the agent did.
 
+A live turn recorded 144 prompt tokens, 0 cache hits, 144 misses. The second
+turn recorded 159 and still 0 hits, so the cache is not warm yet. That is the
+first finding from the measurement, not a defect in it.
+
 ## Known limits
 
 Two behaviours are mitigations, not guarantees, and one is a lease. They are
@@ -103,6 +111,11 @@ recorded here so a later change does not assume more than the code provides.
   server expires activity timeouts while a second workflow waits, so the
   concurrent test was removed. Add it when CI has a server that does not skip
   time.
+- **Tool-schema search is deferred.** With three tools, names without schemas
+  cost a round trip and save almost nothing. Revisit when the tool list grows.
+- **The prompt cache shows no hits.** Two live turns both missed. The prefix is
+  stable and hashed, so the next step is to find what invalidates it, or whether
+  the provider caches this prompt length at all.
 - **The lock lease is one hour.** A terminated workflow leaves its row until
   expiry, and a turn longer than the lease can overlap with the next one. Renew
   the lease from inside long runs.

@@ -20,6 +20,7 @@ from temporalio.worker import Worker
 from agent_service.activities import (
     acquire_lock,
     call_model,
+    compact,
     expire_approval,
     load_history,
     next_turn,
@@ -44,6 +45,7 @@ async def main() -> None:
         activities=[
             acquire_lock,
             call_model,
+            compact,
             expire_approval,
             load_history,
             next_turn,

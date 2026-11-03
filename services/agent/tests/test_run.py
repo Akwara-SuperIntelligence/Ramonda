@@ -14,6 +14,7 @@ Delta
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from uuid import uuid4
 
 import psycopg
@@ -26,6 +27,7 @@ from agent_service import activities
 from agent_service.activities import (
     acquire_lock,
     call_model,
+    compact,
     expire_approval,
     load_history,
     next_turn,
@@ -46,6 +48,7 @@ TASK_QUEUE = "test"
 ACTIVITIES = [
     acquire_lock,
     call_model,
+    compact,
     expire_approval,
     load_history,
     next_turn,
@@ -64,7 +67,15 @@ def _fake_model(monkeypatch, *replies: str) -> list[dict]:
 
     def fake(payload: dict) -> dict:
         seen.append(payload)
-        return {"choices": [{"message": {"content": next(script)}}]}
+        return {
+            "choices": [{"message": {"content": next(script)}}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "prompt_cache_hit_tokens": 6,
+                "prompt_cache_miss_tokens": 4,
+            },
+        }
 
     monkeypatch.setattr(activities, "_post", fake)
     return seen
@@ -116,6 +127,18 @@ def test_a_turn_is_saved_once(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from outbox where id = %s", (f"local:run:{conv}:0:save",))
     ) == 1
+    assert asyncio.run(
+        _scalar(
+            "select cache_hit from model_calls where conversation_id = %s and seq = 0 and step = 0",
+            (conv,),
+        )
+    ) == 6
+    assert asyncio.run(
+        _scalar(
+            "select prompt_hash from model_calls where conversation_id = %s and seq = 0 and step = 0",
+            (conv,),
+        )
+    ) == activities.PROMPT_HASH
 
 
 def test_a_duplicate_token_writes_once():
@@ -304,3 +327,40 @@ def test_the_conversation_lock_is_exclusive():
 
     assert asyncio.run(scenario()) == (True, False, True)
 
+
+
+def test_long_output_is_stored_and_readable():
+    token = f"long-{uuid4().hex}"
+    text = "x" * 3000
+
+    result = asyncio.run(run_tool("echo", text, token))
+    assert "[stored:" in result.output
+
+    name = hashlib.sha256(token.encode()).hexdigest()[:16] + ".txt"
+    assert asyncio.run(run_tool("read_file", name, token)).output == text
+
+
+def test_compaction_summarises_old_turns(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    monkeypatch.setattr(activities, "COMPACT_AFTER", 2)
+    monkeypatch.setattr(activities, "_summarize", lambda text: "summary of old turns")
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            for seq in range(10):
+                await conn.execute(
+                    "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                    " values ('local', %s, %s, 0, 'user', 'u'),"
+                    " ('local', %s, %s, 1, 'assistant', 'a')",
+                    (conv, seq, conv, seq),
+                )
+
+    asyncio.run(seed())
+    asyncio.run(activities.compact("local", conv))
+
+    assert asyncio.run(
+        _scalar("select summary from conversations where conversation_id = %s", (conv,))
+    ) == "summary of old turns"
+    assert asyncio.run(
+        _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
+    ) == 3

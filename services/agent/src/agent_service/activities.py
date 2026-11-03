@@ -13,6 +13,7 @@ Delta
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import urllib.request
@@ -34,15 +35,23 @@ from agent_service.events import (
 # One line of policy. Add a tool here when it can do something irreversible.
 NEEDS_APPROVAL = {"send_email": True}
 
-# The model repeated send_email after success, and the second denial made it
-# claim nothing was sent. The rule below is cheap; an eval is the real guard.
-SYSTEM = """You are an agent on a server. You have two tools.
+# Ordered sections: move the prefix and the provider cache is lost.
+RULES = """You are an agent on a server. You have these tools: echo, send_email, read_file.
 Reply with one JSON object and nothing else.
-Do not call a tool that already succeeded in this conversation.
-echo: {"tool": "echo", "argument": "<text>"}
+Do not call a tool that already succeeded in this conversation."""
+
+TOOLS = """echo: {"tool": "echo", "argument": "<text>"}
 send_email: {"tool": "send_email", "argument": "<address> <text>"}
-Answer: {"final": "<text>"}
-"""
+read_file: {"tool": "read_file", "argument": "<name from a stored output>"}
+Answer: {"final": "<text>"}"""
+
+SYSTEM = RULES + "\n\n" + TOOLS
+PROMPT_HASH = hashlib.sha256(SYSTEM.encode()).hexdigest()[:12]
+
+COMPACT_AFTER = 20
+KEEP_TURNS = 6
+ARTIFACTS = Path(".agent/artifacts")
+SIZE_LIMIT = 2000
 
 # Tenant now arrives in the request; the column existed from day one.
 
@@ -167,16 +176,39 @@ def _parse_reply(text: str) -> ModelReply:
     return ModelReply(kind="final", text=str(data.get("final", raw)))
 
 
+def _summarize(text: str) -> str:
+    body = _post(
+        {
+            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Summarise this conversation. Keep facts, decisions, names, "
+                        "and open tasks. Be brief."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            "temperature": 0,
+        }
+    )
+    return body["choices"][0]["message"]["content"].strip()
+
+
 @activity.defn
-async def call_model(step: int, history: list[str]) -> ModelReply:
-    """Ask the real model what to do next.
+async def call_model(
+    org_id: str, conversation_id: str, seq: int, step: int, history: list[str]
+) -> ModelReply:
+    """Ask the real model what to do next, and record what it cost.
 
     Sources: talk §04 (the model selects a tool call), talk §05 (a stable
     system prompt keeps the prefix cacheable), lesson 01.
     """
+    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
     body = _post(
         {
-            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "model": model,
             "messages": [
                 {"role": "system", "content": SYSTEM},
                 {"role": "user", "content": "\n".join(history)},
@@ -185,23 +217,98 @@ async def call_model(step: int, history: list[str]) -> ModelReply:
             "response_format": {"type": "json_object"},
         }
     )
+    usage = body.get("usage") or {}
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "insert into model_calls (org_id, conversation_id, seq, step, model,"
+            " prompt_hash, prompt_tokens, cache_hit, cache_miss, completion_tokens)"
+            " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            " on conflict (org_id, conversation_id, seq, step) do update set"
+            " model = excluded.model, prompt_hash = excluded.prompt_hash,"
+            " prompt_tokens = excluded.prompt_tokens, cache_hit = excluded.cache_hit,"
+            " cache_miss = excluded.cache_miss,"
+            " completion_tokens = excluded.completion_tokens",
+            (
+                org_id,
+                conversation_id,
+                seq,
+                step,
+                model,
+                PROMPT_HASH,
+                usage.get("prompt_tokens", 0),
+                usage.get("prompt_cache_hit_tokens", 0),
+                usage.get("prompt_cache_miss_tokens", 0),
+                usage.get("completion_tokens", 0),
+            ),
+        )
     return _parse_reply(body["choices"][0]["message"]["content"])
 
 
 @activity.defn
+async def compact(org_id: str, conversation_id: str) -> None:
+    """Summarise old turns once the un-summarised tail grows.
+
+    Sources: talk §05 — compaction while the cache is warm.
+    """
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select summary, summary_seq from conversations"
+            " where org_id = %s and conversation_id = %s",
+            (org_id, conversation_id),
+        )
+        row = await cursor.fetchone()
+        summary, summary_seq = row if row else ("", -1)
+
+        cursor = await conn.execute(
+            "select count(*), coalesce(max(seq), -1) from messages"
+            " where org_id = %s and conversation_id = %s and seq > %s",
+            (org_id, conversation_id, summary_seq),
+        )
+        count, max_seq = await cursor.fetchone()
+        cutoff = max_seq - KEEP_TURNS
+        if count <= COMPACT_AFTER or cutoff <= summary_seq:
+            return
+
+        cursor = await conn.execute(
+            "select role, content from messages"
+            " where org_id = %s and conversation_id = %s and seq > %s and seq <= %s"
+            " order by seq, step",
+            (org_id, conversation_id, summary_seq, cutoff),
+        )
+        lines = [f"{role}: {content}" async for role, content in cursor]
+        text = (f"Previous summary:\n{summary}\n\n" if summary else "") + "\n".join(lines)
+        new_summary = _summarize(text)
+        await conn.execute(
+            "insert into conversations (org_id, conversation_id, summary, summary_seq)"
+            " values (%s, %s, %s, %s)"
+            " on conflict (org_id, conversation_id) do update set"
+            " summary = excluded.summary, summary_seq = excluded.summary_seq",
+            (org_id, conversation_id, new_summary, cutoff),
+        )
+
+
+@activity.defn
 async def load_history(org_id: str, conversation_id: str) -> list[str]:
-    """The conversation so far, oldest first.
+    """The conversation so far, oldest first, with any summary first.
 
     Sources: talk §05 (memory is layered), lesson 07 (three layers).
     """
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         cursor = await conn.execute(
-            "select role, content from messages"
-            " where org_id = %s and conversation_id = %s"
-            " order by seq, step",
+            "select summary, summary_seq from conversations"
+            " where org_id = %s and conversation_id = %s",
             (org_id, conversation_id),
         )
-        return [f"{role}: {content}" async for role, content in cursor]
+        row = await cursor.fetchone()
+        summary, summary_seq = row if row else ("", -1)
+        cursor = await conn.execute(
+            "select role, content from messages"
+            " where org_id = %s and conversation_id = %s and seq > %s"
+            " order by seq, step",
+            (org_id, conversation_id, summary_seq),
+        )
+        lines = [f"{role}: {content}" async for role, content in cursor]
+        return ([f"summary: {summary}"] if summary else []) + lines
 
 
 @activity.defn
@@ -311,11 +418,26 @@ async def expire_approval(approval_id: str) -> None:
 async def run_tool(name: str, argument: str, effect_token: str) -> ToolResult:
     """Execute one tool call, at most once per token.
 
-    Sources: talk §04 (the harness, not the model, executes tools); EDA §5
-    (every effect carries a token, so a retry is safe).
+    Sources: talk §04 (the harness, not the model, executes tools); talk §05
+    (long output to a file, the path into context); EDA §5 (effect tokens).
     """
-    if name in ("echo", "send_email"):
-        async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-            await _claim(conn, effect_token, name, argument)
-        return ToolResult(ok=True, output=argument)
-    return ToolResult(ok=False, output=f"unknown tool: {name}")
+    if name == "read_file":
+        path = ARTIFACTS / Path(argument).name
+        if not path.is_file():
+            return ToolResult(ok=False, output=f"no such file: {argument}")
+        return ToolResult(ok=True, output=path.read_text()[:4000])
+
+    if name not in ("echo", "send_email"):
+        return ToolResult(ok=False, output=f"unknown tool: {name}")
+
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await _claim(conn, effect_token, name, argument)
+
+    if len(argument) > SIZE_LIMIT:
+        ARTIFACTS.mkdir(parents=True, exist_ok=True)
+        stored = hashlib.sha256(effect_token.encode()).hexdigest()[:16] + ".txt"
+        (ARTIFACTS / stored).write_text(argument)
+        output = argument[:500] + f"... [stored: {stored}] ({len(argument)} chars)"
+    else:
+        output = argument
+    return ToolResult(ok=True, output=output)

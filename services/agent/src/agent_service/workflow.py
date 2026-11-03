@@ -30,6 +30,7 @@ with workflow.unsafe.imports_passed_through():
         ToolResult,
         acquire_lock,
         call_model,
+        compact,
         expire_approval,
         load_history,
         next_turn,
@@ -93,6 +94,11 @@ class RunWorkflow:
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=10),
             )
+            await workflow.execute_activity(
+                compact,
+                args=[request.org_id, request.conversation_id],
+                start_to_close_timeout=timedelta(seconds=120),
+            )
             history: list[str] = await workflow.execute_activity(
                 load_history,
                 args=[request.org_id, request.conversation_id],
@@ -103,7 +109,7 @@ class RunWorkflow:
             for step in range(request.max_steps):
                 reply: ModelReply = await workflow.execute_activity(
                     call_model,
-                    args=[step, history],
+                    args=[request.org_id, request.conversation_id, seq, step, history],
                     start_to_close_timeout=timedelta(seconds=30),
                 )
 
