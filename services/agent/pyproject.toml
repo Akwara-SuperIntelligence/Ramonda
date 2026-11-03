@@ -7,7 +7,7 @@ name = "agent-service"
 version = "0.0.0"
 description = "The always-on agent service"
 requires-python = ">=3.12"
-dependencies = ["temporalio>=1.9", "psycopg[binary]>=3.2", "aiokafka>=0.12"]
+dependencies = ["temporalio>=1.9", "psycopg[binary]>=3.2", "aiokafka>=0.12", "cramjam>=2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

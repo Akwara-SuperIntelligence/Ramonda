@@ -33,6 +33,7 @@ from agent_service.activities import (
     expire_approval,
     load_history,
     next_turn,
+    pin_prompt,
     release_lock,
     request_approval,
     run_tool,
@@ -41,7 +42,7 @@ from agent_service.activities import (
 )
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
-from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, Envelope
+from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
 from agent_service.relay import relay_once
 from agent_service.workflow import RunRequest, RunWorkflow
 
@@ -54,6 +55,7 @@ ACTIVITIES = [
     expire_approval,
     load_history,
     next_turn,
+    pin_prompt,
     release_lock,
     request_approval,
     run_tool,
@@ -140,7 +142,7 @@ def test_a_turn_is_saved_once(monkeypatch):
             "select prompt_hash from model_calls where conversation_id = %s and seq = 0 and step = 0",
             (conv,),
         )
-    ) == activities.PROMPT_HASH
+    ) == hashlib.sha256(activities.PROMPTS[activities.PROMPT_VERSION]["system"].encode()).hexdigest()[:12]
 
 
 def test_a_duplicate_token_writes_once():
@@ -412,3 +414,35 @@ def test_compaction_uses_the_live_model():
     assert asyncio.run(
         _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
     ) == 5
+
+
+def test_prompt_version_is_pinned(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    first = asyncio.run(activities.pin_prompt("local", conv))
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "2")
+    second = asyncio.run(activities.pin_prompt("local", conv))
+
+    assert (first, second) == ("1", "1")
+
+
+def test_an_unknown_prompt_version_fails_loudly():
+    with pytest.raises(activities.ApplicationError):
+        asyncio.run(activities.call_model("local", "c", 0, 0, "nope", "", []))
+
+
+def test_typing_prewarms_without_a_turn(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen = _fake_model(monkeypatch, '{"final": "ok"}')
+    envelope = Envelope(
+        event_id=f"typing-{uuid4().hex}",
+        type=TYPING,
+        org_id="acme",
+        subject={"conversation_id": conv},
+        payload={},
+    )
+
+    assert asyncio.run(handle(None, envelope)) is None
+    assert seen and seen[0]["messages"][0]["role"] == "system"
+    assert asyncio.run(
+        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
+    ) == 0

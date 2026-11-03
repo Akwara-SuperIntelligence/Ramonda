@@ -27,13 +27,10 @@ token after it.
 `TOOLS`. History is read from Postgres in order and appended at the end. Nothing
 in the prompt carries a timestamp, request id, or random value.
 
-**Across a deploy, no.** `SYSTEM` is read when an activity runs. Deploy a new
-`RULES` and every running conversation sends a different prefix on its next call:
-the cache misses, and the model sees new instructions mid-conversation. The
-talk's slide says the opposite: running conversations should get a note, not the
-new text. We record `PROMPT_HASH` per call but do not pin it per conversation.
-
-That is the main outstanding gap from the "keep the start the same" slide.
+**Across a deploy: now yes.** Each conversation stores a `prompt_version` on its
+first turn. `PROMPTS` keeps every version, so a deploy adds a version instead of
+replacing one, and a running conversation keeps the text it started with. The
+version and three section hashes are recorded with every model call.
 
 ## 4. What we measured on DeepSeek
 
@@ -72,20 +69,21 @@ So a zero hit ratio on a short conversation is expected, not a defect. The talk'
 Gemini's documentation redirects to a JavaScript application and could not be
 read in this environment, so its row is marked unverified rather than guessed.
 
-## 6. What the harness must change
+## 6. What the harness now does
 
-1. **Pin the prompt per conversation.** Store a prompt version when a
-   conversation starts, and load that version for every turn. A deploy creates a
-   new version; running conversations keep the old one.
-2. **Hash each section separately.** `RULES`, `TOOLS`, and the memory snapshot
-   should each have a hash, so a change names the section that moved.
-3. **Pre-warm while the user types.** Send the stable prefix when a client
-   reports typing, as the slide describes. It needs a client event we do not
-   send yet.
-4. **Compaction is a deliberate prefix reset.** After a summary, the start
-   changes once. Expect one miss and say so in the metrics.
-5. **Do not chase hits below the minimum.** Below roughly 250 tokens on DeepSeek,
-   there is nothing to hit.
+1. **Pins the prompt per conversation.** `prompt_version` is stored on the first
+   turn and every model call uses that version. A deploy adds a version; it does
+   not replace one.
+2. **Hashes each section separately.** `hash_rules`, `hash_tools`, and
+   `hash_memory` are recorded with every call, so a change names the section that
+   moved.
+3. **Pre-warms on typing.** A client publishes `agent.command.typing` with a
+   `conversation_id`; the consumer sends the pinned system prompt with a one-token
+   request. No turn, no message rows.
+4. **Compaction is a deliberate prefix reset.** After a summary the start changes
+   once. Expect one miss.
+5. **Does not chase hits below the minimum.** Below roughly 250 tokens on
+   DeepSeek there is nothing to hit.
 
 ## 7. Sources
 

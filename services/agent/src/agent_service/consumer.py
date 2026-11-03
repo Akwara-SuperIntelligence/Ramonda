@@ -20,8 +20,8 @@ import psycopg
 from aiokafka import AIOKafkaConsumer
 from temporalio.client import Client, WorkflowHandle
 
-from agent_service.activities import _dsn
-from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, Envelope
+from agent_service.activities import _dsn, prewarm
+from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
 
@@ -73,9 +73,12 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
 
 async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     """Handle one command. None if it was already handled or had no effect."""
-    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED):
+    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED, TYPING):
         raise ValueError(f"unsupported event type: {envelope.type}")
     if not await _claim(envelope):
+        return None
+    if envelope.type == TYPING:
+        await prewarm(envelope.org_id, envelope.subject["conversation_id"])
         return None
     if envelope.type == APPROVAL_RESOLVED:
         return await _resolve(client, envelope)
