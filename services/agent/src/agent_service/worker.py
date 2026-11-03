@@ -23,6 +23,7 @@ from agent_service.activities import (
     load_history,
     request_approval,
     run_tool,
+    save_tool_step,
     send_user,
 )
 from agent_service.workflow import RunWorkflow
@@ -37,7 +38,15 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[RunWorkflow],
-        activities=[call_model, expire_approval, load_history, request_approval, run_tool, send_user],
+        activities=[
+            call_model,
+            expire_approval,
+            load_history,
+            request_approval,
+            run_tool,
+            save_tool_step,
+            send_user,
+        ],
     )
     print(f"worker ready: {TASK_QUEUE} on {address}", flush=True)
     await worker.run()

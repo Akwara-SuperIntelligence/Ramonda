@@ -36,6 +36,7 @@ NEEDS_APPROVAL = {"send_email": True}
 
 SYSTEM = """You are an agent on a server. You have two tools.
 Reply with one JSON object and nothing else.
+Do not call a tool that already succeeded in this conversation.
 echo: {"tool": "echo", "argument": "<text>"}
 send_email: {"tool": "send_email", "argument": "<address> <text>"}
 Answer: {"final": "<text>"}
@@ -78,15 +79,14 @@ async def _claim(conn: psycopg.AsyncConnection, token: str, kind: str, payload: 
     return await cursor.fetchone() is not None
 
 
-async def next_seq(org_id: str, conversation_id: str) -> int:
-    """The next turn number for a conversation. Read by the caller, not the workflow."""
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        cursor = await conn.execute(
-            "select coalesce(max(seq) + 1, 0) from messages"
-            " where org_id = %s and conversation_id = %s",
-            (org_id, conversation_id),
-        )
-        return (await cursor.fetchone())[0]
+async def next_seq(conn: psycopg.AsyncConnection, org_id: str, conversation_id: str) -> int:
+    """The next turn number. Runs on the caller's connection, inside its lock."""
+    cursor = await conn.execute(
+        "select coalesce(max(seq) + 1, 0) from messages"
+        " where org_id = %s and conversation_id = %s",
+        (org_id, conversation_id),
+    )
+    return (await cursor.fetchone())[0]
 
 
 def _load_env() -> None:
@@ -165,10 +165,26 @@ async def load_history(org_id: str, conversation_id: str) -> list[str]:
         cursor = await conn.execute(
             "select role, content from messages"
             " where org_id = %s and conversation_id = %s"
-            " order by seq, case role when 'user' then 0 else 1 end",
+            " order by seq, step",
             (org_id, conversation_id),
         )
         return [f"{role}: {content}" async for role, content in cursor]
+
+
+@activity.defn
+async def save_tool_step(
+    org_id: str, conversation_id: str, seq: int, step: int, content: str
+) -> None:
+    """Record what the tool actually did, so the transcript is honest.
+
+    Sources: talk §05 (files and logs are memory), lesson 07.
+    """
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "insert into messages (org_id, conversation_id, seq, step, role, content)"
+            " values (%s, %s, %s, %s, 'tool', %s) on conflict do nothing",
+            (org_id, conversation_id, seq, step, content),
+        )
 
 
 @activity.defn
@@ -176,6 +192,7 @@ async def send_user(
     org_id: str,
     conversation_id: str,
     seq: int,
+    assistant_step: int,
     user_text: str,
     text: str,
     effect_token: str,
@@ -198,11 +215,11 @@ async def send_user(
             if not await _claim(conn, effect_token, "turn", user_text):
                 return
             await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, role, content)"
-                " values (%s, %s, %s, 'user', %s), (%s, %s, %s, 'assistant', %s)"
+                "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                " values (%s, %s, %s, 0, 'user', %s), (%s, %s, %s, %s, 'assistant', %s)"
                 " on conflict do nothing",
                 (org_id, conversation_id, seq, user_text,
-                 org_id, conversation_id, seq, text),
+                 org_id, conversation_id, seq, assistant_step, text),
             )
             await conn.execute(
                 "insert into outbox (id, topic, payload) values (%s, %s, %s)",

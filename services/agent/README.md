@@ -63,6 +63,8 @@ Every increment names its sources. This table is the running index.
 | talk §04 — draft, ask, then act | `workflow.py`, `activities.py` | `send_email` waits on a signal |
 | lesson 09 — three guards | `activities.py`, `consumer.py` | Policy, deadline, single-use resolution |
 | EDA §4.2 — approval events | `events.py`, `migrations/004_approvals.sql` | Requested and resolved are separate events |
+| talk §05 — the transcript is memory | `workflow.py` (`save_tool_step`) | Tool steps are rows, ordered by step |
+| EDA §5 — serialise per conversation | `consumer.py` | Advisory lock around next-turn and start |
 
 ## Verified
 
@@ -82,6 +84,9 @@ client printed `hello` from `agent.message.composed`.
 
 A live `send_email` stopped at an approval. Approving ran the effect once;
 denying a second request ran nothing; an unanswered request expires in the test.
+
+A live turn stored `user`, `tool`, `assistant` in that order, so the transcript
+shows the work the agent did.
 
 ## Setup
 
