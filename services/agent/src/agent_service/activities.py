@@ -631,7 +631,7 @@ async def run_tool(
         return ToolResult(ok=True, output=path.read_text()[:4000])
 
     if name == "read_skill":
-        path = SKILLS / (Path(argument).stem + ".md")
+        path = SKILLS / Path(argument).stem / "SKILL.md"
         if not path.is_file():
             return ToolResult(ok=False, output=f"no such skill: {argument}")
         return ToolResult(ok=True, output=path.read_text()[:4000])
