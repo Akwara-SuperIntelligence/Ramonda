@@ -99,12 +99,12 @@ class RunWorkflow:
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=120),
             )
-            history: list[str] = await workflow.execute_activity(
+            history: list[dict] = await workflow.execute_activity(
                 load_history,
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=10),
             )
-            history.append(f"user: {request.text}")
+            history.append({"role": "user", "content": request.text})
 
             for step in range(request.max_steps):
                 reply: ModelReply = await workflow.execute_activity(
@@ -174,7 +174,12 @@ class RunWorkflow:
                             ],
                             start_to_close_timeout=timedelta(seconds=10),
                         )
-                        history.append(f"tool {reply.tool}: denied ({decision})")
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": f"tool result: {reply.tool} denied ({decision})",
+                            }
+                        )
                         continue
 
                 result: ToolResult = await workflow.execute_activity(
@@ -193,7 +198,12 @@ class RunWorkflow:
                     ],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
-                history.append(f"tool {reply.tool}: {result.output}")
+                history.append(
+                    {
+                        "role": "user",
+                        "content": f"tool result: {reply.tool} -> {result.output}",
+                    }
+                )
 
             raise ApplicationError(
                 f"step budget exhausted after {request.max_steps} steps",
