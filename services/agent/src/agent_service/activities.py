@@ -34,6 +34,8 @@ from agent_service.events import (
 # One line of policy. Add a tool here when it can do something irreversible.
 NEEDS_APPROVAL = {"send_email": True}
 
+# The model repeated send_email after success, and the second denial made it
+# claim nothing was sent. The rule below is cheap; an eval is the real guard.
 SYSTEM = """You are an agent on a server. You have two tools.
 Reply with one JSON object and nothing else.
 Do not call a tool that already succeeded in this conversation.
