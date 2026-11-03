@@ -47,6 +47,10 @@ TOOL_SCHEMAS = {
     "recall": 'recall: {"tool": "recall", "argument": "<search text>"}',
     "read_skill": 'read_skill: {"tool": "read_skill", "argument": "<skill name>"}',
     "delegate": 'delegate: {"tool": "delegate", "argument": "<a self-contained task>"}',
+    "collect": 'collect: {"tool": "collect", "argument": "<helper id or all>"}',
+    "helpers": 'helpers: {"tool": "helpers", "argument": ""}',
+    "message_helper": 'message_helper: {"tool": "message_helper", "argument": "<helper id> <message>"}',
+    "stop_helper": 'stop_helper: {"tool": "stop_helper", "argument": "<helper id>"}',
 }
 
 
@@ -67,6 +71,39 @@ Call get_tool_schema with a tool name before you use a tool whose arguments you 
 V1_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
+V3_RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Delegate work that needs many tool calls or reads a lot of data. The helper
+returns a report; give it a self-contained task.
+Skills: status-update. Read one with read_skill before using it."""
+V3_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
+RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate, collect, helpers, message_helper, stop_helper.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Delegate starts a helper and returns its id; it does not wait. collect waits
+for reports. helpers lists what is running. message_helper and stop_helper
+manage one helper. Collect or stop every helper before you answer.
+Delegate work that needs many tool calls or reads a lot of data. The helper
+returns a report; give it a self-contained task.
+Skills: status-update. Read one with read_skill before using it."""
+V3_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
 # Frozen. Do not edit: conversations pinned to this version must keep it.
 V2_RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
@@ -81,19 +118,6 @@ Skills: status-update. Read one with read_skill before using it."""
 V2_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
-RULES = """You are an agent on a server. You work in steps.
-Each step, reply with one JSON object and nothing else.
-To call a tool: {"tool": "<name>", "argument": "<text>"}
-To answer: {"final": "<text>"}
-You may call tools over several steps before you answer.
-Do not call a tool that already succeeded in this conversation.
-Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate.
-Use remember for facts that must survive. Use note for the current task.
-Call get_tool_schema with a tool name before you use a tool you do not know.
-Delegate work that needs many tool calls or reads a lot of data. The helper
-returns a report; give it a self-contained task.
-Skills: status-update. Read one with read_skill before using it."""
-
 TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
@@ -101,7 +125,7 @@ SYSTEM = RULES + "\n\n" + TOOLS
 
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 PROMPTS = {
     "1": {
         "system": V1_RULES + "\n\n" + V1_TOOLS,
@@ -112,6 +136,11 @@ PROMPTS = {
         "system": V2_RULES + "\n\n" + V2_TOOLS,
         "rules": _hash(V2_RULES),
         "tools": _hash(V2_TOOLS),
+    },
+    "3": {
+        "system": V3_RULES + "\n\n" + V3_TOOLS,
+        "rules": _hash(V3_RULES),
+        "tools": _hash(V3_TOOLS),
     },
     PROMPT_VERSION: {
         "system": SYSTEM,
@@ -276,8 +305,12 @@ def _post(payload: dict) -> dict:
 
 def _parse_reply(text: str) -> ModelReply:
     raw = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    start = raw.find("{")
+    if start == -1:
+        return ModelReply(kind="final", text=text)
     try:
-        data = json.loads(raw)
+        # Models sometimes emit two actions in one reply; take the first.
+        data, _ = json.JSONDecoder().raw_decode(raw[start:])
     except json.JSONDecodeError:
         return ModelReply(kind="final", text=text)
     if "tool" in data:
