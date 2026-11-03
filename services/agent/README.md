@@ -72,6 +72,9 @@ Every increment names its sources. This table is the running index.
 | talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
 | talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |
 | talk §05 — pre-warm on typing | `consumer.py`, `activities.py` (`prewarm`) | One warm call, no turn |
+| talk §02, §04 — sub-agents | `workflow.py` (`HelperWorkflow`, `delegate`) | Fresh context on its own queue; a report back |
+| lesson 06 — a second loop | `workflow.py`, `worker.py` | The helper shares the pinned prompt; its calls record under a negative seq |
+| talk §06, lesson 10 — evals from real failures | `tests/test_evals.py` | Repeat rule and memory recall, asserted on the live model |
 | talk §02, §05 — memory layers | `activities.py` (`remember`, `note`, `recall`), `migrations/009_memories.sql` | Facts always in the prompt; scratch for one hour |
 | lesson 07 — memory is stored so it can be recalled | `activities.py` (`load_history`, `recall`) | Facts and recent notes, not just the transcript |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
@@ -109,6 +112,9 @@ from it. A live compaction run summarised twelve turns with the real model.
 
 A live turn stored "my name is Hassan" with `remember`; the next turn answered
 "Your name is Hassan" from the injected fact.
+
+A live turn delegated to a helper and reported its answer. The helper's second
+model call hit the cache on the shared prefix: 128 tokens.
 
 ## Known limits
 

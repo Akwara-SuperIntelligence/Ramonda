@@ -23,6 +23,8 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
+HELPER_QUEUE = "agent-helper"
+
 with workflow.unsafe.imports_passed_through():
     from agent_service.activities import (
         NEEDS_APPROVAL,
@@ -60,6 +62,88 @@ class RunResult:
     conversation_id: str
     reply: str
     steps: int
+
+
+@dataclass
+class HelperTask:
+    """One delegated task."""
+
+    org_id: str
+    conversation_id: str
+    parent_step: int
+    prompt_version: str
+    task: str
+
+
+HELPER_MAX_STEPS = 5
+
+
+@workflow.defn
+class HelperWorkflow:
+    """A sub-agent: fresh context, its own steps, a report back.
+
+    Sources: talk §02 (sub-agents hand off to helpers with fresh context),
+    talk §04 (helpers keep the main agent sparse), lesson 06 (a second loop).
+
+    Delta: the helper shares the pinned prompt, so its prefix can hit the
+    cache, and it records its model calls under a negative sequence so the
+    parent transcript is untouched.
+    """
+
+    @workflow.run
+    async def run(self, task: HelperTask) -> str:
+        run_id = workflow.info().workflow_id
+        history: list[dict] = [{"role": "user", "content": task.task}]
+
+        for step in range(HELPER_MAX_STEPS):
+            reply: ModelReply = await workflow.execute_activity(
+                call_model,
+                args=[
+                    task.org_id,
+                    task.conversation_id,
+                    -(task.parent_step + 1),
+                    step,
+                    task.prompt_version,
+                    "",
+                    history,
+                ],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            if reply.kind == "final":
+                return reply.text
+
+            if NEEDS_APPROVAL.get(reply.tool):
+                # The approval gate belongs to the parent; helpers cannot act.
+                history.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"tool result: {reply.tool} denied "
+                            "(helpers cannot run irreversible tools)"
+                        ),
+                    }
+                )
+                continue
+
+            result: ToolResult = await workflow.execute_activity(
+                run_tool,
+                args=[
+                    task.org_id,
+                    task.conversation_id,
+                    reply.tool,
+                    reply.argument,
+                    f"{run_id}:{step}",
+                ],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            history.append(
+                {
+                    "role": "user",
+                    "content": f"tool result: {reply.tool} -> {result.output}",
+                }
+            )
+
+        return "helper step budget exhausted"
 
 
 @workflow.defn
@@ -197,6 +281,35 @@ class RunWorkflow:
                             }
                         )
                         continue
+
+                if reply.tool == "delegate":
+                    report: str = await workflow.execute_child_workflow(
+                        HelperWorkflow.run,
+                        HelperTask(
+                            org_id=request.org_id,
+                            conversation_id=request.conversation_id,
+                            parent_step=step,
+                            prompt_version=prompt_version,
+                            task=reply.argument,
+                        ),
+                        id=f"helper:{run_id}:{step}",
+                        task_queue=HELPER_QUEUE,
+                    )
+                    await workflow.execute_activity(
+                        save_tool_step,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            seq,
+                            step + 1,
+                            f"delegate({reply.argument}) -> {report}",
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    history.append(
+                        {"role": "user", "content": f"tool result: delegate -> {report}"}
+                    )
+                    continue
 
                 result: ToolResult = await workflow.execute_activity(
                     run_tool,

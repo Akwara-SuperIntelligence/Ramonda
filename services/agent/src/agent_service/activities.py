@@ -46,6 +46,7 @@ TOOL_SCHEMAS = {
     "note": 'note: {"tool": "note", "argument": "<temporary note>"}',
     "recall": 'recall: {"tool": "recall", "argument": "<search text>"}',
     "read_skill": 'read_skill: {"tool": "read_skill", "argument": "<skill name>"}',
+    "delegate": 'delegate: {"tool": "delegate", "argument": "<a self-contained task>"}',
 }
 
 
@@ -66,7 +67,8 @@ Call get_tool_schema with a tool name before you use a tool whose arguments you 
 V1_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
-RULES = """You are an agent on a server. You work in steps.
+# Frozen. Do not edit: conversations pinned to this version must keep it.
+V2_RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
 To call a tool: {"tool": "<name>", "argument": "<text>"}
 To answer: {"final": "<text>"}
@@ -76,6 +78,21 @@ Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, rea
 Use remember for facts that must survive. Use note for the current task.
 Call get_tool_schema with a tool name before you use a tool you do not know.
 Skills: status-update. Read one with read_skill before using it."""
+V2_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
+RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Delegate work that needs many tool calls or reads a lot of data. The helper
+returns a report; give it a self-contained task.
+Skills: status-update. Read one with read_skill before using it."""
 
 TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
@@ -84,12 +101,17 @@ SYSTEM = RULES + "\n\n" + TOOLS
 
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
-PROMPT_VERSION = "2"
+PROMPT_VERSION = "3"
 PROMPTS = {
     "1": {
         "system": V1_RULES + "\n\n" + V1_TOOLS,
         "rules": _hash(V1_RULES),
         "tools": _hash(V1_TOOLS),
+    },
+    "2": {
+        "system": V2_RULES + "\n\n" + V2_TOOLS,
+        "rules": _hash(V2_RULES),
+        "tools": _hash(V2_TOOLS),
     },
     PROMPT_VERSION: {
         "system": SYSTEM,
