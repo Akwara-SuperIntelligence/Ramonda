@@ -88,6 +88,25 @@ denying a second request ran nothing; an unanswered request expires in the test.
 A live turn stored `user`, `tool`, `assistant` in that order, so the transcript
 shows the work the agent did.
 
+## Known limits
+
+Two behaviours are mitigations, not guarantees, and one is a lease. They are
+recorded here so a later change does not assume more than the code provides.
+
+- **The repeat rule is a prompt line, not a guard.** The model repeated
+  `send_email` after it succeeded; the second request was denied, and the answer
+  said nothing had been sent although the first call had. The rule is the
+  cheapest fix and a live run obeyed it, but a new model can ignore it. An eval
+  that replays this scenario is the real enforcement.
+- **Serialisation is verified manually.** The lock has a unit test; the
+  end-to-end order was shown against the real stack. The time-skipping test
+  server expires activity timeouts while a second workflow waits, so the
+  concurrent test was removed. Add it when CI has a server that does not skip
+  time.
+- **The lock lease is one hour.** A terminated workflow leaves its row until
+  expiry, and a turn longer than the lease can overlap with the next one. Renew
+  the lease from inside long runs.
+
 ## Setup
 
 The venv lives at the repository root and uses Python 3.12. Postgres, Temporal,
