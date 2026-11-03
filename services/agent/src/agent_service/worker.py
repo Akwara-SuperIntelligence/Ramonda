@@ -35,6 +35,21 @@ from agent_service.workflow import RunWorkflow
 
 TASK_QUEUE = "agent-orchestrator"
 
+ACTIVITIES = [
+    acquire_lock,
+    call_model,
+    compact,
+    expire_approval,
+    load_history,
+    next_turn,
+    pin_prompt,
+    release_lock,
+    request_approval,
+    run_tool,
+    save_tool_step,
+    send_user,
+]
+
 
 async def main() -> None:
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
@@ -43,20 +58,7 @@ async def main() -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[RunWorkflow],
-        activities=[
-            acquire_lock,
-            call_model,
-            compact,
-            expire_approval,
-            load_history,
-            next_turn,
-            pin_prompt,
-            release_lock,
-            request_approval,
-            run_tool,
-            save_tool_step,
-            send_user,
-        ],
+        activities=ACTIVITIES,
     )
     print(f"worker ready: {TASK_QUEUE} on {address}", flush=True)
     await worker.run()

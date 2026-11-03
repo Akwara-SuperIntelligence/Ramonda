@@ -200,7 +200,13 @@ class RunWorkflow:
 
                 result: ToolResult = await workflow.execute_activity(
                     run_tool,
-                    args=[reply.tool, reply.argument, f"{request.org_id}:{run_id}:{step}"],
+                    args=[
+                        request.org_id,
+                        request.conversation_id,
+                        reply.tool,
+                        reply.argument,
+                        f"{request.org_id}:{run_id}:{step}",
+                    ],
                     start_to_close_timeout=timedelta(seconds=10),
                 )
                 await workflow.execute_activity(

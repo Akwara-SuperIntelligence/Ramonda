@@ -148,8 +148,8 @@ def test_a_turn_is_saved_once(monkeypatch):
 def test_a_duplicate_token_writes_once():
     token = f"dup-{uuid4().hex}"
 
-    asyncio.run(run_tool("echo", "first", token))
-    asyncio.run(run_tool("echo", "second", token))
+    asyncio.run(run_tool("local", "dup", "echo", "first", token))
+    asyncio.run(run_tool("local", "dup", "echo", "second", token))
 
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (token,))
@@ -337,11 +337,11 @@ def test_long_output_is_stored_and_readable():
     token = f"long-{uuid4().hex}"
     text = "x" * 3000
 
-    result = asyncio.run(run_tool("echo", text, token))
+    result = asyncio.run(run_tool("local", "long", "echo", text, token))
     assert "[stored:" in result.output
 
     name = hashlib.sha256(token.encode()).hexdigest()[:16] + ".txt"
-    assert asyncio.run(run_tool("read_file", name, token)).output == text
+    assert asyncio.run(run_tool("local", "long", "read_file", name, token)).output == text
 
 
 def test_compaction_summarises_old_turns(monkeypatch):
@@ -375,11 +375,11 @@ def test_tool_schemas_are_loaded_on_demand():
     assert "get_tool_schema:" in activities.SYSTEM
 
     token = f"schema-{uuid4().hex}"
-    schema = asyncio.run(run_tool("get_tool_schema", "send_email", token))
+    schema = asyncio.run(run_tool("local", "schema", "get_tool_schema", "send_email", token))
     assert schema.ok
     assert '"tool": "send_email"' in schema.output
 
-    assert not asyncio.run(run_tool("get_tool_schema", "nope", token)).ok
+    assert not asyncio.run(run_tool("local", "schema", "get_tool_schema", "nope", token)).ok
 
 
 def _has_api_key() -> bool:
@@ -419,10 +419,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "2")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "3")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("1", "1")
+    assert (first, second) == ("2", "2")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -446,3 +446,87 @@ def test_typing_prewarms_without_a_turn(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from messages where conversation_id = %s", (conv,))
     ) == 0
+
+
+def test_every_activity_is_registered():
+    from agent_service import worker
+
+    defined = {
+        value.__temporal_activity_definition.name
+        for value in vars(activities).values()
+        if hasattr(value, "__temporal_activity_definition")
+    }
+    registered = {
+        value.__temporal_activity_definition.name for value in worker.ACTIVITIES
+    }
+
+    assert defined == registered
+
+
+def test_a_fact_survives_into_the_next_turn(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    seen = _fake_model(
+        monkeypatch,
+        '{"tool": "remember", "argument": "My name is Hassan"}',
+        '{"final": "noted"}',
+        '{"final": "ok"}',
+    )
+
+    asyncio.run(_run(RunRequest(conv, "remember my name"), f"turn:{uuid4().hex}"))
+    asyncio.run(_run(RunRequest(conv, "what is my name"), f"turn:{uuid4().hex}"))
+
+    assert any("My name is Hassan" in m["content"] for m in seen[-1]["messages"])
+
+
+def test_scratch_expires_but_facts_stay():
+    conv = f"t-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into memories (org_id, conversation_id, kind, content, created_at)"
+                " values ('local', %s, 'fact', 'durable fact', now()),"
+                " ('local', %s, 'scratch', 'fresh note', now()),"
+                " ('local', %s, 'scratch', 'stale note', now() - interval '2 hours')",
+                (conv, conv, conv),
+            )
+
+    asyncio.run(seed())
+    loaded = asyncio.run(activities.load_history("local", conv))
+    text = "\n".join(message["content"] for message in loaded.messages)
+
+    assert "durable fact" in text
+    assert "fresh note" in text
+    assert "stale note" not in text
+
+
+def test_recall_finds_an_old_message():
+    conv = f"t-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                " values ('local', %s, 0, 0, 'user', 'invoice 42 was paid')",
+                (conv,),
+            )
+
+    asyncio.run(seed())
+    result = asyncio.run(
+        run_tool("local", conv, "recall", "invoice", f"recall-{uuid4().hex}")
+    )
+
+    assert result.ok
+    assert "invoice 42 was paid" in result.output
+
+
+def test_read_skill_stays_in_the_skills_directory():
+    good = asyncio.run(
+        run_tool("local", "c", "read_skill", "status-update", f"skill-{uuid4().hex}")
+    )
+    bad = asyncio.run(
+        run_tool("local", "c", "read_skill", "../../etc/passwd", f"skill-{uuid4().hex}")
+    )
+
+    assert good.ok and "status update" in good.output.lower()
+    assert not bad.ok

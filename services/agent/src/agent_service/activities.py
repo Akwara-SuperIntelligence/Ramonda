@@ -42,9 +42,19 @@ TOOL_SCHEMAS = {
     "echo": 'echo: {"tool": "echo", "argument": "<text>"}',
     "send_email": 'send_email: {"tool": "send_email", "argument": "<address> <text>"}',
     "read_file": 'read_file: {"tool": "read_file", "argument": "<name from a stored output>"}',
+    "remember": 'remember: {"tool": "remember", "argument": "<durable fact>"}',
+    "note": 'note: {"tool": "note", "argument": "<temporary note>"}',
+    "recall": 'recall: {"tool": "recall", "argument": "<search text>"}',
+    "read_skill": 'read_skill: {"tool": "read_skill", "argument": "<skill name>"}',
 }
 
-RULES = """You are an agent on a server. You work in steps.
+
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()[:12]
+
+
+# Frozen. Do not edit: conversations pinned to this version must keep it.
+V1_RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
 To call a tool: {"tool": "<name>", "argument": "<text>"}
 To answer: {"final": "<text>"}
@@ -53,20 +63,34 @@ Do not call a tool that already succeeded in this conversation.
 Tools: echo, send_email, read_file, get_tool_schema.
 Call get_tool_schema with a tool name before you use a tool whose arguments you do not know."""
 
+V1_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
+RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Skills: status-update. Read one with read_skill before using it."""
+
 TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
 SYSTEM = RULES + "\n\n" + TOOLS
 
-
-def _hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:12]
-
-
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 PROMPTS = {
+    "1": {
+        "system": V1_RULES + "\n\n" + V1_TOOLS,
+        "rules": _hash(V1_RULES),
+        "tools": _hash(V1_TOOLS),
+    },
     PROMPT_VERSION: {
         "system": SYSTEM,
         "rules": _hash(RULES),
@@ -78,6 +102,7 @@ COMPACT_AFTER = 20
 KEEP_TURNS = 6
 ARTIFACTS = Path(".agent/artifacts")
 SIZE_LIMIT = 2000
+SKILLS = Path(__file__).resolve().parents[2] / "skills"
 
 # Tenant now arrives in the request; the column existed from day one.
 
@@ -406,15 +431,44 @@ async def load_history(org_id: str, conversation_id: str) -> History:
             " order by seq, step",
             (org_id, conversation_id, summary_seq),
         )
+        message_rows = await cursor.fetchall()
+        cursor = await conn.execute(
+            "select kind, content from memories"
+            " where org_id = %s and conversation_id = %s"
+            " and (kind = 'fact' or created_at > now() - interval '1 hour')"
+            " order by created_at",
+            (org_id, conversation_id),
+        )
+        rows = await cursor.fetchall()
+        facts = [content for kind, content in rows if kind == "fact"]
+        scratch = [content for kind, content in rows if kind == "scratch"]
+
         history: list[dict] = []
+        if facts:
+            history.append(
+                {
+                    "role": "assistant",
+                    "content": "Known facts:\n" + "\n".join(f"- {fact}" for fact in facts),
+                }
+            )
         if summary:
             history.append({"role": "assistant", "content": f"Earlier work: {summary}"})
-        async for role, content in cursor:
+        for role, content in message_rows:
             if role == "tool":
                 history.append({"role": "user", "content": f"tool result: {content}"})
             else:
                 history.append({"role": role, "content": content})
-        return History(messages=history, memory_hash=_hash(summary))
+        if scratch:
+            history.append(
+                {
+                    "role": "user",
+                    "content": "Scratchpad:\n" + "\n".join(f"- {item}" for item in scratch),
+                }
+            )
+        return History(
+            messages=history,
+            memory_hash=_hash(summary + "\n" + "\n".join(facts)),
+        )
 
 
 @activity.defn
@@ -520,12 +574,51 @@ async def expire_approval(approval_id: str) -> None:
         )
 
 
+async def _write_memory(
+    org_id: str, conversation_id: str, kind: str, content: str, effect_token: str
+) -> None:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        async with conn.transaction():
+            if not await _claim(conn, effect_token, kind, content):
+                return
+            await conn.execute(
+                "insert into memories (org_id, conversation_id, kind, content)"
+                " values (%s, %s, %s, %s)",
+                (org_id, conversation_id, kind, content),
+            )
+
+
+async def _recall(org_id: str, conversation_id: str, query: str) -> str:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select content, created_at from memories"
+            " where org_id = %s and conversation_id = %s and content ilike %s"
+            " order by created_at desc limit 5",
+            (org_id, conversation_id, f"%{query}%"),
+        )
+        lines = [f"{created:%Y-%m-%d} memory: {content}" async for content, created in cursor]
+        cursor = await conn.execute(
+            "select content, created_at from messages"
+            " where org_id = %s and conversation_id = %s and content ilike %s"
+            " order by seq desc limit 5",
+            (org_id, conversation_id, f"%{query}%"),
+        )
+        lines += [f"{created:%Y-%m-%d} message: {content}" async for content, created in cursor]
+    return "\n".join(lines) or f"nothing found for: {query}"
+
+
 @activity.defn
-async def run_tool(name: str, argument: str, effect_token: str) -> ToolResult:
+async def run_tool(
+    org_id: str,
+    conversation_id: str,
+    name: str,
+    argument: str,
+    effect_token: str,
+) -> ToolResult:
     """Execute one tool call, at most once per token.
 
     Sources: talk §04 (the harness, not the model, executes tools); talk §05
-    (long output to a file, the path into context); EDA §5 (effect tokens).
+    (long output to a file); lesson 07 (memory layers); EDA §5 (effect tokens).
     """
     if name == "get_tool_schema":
         schema = TOOL_SCHEMAS.get(argument)
@@ -536,6 +629,20 @@ async def run_tool(name: str, argument: str, effect_token: str) -> ToolResult:
         if not path.is_file():
             return ToolResult(ok=False, output=f"no such file: {argument}")
         return ToolResult(ok=True, output=path.read_text()[:4000])
+
+    if name == "read_skill":
+        path = SKILLS / (Path(argument).stem + ".md")
+        if not path.is_file():
+            return ToolResult(ok=False, output=f"no such skill: {argument}")
+        return ToolResult(ok=True, output=path.read_text()[:4000])
+
+    if name == "recall":
+        return ToolResult(ok=True, output=await _recall(org_id, conversation_id, argument))
+
+    if name in ("remember", "note"):
+        kind = "fact" if name == "remember" else "scratch"
+        await _write_memory(org_id, conversation_id, kind, argument, effect_token)
+        return ToolResult(ok=True, output=f"{kind} stored")
 
     if name not in ("echo", "send_email"):
         return ToolResult(ok=False, output=f"unknown tool: {name}")
