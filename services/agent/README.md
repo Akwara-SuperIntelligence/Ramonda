@@ -118,8 +118,12 @@ recorded here so a later change does not assume more than the code provides.
   concurrent test was removed. Add it when CI has a server that does not skip
   time.
 - **The prompt cache is size-gated.** Below roughly 250 tokens this provider
-  records no hits at all; above that it caches in 64-token blocks. The hit ratio
-  will stay near zero for short conversations and rise as they grow.
+  records no hits at all; above that it caches in blocks. The hit ratio stays
+  near zero for short conversations and rises as they grow.
+- **The prompt is not pinned per conversation.** A deploy changes `SYSTEM` for
+  running conversations, so the prefix moves and the next call misses. The talk
+  says running conversations should keep the old text. Provider windows and our
+  measurements are in [docs/CACHING.md](../../docs/CACHING.md).
 - **The lock lease is one hour.** A terminated workflow leaves its row until
   expiry, and a turn longer than the lease can overlap with the next one. Renew
   the lease from inside long runs.

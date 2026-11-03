@@ -44,6 +44,7 @@ intent. Everything else is a separate service with its own contract.
 | [docs/EDA.md](docs/EDA.md) | Where the agent service ends, its contracts, dedupe, memory, tenancy, deployment profiles | You are designing or reviewing the agent service |
 | [docs/BUILD.md](docs/BUILD.md) | Every service in the full system, with interfaces and definitions of done | You are building, staffing, or scoping a service |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | What is Rust, what is Python, and why | You are choosing a language or adding a service |
+| [docs/CACHING.md](docs/CACHING.md) | Provider cache windows, minimums, and our measurements | You are tuning context or cost |
 | [GLOSSARY.md](GLOSSARY.md) | The working vocabulary | You are unsure what a word means here |
 | [reference/architecture-map.html](reference/architecture-map.html) | The product on one page | You are orienting, or printing something for a wall |
 | [course/RESOURCES.md](course/RESOURCES.md) | Primary sources behind the claims | You want to check or go deeper |
