@@ -36,13 +36,23 @@ from agent_service.events import (
 NEEDS_APPROVAL = {"send_email": True}
 
 # Ordered sections: move the prefix and the provider cache is lost.
-RULES = """You are an agent on a server. You have these tools: echo, send_email, read_file.
-Reply with one JSON object and nothing else.
-Do not call a tool that already succeeded in this conversation."""
+# Names only. Schemas are fetched with get_tool_schema, so the prefix stays small.
+TOOL_SCHEMAS = {
+    "echo": 'echo: {"tool": "echo", "argument": "<text>"}',
+    "send_email": 'send_email: {"tool": "send_email", "argument": "<address> <text>"}',
+    "read_file": 'read_file: {"tool": "read_file", "argument": "<name from a stored output>"}',
+}
 
-TOOLS = """echo: {"tool": "echo", "argument": "<text>"}
-send_email: {"tool": "send_email", "argument": "<address> <text>"}
-read_file: {"tool": "read_file", "argument": "<name from a stored output>"}
+RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema.
+Call get_tool_schema with a tool name before you use a tool whose arguments you do not know."""
+
+TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
 SYSTEM = RULES + "\n\n" + TOOLS
@@ -198,7 +208,7 @@ def _summarize(text: str) -> str:
 
 @activity.defn
 async def call_model(
-    org_id: str, conversation_id: str, seq: int, step: int, history: list[str]
+    org_id: str, conversation_id: str, seq: int, step: int, history: list[dict]
 ) -> ModelReply:
     """Ask the real model what to do next, and record what it cost.
 
@@ -209,10 +219,7 @@ async def call_model(
     body = _post(
         {
             "model": model,
-            "messages": [
-                {"role": "system", "content": SYSTEM},
-                {"role": "user", "content": "\n".join(history)},
-            ],
+            "messages": [{"role": "system", "content": SYSTEM}, *history],
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
@@ -288,7 +295,7 @@ async def compact(org_id: str, conversation_id: str) -> None:
 
 
 @activity.defn
-async def load_history(org_id: str, conversation_id: str) -> list[str]:
+async def load_history(org_id: str, conversation_id: str) -> list[dict]:
     """The conversation so far, oldest first, with any summary first.
 
     Sources: talk §05 (memory is layered), lesson 07 (three layers).
@@ -307,8 +314,15 @@ async def load_history(org_id: str, conversation_id: str) -> list[str]:
             " order by seq, step",
             (org_id, conversation_id, summary_seq),
         )
-        lines = [f"{role}: {content}" async for role, content in cursor]
-        return ([f"summary: {summary}"] if summary else []) + lines
+        history: list[dict] = []
+        if summary:
+            history.append({"role": "assistant", "content": f"Earlier work: {summary}"})
+        async for role, content in cursor:
+            if role == "tool":
+                history.append({"role": "user", "content": f"tool result: {content}"})
+            else:
+                history.append({"role": role, "content": content})
+        return history
 
 
 @activity.defn
@@ -421,6 +435,10 @@ async def run_tool(name: str, argument: str, effect_token: str) -> ToolResult:
     Sources: talk §04 (the harness, not the model, executes tools); talk §05
     (long output to a file, the path into context); EDA §5 (effect tokens).
     """
+    if name == "get_tool_schema":
+        schema = TOOL_SCHEMAS.get(argument)
+        return ToolResult(ok=bool(schema), output=schema or f"unknown tool: {argument}")
+
     if name == "read_file":
         path = ARTIFACTS / Path(argument).name
         if not path.is_file():

@@ -68,6 +68,7 @@ Every increment names its sources. This table is the running index.
 | talk §05 — compact inside the warm window | `activities.py` (`compact`) | Old turns become a summary after a threshold |
 | talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
 | talk §05 — stable section order | `activities.py` (`RULES`, `TOOLS`, `PROMPT_HASH`) | The prefix hash is recorded with every call |
+| talk §04 — tool search | `activities.py` (`TOOL_SCHEMAS`, `get_tool_schema`) | Names in the prompt, schema fetched on demand |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 
 ## Verified
@@ -92,9 +93,14 @@ denying a second request ran nothing; an unanswered request expires in the test.
 A live turn stored `user`, `tool`, `assistant` in that order, so the transcript
 shows the work the agent did.
 
-A live turn recorded 144 prompt tokens, 0 cache hits, 144 misses. The second
-turn recorded 159 and still 0 hits, so the cache is not warm yet. That is the
-first finding from the measurement, not a defect in it.
+The cache is size-gated, measured against the live API with identical requests
+spaced twelve seconds apart: 153 tokens gave 0 hits, 431 gave 256, 830 gave 640,
+1820 gave 1664. Our chat prompts start near 150 tokens, so zero hits is expected
+until a conversation grows. History is now sent as real messages, so each turn
+repeats the previous prompt as a prefix instead of rewriting one user string.
+
+A live turn fetched `send_email`'s schema with `get_tool_schema` and answered
+from it. A live compaction run summarised twelve turns with the real model.
 
 ## Known limits
 
@@ -111,11 +117,9 @@ recorded here so a later change does not assume more than the code provides.
   server expires activity timeouts while a second workflow waits, so the
   concurrent test was removed. Add it when CI has a server that does not skip
   time.
-- **Tool-schema search is deferred.** With three tools, names without schemas
-  cost a round trip and save almost nothing. Revisit when the tool list grows.
-- **The prompt cache shows no hits.** Two live turns both missed. The prefix is
-  stable and hashed, so the next step is to find what invalidates it, or whether
-  the provider caches this prompt length at all.
+- **The prompt cache is size-gated.** Below roughly 250 tokens this provider
+  records no hits at all; above that it caches in 64-token blocks. The hit ratio
+  will stay near zero for short conversations and rise as they grow.
 - **The lock lease is one hour.** A terminated workflow leaves its row until
   expiry, and a turn longer than the lease can overlap with the next one. Renew
   the lease from inside long runs.

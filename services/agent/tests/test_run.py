@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+from pathlib import Path
 from uuid import uuid4
 
 import psycopg
@@ -167,7 +169,7 @@ def test_a_second_turn_sees_the_first(monkeypatch):
     asyncio.run(_run(RunRequest(conv, "first"), f"run:{conv}:0"))
     asyncio.run(_run(RunRequest(conv, "second"), f"run:{conv}:1"))
 
-    assert "user: first" in seen[-1]["messages"][1]["content"]
+    assert any("first" in m["content"] for m in seen[-1]["messages"])
     assert asyncio.run(
         _scalar("select count(*) from messages where conversation_id = %s", (conv,))
     ) == 5
@@ -364,3 +366,49 @@ def test_compaction_summarises_old_turns(monkeypatch):
     assert asyncio.run(
         _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
     ) == 3
+
+
+def test_tool_schemas_are_loaded_on_demand():
+    assert "send_email:" not in activities.SYSTEM
+    assert "get_tool_schema:" in activities.SYSTEM
+
+    token = f"schema-{uuid4().hex}"
+    schema = asyncio.run(run_tool("get_tool_schema", "send_email", token))
+    assert schema.ok
+    assert '"tool": "send_email"' in schema.output
+
+    assert not asyncio.run(run_tool("get_tool_schema", "nope", token)).ok
+
+
+def _has_api_key() -> bool:
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return True
+    return any((folder / ".env").is_file() for folder in Path(__file__).resolve().parents)
+
+
+@pytest.mark.skipif(not _has_api_key(), reason="no DEEPSEEK_API_KEY")
+def test_compaction_uses_the_live_model():
+    conv = f"t-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            for seq in range(12):
+                await conn.execute(
+                    "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                    " values ('local', %s, %s, 0, 'user', %s),"
+                    " ('local', %s, %s, 1, 'assistant', %s)",
+                    (conv, seq, f"question {seq} about invoices",
+                     conv, seq, f"answer {seq} with a decision"),
+                )
+
+    asyncio.run(seed())
+    asyncio.run(activities.compact("local", conv))
+
+    summary = asyncio.run(
+        _scalar("select summary from conversations where conversation_id = %s", (conv,))
+    )
+    assert summary
+    assert len(summary) > 10
+    assert asyncio.run(
+        _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
+    ) == 5
