@@ -33,6 +33,7 @@ with workflow.unsafe.imports_passed_through():
         load_history,
         request_approval,
         run_tool,
+        save_tool_step,
         send_user,
     )
 
@@ -97,6 +98,7 @@ class RunWorkflow:
                         request.org_id,
                         request.conversation_id,
                         request.seq,
+                        step + 1,
                         request.text,
                         reply.text,
                         f"{request.org_id}:{run_id}:save",
@@ -139,12 +141,34 @@ class RunWorkflow:
                         start_to_close_timeout=timedelta(seconds=10),
                     )
                 if decision != "approved":
+                    await workflow.execute_activity(
+                        save_tool_step,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            request.seq,
+                            step + 1,
+                            f"{reply.tool}({reply.argument}) -> denied ({decision})",
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
                     history.append(f"tool {reply.tool}: denied ({decision})")
                     continue
 
             result: ToolResult = await workflow.execute_activity(
                 run_tool,
                 args=[reply.tool, reply.argument, f"{request.org_id}:{run_id}:{step}"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            await workflow.execute_activity(
+                save_tool_step,
+                args=[
+                    request.org_id,
+                    request.conversation_id,
+                    request.seq,
+                    step + 1,
+                    f"{reply.tool}({reply.argument}) -> {result.output}",
+                ],
                 start_to_close_timeout=timedelta(seconds=10),
             )
             history.append(f"tool {reply.tool}: {result.output}")

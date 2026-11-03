@@ -29,6 +29,7 @@ from agent_service.activities import (
     load_history,
     request_approval,
     run_tool,
+    save_tool_step,
     send_user,
 )
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
@@ -39,7 +40,15 @@ from agent_service.workflow import RunRequest, RunWorkflow
 
 TASK_QUEUE = "test"
 
-ACTIVITIES = [call_model, expire_approval, load_history, request_approval, run_tool, send_user]
+ACTIVITIES = [
+    call_model,
+    expire_approval,
+    load_history,
+    request_approval,
+    run_tool,
+    save_tool_step,
+    send_user,
+]
 
 
 def _fake_model(monkeypatch, *replies: str) -> list[dict]:
@@ -78,6 +87,12 @@ async def _scalar(query: str, params: tuple):
         return row[0] if row else None
 
 
+async def _column(query: str, params: tuple):
+    async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+        cursor = await conn.execute(query, params)
+        return [row[0] async for row in cursor]
+
+
 def test_a_turn_is_saved_once(monkeypatch):
     conv = f"t-{uuid4().hex}"
     _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}', '{"final": "done"}')
@@ -86,8 +101,8 @@ def test_a_turn_is_saved_once(monkeypatch):
 
     assert result.reply == "done"
     assert asyncio.run(
-        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 2
+        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
+    ) == ["user", "tool", "assistant"]
     token = f"local:run:{conv}:0:0"
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (token,))
@@ -126,7 +141,7 @@ def test_a_second_turn_sees_the_first(monkeypatch):
     assert "user: first" in seen[-1]["messages"][1]["content"]
     assert asyncio.run(
         _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 4
+    ) == 5
 
 
 def test_step_budget_is_enforced(monkeypatch):
@@ -170,7 +185,7 @@ def test_an_event_starts_one_turn(monkeypatch):
             "select count(*) from messages where conversation_id = %s and org_id = 'acme'",
             (conv,),
         )
-    ) == 2
+    ) == 3
 
 
 def test_relay_publishes_each_row_once():
@@ -184,7 +199,7 @@ def test_relay_publishes_each_row_once():
     producer = Producer()
     asyncio.run(relay_once(producer))  # drain rows left by other tests
     token = f"relay-{uuid4().hex}"
-    asyncio.run(send_user("acme", "relay", 0, "u", "a", token))
+    asyncio.run(send_user("acme", "relay", 0, 1, "u", "a", token))
 
     assert asyncio.run(relay_once(producer)) == 1
     assert producer.sent[-1][0] == "agent.messages"
