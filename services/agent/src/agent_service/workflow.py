@@ -9,9 +9,9 @@ Sources
     lesson 07 — memory has layers, and the log is one of them
 
 Delta
-    Temporal replaces the hand-rolled journal. History and the finished turn
-    live in Postgres and arrive here as activity results, so the workflow stays
-    deterministic and carries no transcript in its input.
+    Temporal replaces the hand-rolled journal. The conversation lock is taken
+    here, held for the whole turn, and released on exit, so one conversation
+    has one turn at a time and the turn number is read under that lock.
 """
 
 from __future__ import annotations
@@ -28,9 +28,12 @@ with workflow.unsafe.imports_passed_through():
         NEEDS_APPROVAL,
         ModelReply,
         ToolResult,
+        acquire_lock,
         call_model,
         expire_approval,
         load_history,
+        next_turn,
+        release_lock,
         request_approval,
         run_tool,
         save_tool_step,
@@ -44,7 +47,6 @@ class RunRequest:
 
     conversation_id: str
     text: str
-    seq: int = 0
     org_id: str = "local"
     max_steps: int = 6
 
@@ -60,7 +62,7 @@ class RunResult:
 
 @workflow.defn
 class RunWorkflow:
-    """One turn: load, model, tool, repeat, save, stop.
+    """One turn: lock, load, model, tool, repeat, save, release.
 
     Sources: talk §03 and §04; lessons 01, 07, and 09.
     """
@@ -76,104 +78,124 @@ class RunWorkflow:
 
     @workflow.run
     async def run(self, request: RunRequest) -> RunResult:
-        history: list[str] = await workflow.execute_activity(
-            load_history,
-            args=[request.org_id, request.conversation_id],
-            start_to_close_timeout=timedelta(seconds=10),
-        )
-        history.append(f"user: {request.text}")
         run_id = workflow.info().workflow_id
 
-        for step in range(request.max_steps):
-            reply: ModelReply = await workflow.execute_activity(
-                call_model,
-                args=[step, history],
-                start_to_close_timeout=timedelta(seconds=30),
+        while not await workflow.execute_activity(
+            acquire_lock,
+            args=[request.org_id, request.conversation_id, run_id],
+            start_to_close_timeout=timedelta(seconds=10),
+        ):
+            await workflow.sleep(1)
+
+        try:
+            seq: int = await workflow.execute_activity(
+                next_turn,
+                args=[request.org_id, request.conversation_id],
+                start_to_close_timeout=timedelta(seconds=10),
             )
+            history: list[str] = await workflow.execute_activity(
+                load_history,
+                args=[request.org_id, request.conversation_id],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            history.append(f"user: {request.text}")
 
-            if reply.kind == "final":
-                await workflow.execute_activity(
-                    send_user,
-                    args=[
-                        request.org_id,
-                        request.conversation_id,
-                        request.seq,
-                        step + 1,
-                        request.text,
-                        reply.text,
-                        f"{request.org_id}:{run_id}:save",
-                    ],
-                    start_to_close_timeout=timedelta(seconds=10),
-                )
-                return RunResult(
-                    conversation_id=request.conversation_id,
-                    reply=reply.text,
-                    steps=step + 1,
+            for step in range(request.max_steps):
+                reply: ModelReply = await workflow.execute_activity(
+                    call_model,
+                    args=[step, history],
+                    start_to_close_timeout=timedelta(seconds=30),
                 )
 
-            if NEEDS_APPROVAL.get(reply.tool):
-                approval_id = f"{request.org_id}:{run_id}:{step}:approval"
-                self._approval_id = approval_id
-                self._decision = None
-                await workflow.execute_activity(
-                    request_approval,
-                    args=[
-                        request.org_id,
-                        request.conversation_id,
-                        run_id,
-                        reply.tool,
-                        reply.argument,
-                        approval_id,
-                    ],
-                    start_to_close_timeout=timedelta(seconds=10),
-                )
-                try:
-                    await workflow.wait_condition(
-                        lambda: self._decision is not None,
-                        timeout=timedelta(minutes=10),
-                    )
-                    decision = self._decision
-                except asyncio.TimeoutError:
-                    decision = "expired"
+                if reply.kind == "final":
                     await workflow.execute_activity(
-                        expire_approval,
-                        args=[approval_id],
-                        start_to_close_timeout=timedelta(seconds=10),
-                    )
-                if decision != "approved":
-                    await workflow.execute_activity(
-                        save_tool_step,
+                        send_user,
                         args=[
                             request.org_id,
                             request.conversation_id,
-                            request.seq,
+                            seq,
                             step + 1,
-                            f"{reply.tool}({reply.argument}) -> denied ({decision})",
+                            request.text,
+                            reply.text,
+                            f"{request.org_id}:{run_id}:save",
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
-                    history.append(f"tool {reply.tool}: denied ({decision})")
-                    continue
+                    return RunResult(
+                        conversation_id=request.conversation_id,
+                        reply=reply.text,
+                        steps=step + 1,
+                    )
 
-            result: ToolResult = await workflow.execute_activity(
-                run_tool,
-                args=[reply.tool, reply.argument, f"{request.org_id}:{run_id}:{step}"],
-                start_to_close_timeout=timedelta(seconds=10),
+                if NEEDS_APPROVAL.get(reply.tool):
+                    approval_id = f"{request.org_id}:{run_id}:{step}:approval"
+                    self._approval_id = approval_id
+                    self._decision = None
+                    await workflow.execute_activity(
+                        request_approval,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            run_id,
+                            reply.tool,
+                            reply.argument,
+                            approval_id,
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    try:
+                        await workflow.wait_condition(
+                            lambda: self._decision is not None,
+                            timeout=timedelta(minutes=10),
+                        )
+                        decision = self._decision
+                    except asyncio.TimeoutError:
+                        decision = "expired"
+                        await workflow.execute_activity(
+                            expire_approval,
+                            args=[approval_id],
+                            start_to_close_timeout=timedelta(seconds=10),
+                        )
+                    if decision != "approved":
+                        await workflow.execute_activity(
+                            save_tool_step,
+                            args=[
+                                request.org_id,
+                                request.conversation_id,
+                                seq,
+                                step + 1,
+                                f"{reply.tool}({reply.argument}) -> denied ({decision})",
+                            ],
+                            start_to_close_timeout=timedelta(seconds=10),
+                        )
+                        history.append(f"tool {reply.tool}: denied ({decision})")
+                        continue
+
+                result: ToolResult = await workflow.execute_activity(
+                    run_tool,
+                    args=[reply.tool, reply.argument, f"{request.org_id}:{run_id}:{step}"],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                await workflow.execute_activity(
+                    save_tool_step,
+                    args=[
+                        request.org_id,
+                        request.conversation_id,
+                        seq,
+                        step + 1,
+                        f"{reply.tool}({reply.argument}) -> {result.output}",
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                history.append(f"tool {reply.tool}: {result.output}")
+
+            raise ApplicationError(
+                f"step budget exhausted after {request.max_steps} steps",
+                non_retryable=True,
             )
+        finally:
             await workflow.execute_activity(
-                save_tool_step,
-                args=[
-                    request.org_id,
-                    request.conversation_id,
-                    request.seq,
-                    step + 1,
-                    f"{reply.tool}({reply.argument}) -> {result.output}",
-                ],
+                release_lock,
+                args=[request.org_id, request.conversation_id, run_id],
                 start_to_close_timeout=timedelta(seconds=10),
             )
-            history.append(f"tool {reply.tool}: {result.output}")
-
-        raise ApplicationError(
-            f"step budget exhausted after {request.max_steps} steps",
-            non_retryable=True,
-        )

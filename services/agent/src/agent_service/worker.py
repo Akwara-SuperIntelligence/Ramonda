@@ -18,9 +18,12 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from agent_service.activities import (
+    acquire_lock,
     call_model,
     expire_approval,
     load_history,
+    next_turn,
+    release_lock,
     request_approval,
     run_tool,
     save_tool_step,
@@ -39,9 +42,12 @@ async def main() -> None:
         task_queue=TASK_QUEUE,
         workflows=[RunWorkflow],
         activities=[
+            acquire_lock,
             call_model,
             expire_approval,
             load_history,
+            next_turn,
+            release_lock,
             request_approval,
             run_tool,
             save_tool_step,

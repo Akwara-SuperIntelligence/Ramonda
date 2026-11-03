@@ -64,7 +64,7 @@ Every increment names its sources. This table is the running index.
 | lesson 09 — three guards | `activities.py`, `consumer.py` | Policy, deadline, single-use resolution |
 | EDA §4.2 — approval events | `events.py`, `migrations/004_approvals.sql` | Requested and resolved are separate events |
 | talk §05 — the transcript is memory | `workflow.py` (`save_tool_step`) | Tool steps are rows, ordered by step |
-| EDA §5 — serialise per conversation | `consumer.py` | Advisory lock around next-turn and start |
+| EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 
 ## Verified
 

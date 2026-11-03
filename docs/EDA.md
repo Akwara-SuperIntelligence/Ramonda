@@ -170,7 +170,8 @@ harness. `retrieve` is the only door to organisational knowledge.
 | Layer | Mechanism | Catches |
 |---|---|---|
 | Inbox | `inbox(event_id)` unique constraint, same transaction as the effect | Redelivery from the bus |
-| Workflow | Workflow ID `run:{conversation_id}:{seq}`, `USE_EXISTING` | Concurrent turns, duplicate starts |
+| Workflow | Workflow ID `turn:{event_id}`, one execution per event | Duplicate starts |
+| Conversation | `conversation_locks` row held for the whole turn | Two turns at once on one conversation |
 | Effect | Effect token `sha256(run_id, step_index, tool_name)` on every side effect | Activity retry |
 
 - **Outbox.** Write product state and the outgoing event in one Postgres

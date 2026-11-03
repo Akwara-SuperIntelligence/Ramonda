@@ -24,9 +24,12 @@ from temporalio.worker import Worker
 
 from agent_service import activities
 from agent_service.activities import (
+    acquire_lock,
     call_model,
     expire_approval,
     load_history,
+    next_turn,
+    release_lock,
     request_approval,
     run_tool,
     save_tool_step,
@@ -41,9 +44,12 @@ from agent_service.workflow import RunRequest, RunWorkflow
 TASK_QUEUE = "test"
 
 ACTIVITIES = [
+    acquire_lock,
     call_model,
     expire_approval,
     load_history,
+    next_turn,
+    release_lock,
     request_approval,
     run_tool,
     save_tool_step,
@@ -97,7 +103,7 @@ def test_a_turn_is_saved_once(monkeypatch):
     conv = f"t-{uuid4().hex}"
     _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}', '{"final": "done"}')
 
-    result = asyncio.run(_run(RunRequest(conv, "hello", seq=0), f"run:{conv}:0"))
+    result = asyncio.run(_run(RunRequest(conv, "hello"), f"run:{conv}:0"))
 
     assert result.reply == "done"
     assert asyncio.run(
@@ -135,8 +141,8 @@ def test_a_second_turn_sees_the_first(monkeypatch):
         '{"final": "again"}',
     )
 
-    asyncio.run(_run(RunRequest(conv, "first", seq=0), f"run:{conv}:0"))
-    asyncio.run(_run(RunRequest(conv, "second", seq=1), f"run:{conv}:1"))
+    asyncio.run(_run(RunRequest(conv, "first"), f"run:{conv}:0"))
+    asyncio.run(_run(RunRequest(conv, "second"), f"run:{conv}:1"))
 
     assert "user: first" in seen[-1]["messages"][1]["content"]
     assert asyncio.run(
@@ -149,7 +155,7 @@ def test_step_budget_is_enforced(monkeypatch):
     _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}')
 
     with pytest.raises(WorkflowFailureError):
-        asyncio.run(_run(RunRequest(conv, "hello", seq=0, max_steps=1), f"run:{conv}:0"))
+        asyncio.run(_run(RunRequest(conv, "hello", max_steps=1), f"run:{conv}:0"))
 
 
 def test_an_event_starts_one_turn(monkeypatch):
@@ -220,7 +226,7 @@ async def _start_and_resolve(conv: str, decision: str | None):
         ):
             wf = await env.client.start_workflow(
                 RunWorkflow.run,
-                RunRequest(conv, "send mail", seq=0),
+                RunRequest(conv, "send mail"),
                 id=f"run:{conv}:0",
                 task_queue=SERVICE_QUEUE,
             )
@@ -283,3 +289,18 @@ def test_an_unanswered_approval_expires(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (f"local:run:{conv}:0:0",))
     ) == 0
+
+
+def test_the_conversation_lock_is_exclusive():
+    conv = f"lock-{uuid4().hex}"
+
+    async def scenario():
+        first = await acquire_lock("local", conv, "wf-a")
+        second = await acquire_lock("local", conv, "wf-b")
+        await release_lock("local", conv, "wf-a")
+        third = await acquire_lock("local", conv, "wf-b")
+        await release_lock("local", conv, "wf-b")
+        return first, second, third
+
+    assert asyncio.run(scenario()) == (True, False, True)
+
