@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import os
 from pathlib import Path
 from uuid import uuid4
@@ -530,3 +531,15 @@ def test_read_skill_stays_in_the_skills_directory():
 
     assert good.ok and "status update" in good.output.lower()
     assert not bad.ok
+
+
+def test_skills_match_their_folder_and_have_a_body():
+    for folder in activities.SKILLS.iterdir():
+        if not folder.is_dir():
+            continue
+        text = (folder / "SKILL.md").read_text()
+        name = re.search(r"^name:\s*(\S+)$", text, re.M).group(1)
+        body = text.split("---", 2)[2].strip()
+
+        assert name == folder.name
+        assert body
