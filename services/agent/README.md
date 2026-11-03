@@ -72,6 +72,8 @@ Every increment names its sources. This table is the running index.
 | talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
 | talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |
 | talk §05 — pre-warm on typing | `consumer.py`, `activities.py` (`prewarm`) | One warm call, no turn |
+| talk §02, §05 — memory layers | `activities.py` (`remember`, `note`, `recall`), `migrations/009_memories.sql` | Facts always in the prompt; scratch for one hour |
+| lesson 07 — memory is stored so it can be recalled | `activities.py` (`load_history`, `recall`) | Facts and recent notes, not just the transcript |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 
 ## Verified
@@ -105,6 +107,9 @@ repeats the previous prompt as a prefix instead of rewriting one user string.
 A live turn fetched `send_email`'s schema with `get_tool_schema` and answered
 from it. A live compaction run summarised twelve turns with the real model.
 
+A live turn stored "my name is Hassan" with `remember`; the next turn answered
+"Your name is Hassan" from the injected fact.
+
 ## Known limits
 
 Two behaviours are mitigations, not guarantees, and one is a lease. They are
@@ -126,6 +131,10 @@ recorded here so a later change does not assume more than the code provides.
 - **Pre-warm depends on the client.** A typing event must be published for the
   prefix to warm. Nothing else sends it yet. Provider windows and our
   measurements are in [docs/CACHING.md](../../docs/CACHING.md).
+- **Memory is per conversation.** A fact is visible only inside the conversation
+  that wrote it. A cross-conversation profile needs an actor identity we do not
+  pass yet.
+- **Scratch is one hour.** The interval is fixed in the query, not configurable.
 - **The lock lease is one hour.** A terminated workflow leaves its row until
   expiry, and a turn longer than the lease can overlap with the next one. Renew
   the lease from inside long runs.
