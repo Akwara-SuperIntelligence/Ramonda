@@ -19,9 +19,8 @@ import os
 import psycopg
 from aiokafka import AIOKafkaConsumer
 from temporalio.client import Client, WorkflowHandle
-from temporalio.common import WorkflowIDConflictPolicy
 
-from agent_service.activities import _dsn, next_seq
+from agent_service.activities import _dsn
 from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, Envelope
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
@@ -41,27 +40,16 @@ async def _claim(envelope: Envelope) -> bool:
 
 
 async def _start(client: Client, envelope: Envelope) -> WorkflowHandle:
-    conversation_id = envelope.subject["conversation_id"]
-    # Serialise the read of the next turn number with the start, per conversation.
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "select pg_advisory_xact_lock(hashtext(%s))",
-                (f"{envelope.org_id}:{conversation_id}",),
-            )
-            seq = await next_seq(conn, envelope.org_id, conversation_id)
-            return await client.start_workflow(
-                RunWorkflow.run,
-                RunRequest(
-                    conversation_id=conversation_id,
-                    text=envelope.payload["text"],
-                    seq=seq,
-                    org_id=envelope.org_id,
-                ),
-                id=f"run:{conversation_id}:{seq}",
-                task_queue=TASK_QUEUE,
-                id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,
-            )
+    return await client.start_workflow(
+        RunWorkflow.run,
+        RunRequest(
+            conversation_id=envelope.subject["conversation_id"],
+            text=envelope.payload["text"],
+            org_id=envelope.org_id,
+        ),
+        id=f"turn:{envelope.event_id}",
+        task_queue=TASK_QUEUE,
+    )
 
 
 async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:

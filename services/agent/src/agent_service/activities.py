@@ -79,14 +79,45 @@ async def _claim(conn: psycopg.AsyncConnection, token: str, kind: str, payload: 
     return await cursor.fetchone() is not None
 
 
-async def next_seq(conn: psycopg.AsyncConnection, org_id: str, conversation_id: str) -> int:
-    """The next turn number. Runs on the caller's connection, inside its lock."""
-    cursor = await conn.execute(
-        "select coalesce(max(seq) + 1, 0) from messages"
-        " where org_id = %s and conversation_id = %s",
-        (org_id, conversation_id),
-    )
-    return (await cursor.fetchone())[0]
+@activity.defn
+async def acquire_lock(org_id: str, conversation_id: str, workflow_id: str) -> bool:
+    """Take the conversation lock, or take over an expired one.
+
+    TTL is the safety net: a terminated workflow never releases its row.
+    """
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "insert into conversation_locks (org_id, conversation_id, workflow_id, expires_at)"
+            " values (%s, %s, %s, now() + interval '1 hour')"
+            " on conflict (org_id, conversation_id) do update"
+            " set workflow_id = excluded.workflow_id, expires_at = excluded.expires_at"
+            " where conversation_locks.expires_at < now()"
+            " returning workflow_id",
+            (org_id, conversation_id, workflow_id),
+        )
+        return await cursor.fetchone() is not None
+
+
+@activity.defn
+async def release_lock(org_id: str, conversation_id: str, workflow_id: str) -> None:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "delete from conversation_locks"
+            " where org_id = %s and conversation_id = %s and workflow_id = %s",
+            (org_id, conversation_id, workflow_id),
+        )
+
+
+@activity.defn
+async def next_turn(org_id: str, conversation_id: str) -> int:
+    """The next turn number. Only read while the conversation lock is held."""
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select coalesce(max(seq) + 1, 0) from messages"
+            " where org_id = %s and conversation_id = %s",
+            (org_id, conversation_id),
+        )
+        return (await cursor.fetchone())[0]
 
 
 def _load_env() -> None:

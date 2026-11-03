@@ -94,7 +94,7 @@ Every service we build must satisfy all of these, in addition to its own entry.
 - **Errors.** Every error carries `code`, `retryable`, and `degraded` flags.
   Callers must not infer retry behaviour from message text.
 - **Identifiers.** ULIDs for events and commands. Workflow ID
-  `run:{conversation_id}:{seq}`. Sandbox ID `sbx:{org_id}:{ulid}`.
+  `turn:{event_id}`. Sandbox ID `sbx:{org_id}:{ulid}`.
 - **Versioning.** Semantic versions for APIs, integer versions for events,
   immutable image tags for deployments.
 

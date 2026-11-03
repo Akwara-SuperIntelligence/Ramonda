@@ -20,11 +20,16 @@ The agent service. Python. One deployable: consumer, orchestrator, harness.
 
 - Events: [docs/EDA.md](../../docs/EDA.md) §4.1
 - Commands and tools: §4.3 and §4.4
-- Workflow IDs: `run:{conversation_id}:{seq}`
+- Workflow IDs: `turn:{event_id}`
 
 ## Commands
 
-To be added with the first code. Until then, there is nothing to build or run.
+```
+make up        # from the repo root: Postgres, Temporal, UI, Redpanda
+make test      # migrate and run the suite
+```
+
+Runtime processes are in the service README: worker, consumer, relay, delivery.
 
 ## Definition of done
 
