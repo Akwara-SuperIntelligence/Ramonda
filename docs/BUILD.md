@@ -419,7 +419,28 @@ The same artifacts run in all three. Only the values change.
 | Object storage | Shared bucket, prefixed | Dedicated bucket | Customer bucket |
 | Keys | Our KMS | Our KMS, per stamp | Customer KMS |
 | Sandbox | Shared host pool | Dedicated pool | Customer hosts |
+| Idle stop | Consumer on Kafka lag, small warm worker pool | Same, one stamp | Customer sets minimum replicas |
 | Upgrades | Continuous | Canary per stamp | Customer applies a release |
+
+### Idle stop
+
+The agent worker and consumer are long-running processes. They poll Temporal and
+Kafka, so an idle deployment still pays for them. "Stops after two idle minutes"
+is a deployment property, not a line in the workflow.
+
+- **Shared cell.** Scale the consumer on Kafka lag (KEDA or equivalent). Scale
+  the Temporal worker on task backlog, or keep a small warm pool. Full
+  scale-to-zero is allowed, but a cold start delays the first turn.
+- **Dedicated stamp.** Same mechanics, one deployment per customer. Keep a warm
+  minimum if the customer expects instant replies.
+- **BYOC.** The customer chooses. We ship the chart and the metrics; the values
+  decide the minimum replicas.
+- **Not the sandbox.** A sandbox VM can stop independently (see §6.3). That is a
+  different idle stop from the agent process.
+
+Current state: neither process stops when idle. The metric that would drive the
+decision is the consumer lag in [ADR 0004](adr/0004-metrics-quotas.md); the
+autoscaling policy is a deployment decision, not application code.
 
 ## 9. Dependencies
 

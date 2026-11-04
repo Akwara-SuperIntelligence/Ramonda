@@ -76,6 +76,8 @@ Rules:
 - The test: deploy the whole system into a fresh cloud account with one command
   and one config file. If that fails, neither multi-tenancy nor a fork will save
   the deal.
+- The worker and consumer are long-running; idle stop is a deployment property,
+  not workflow code. See [BUILD §8](BUILD.md#8-deployment-profiles).
 
 ## 3. Two layers, one owner per process
 
