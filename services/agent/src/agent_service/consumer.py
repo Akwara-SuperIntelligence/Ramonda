@@ -20,7 +20,7 @@ import psycopg
 from aiokafka import AIOKafkaConsumer
 from temporalio.client import Client, WorkflowHandle
 
-from agent_service.activities import _dsn, prewarm
+from agent_service.activities import _dsn, prewarm, reap_tasks
 from agent_service.events import (
     APPROVAL_RESOLVED,
     HELPER_COMPLETED,
@@ -96,6 +96,17 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     return await _start(client, envelope, envelope.payload["text"])
 
 
+async def _reap_loop() -> None:
+    while True:
+        try:
+            reaped = await reap_tasks()
+            if reaped:
+                print(f"[reaped] {reaped} stale task(s)", flush=True)
+        except Exception as exc:
+            print(f"[reap failed] {exc}", flush=True)
+        await asyncio.sleep(60)
+
+
 async def main() -> None:
     client = await Client.connect(
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
@@ -108,6 +119,7 @@ async def main() -> None:
         auto_offset_reset="earliest",
     )
     await consumer.start()
+    reaper = asyncio.create_task(_reap_loop())
     print(f"consumer ready: {TOPIC}", flush=True)
     try:
         async for message in consumer:
@@ -117,6 +129,7 @@ async def main() -> None:
                 print(f"[skip] {exc}", flush=True)
             await consumer.commit()
     finally:
+        reaper.cancel()
         await consumer.stop()
 
 

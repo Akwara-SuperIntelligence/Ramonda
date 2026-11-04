@@ -942,7 +942,7 @@ def test_a_turn_can_end_with_a_task_running(monkeypatch):
     assert asyncio.run(
         _scalar(
             "select count(*) from outbox where id = %s",
-            (f"helper:local:{conv}:t1",),
+            (f"helper:local:{conv}:t1:done",),
         )
     ) == 1
 
@@ -986,3 +986,56 @@ def test_list_tasks_reports_status():
     asyncio.run(activities.finish_task("local", conv, task_id, "done", "ok"))
 
     assert "t1 done: do the thing" in asyncio.run(activities.list_tasks("local", conv))
+
+
+def test_a_failing_helper_leaves_a_task_for_the_reaper(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    fresh = f"t-{uuid4().hex}"
+
+    def boom(last, payload):
+        raise activities.ApplicationError("helper crashed", non_retryable=True)
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", boom),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            (_starts("tool result: delegate -> started"), '{"final": "started it"}'),
+        ],
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "started it"
+    assert asyncio.run(
+        _scalar("select status from tasks where conversation_id = %s", (conv,))
+    ) == "running"
+
+    asyncio.run(activities.create_task("local", fresh, "a fresh task", "helper:y"))
+
+    async def age():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "update tasks set updated_at = now() - interval '2 hours'"
+                " where conversation_id = %s",
+                (conv,),
+            )
+
+    asyncio.run(age())
+    asyncio.run(activities.reap_tasks())
+
+    assert asyncio.run(
+        _scalar("select status from tasks where conversation_id = %s", (conv,))
+    ) == "failed"
+    assert asyncio.run(
+        _scalar("select report from tasks where conversation_id = %s", (conv,))
+    ) == "helper did not report within its time limit"
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from outbox where id = %s",
+            (f"helper:local:{conv}:t1:failed",),
+        )
+    ) == 1
+    assert asyncio.run(
+        _scalar("select status from tasks where conversation_id = %s", (fresh,))
+    ) == "running"

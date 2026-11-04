@@ -559,31 +559,68 @@ async def list_tasks(org_id: str, conversation_id: str) -> str:
         return "\n".join(rows) or "no tasks"
 
 
-@activity.defn
-async def report_task(
-    org_id: str, conversation_id: str, task_id: str, status: str, report: str
+async def _report(
+    conn: psycopg.AsyncConnection,
+    org_id: str,
+    conversation_id: str,
+    task_id: str,
+    status: str,
+    report: str,
 ) -> None:
     """Write the task result and queue the completion event, atomically."""
     envelope = Envelope(
-        event_id=f"helper:{org_id}:{conversation_id}:{task_id}",
+        event_id=f"helper:{org_id}:{conversation_id}:{task_id}:{status}",
         type=HELPER_COMPLETED,
         org_id=org_id,
         subject={"conversation_id": conversation_id, "task_id": task_id},
         payload={"report": report, "status": status},
         occurred_at=datetime.now(timezone.utc).isoformat(),
     )
+    await conn.execute(
+        "update tasks set status = %s, report = %s, updated_at = now()"
+        " where org_id = %s and conversation_id = %s and id = %s",
+        (status, report, org_id, conversation_id, task_id),
+    )
+    await conn.execute(
+        "insert into outbox (id, topic, payload) values (%s, %s, %s)"
+        " on conflict do nothing",
+        (envelope.event_id, HELPERS_TOPIC, envelope.to_json().decode()),
+    )
+
+
+@activity.defn
+async def report_task(
+    org_id: str, conversation_id: str, task_id: str, status: str, report: str
+) -> None:
+    """The helper's own report. One transaction: row and event together."""
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
-            await conn.execute(
-                "update tasks set status = %s, report = %s, updated_at = now()"
-                " where org_id = %s and conversation_id = %s and id = %s",
-                (status, report, org_id, conversation_id, task_id),
+            await _report(conn, org_id, conversation_id, task_id, status, report)
+
+
+async def reap_tasks() -> int:
+    """Fail tasks whose helper never reported. The projection needs a reconciler.
+
+    The 35-minute mark sits just past the child's 30-minute execution timeout.
+    """
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        async with conn.transaction():
+            cursor = await conn.execute(
+                "select org_id, conversation_id, id from tasks"
+                " where status = 'running'"
+                " and updated_at < now() - interval '35 minutes'"
             )
-            await conn.execute(
-                "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-                " on conflict do nothing",
-                (envelope.event_id, HELPERS_TOPIC, envelope.to_json().decode()),
-            )
+            rows = await cursor.fetchall()
+            for org_id, conversation_id, task_id in rows:
+                await _report(
+                    conn,
+                    org_id,
+                    conversation_id,
+                    task_id,
+                    "failed",
+                    "helper did not report within its time limit",
+                )
+            return len(rows)
 
 
 @activity.defn
