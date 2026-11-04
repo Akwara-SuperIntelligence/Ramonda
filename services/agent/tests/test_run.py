@@ -32,7 +32,10 @@ from agent_service.activities import (
     acquire_lock,
     call_model,
     compact,
+    create_task,
     expire_approval,
+    finish_task,
+    list_tasks,
     load_history,
     next_turn,
     pin_prompt,
@@ -54,7 +57,10 @@ ACTIVITIES = [
     acquire_lock,
     call_model,
     compact,
+    create_task,
     expire_approval,
+    finish_task,
+    list_tasks,
     load_history,
     next_turn,
     pin_prompt,
@@ -84,8 +90,9 @@ def _fake_router(monkeypatch, routes: list[tuple], seen: list | None = None) -> 
     def fake(payload: dict) -> dict:
         seen.append(payload)
         last = payload["messages"][-1]["content"]
-        for key, reply in routes:
-            if key in last:
+        for matcher, reply in routes:
+            hit = matcher(last, payload) if callable(matcher) else last == matcher
+            if hit:
                 content = reply(last, payload) if callable(reply) else reply
                 return {
                     "choices": [{"message": {"content": content}}],
@@ -452,10 +459,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "5")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "6")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("4", "4")
+    assert (first, second) == ("5", "5")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -654,9 +661,12 @@ async def _run_with_helpers(request: RunRequest):
             )
 
 
+def _starts(prefix: str):
+    return lambda last, payload: last.startswith(prefix)
+
+
 def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
     conv = f"t-{uuid4().hex}"
-    seen: list = []
     started = {"n": 0}
 
     def on_started(last, payload):
@@ -670,11 +680,10 @@ def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
         [
             ("do the A work", '{"final": "A report"}'),
             ("do the B work", '{"final": "B report"}'),
+            (_starts("tool result: delegate -> started"), on_started),
             ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
-            ("started helper:", on_started),
-            ("tool result: collect", '{"final": "both reports are in"}'),
+            (_starts("tool result: collect"), '{"final": "both reports are in"}'),
         ],
-        seen,
     )
 
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
@@ -684,9 +693,10 @@ def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
         _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
     )
     assert roles == ["user", "tool", "tool", "tool", "assistant"]
-    assert any("A report" in row for row in asyncio.run(
+    rows = asyncio.run(
         _column("select content from messages where conversation_id = %s", (conv,))
-    ))
+    )
+    assert any("A report" in row for row in rows)
     assert asyncio.run(
         _scalar("select count(*) from model_calls where conversation_id = %s and seq < 0", (conv,))
     ) == 2
@@ -694,18 +704,19 @@ def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
 
 def test_a_helper_cannot_run_an_irreversible_tool(monkeypatch):
     conv = f"t-{uuid4().hex}"
-    seen: list = []
 
     _fake_router(
         monkeypatch,
         [
-            ("denied (helpers cannot run irreversible tools)", '{"final": "could not send it"}'),
+            (
+                "tool result: send_email denied (helpers cannot run irreversible tools)",
+                '{"final": "could not send it"}',
+            ),
             ("send the email via helper", '{"tool": "send_email", "argument": "a@b"}'),
             ("coordinate the work", '{"tool": "delegate", "argument": "send the email via helper"}'),
-            ("started helper:", '{"tool": "collect", "argument": "all"}'),
-            ("tool result: collect", '{"final": "the helper could not send it"}'),
+            (_starts("tool result: delegate -> started"), '{"tool": "collect", "argument": "all"}'),
+            (_starts("tool result: collect"), '{"final": "the helper could not send it"}'),
         ],
-        seen,
     )
 
     asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
@@ -730,6 +741,10 @@ def test_a_message_reaches_the_helper(monkeypatch):
             return '{"final": "checked the red one"}'
         return '{"tool": "echo", "argument": "working"}'
 
+    def on_started(last, payload):
+        task_id = last.split("started ")[1]
+        return '{"tool": "message_helper", "argument": "' + task_id + ' check the red one"}'
+
     _fake_router(
         monkeypatch,
         [
@@ -739,34 +754,17 @@ def test_a_message_reaches_the_helper(monkeypatch):
             ),
             ("tool result: echo -> working", after_echo),
             ("do the A work", '{"tool": "echo", "argument": "working"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            (_starts("tool result: delegate -> started"), on_started),
+            (_starts("tool result: message_helper"), '{"tool": "collect", "argument": "all"}'),
+            (_starts("tool result: collect"), '{"final": "the helper checked it"}'),
         ],
         seen,
     )
 
-    async def scenario():
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            async with Worker(
-                env.client,
-                task_queue=HELPER_QUEUE,
-                workflows=[HelperWorkflow],
-                activities=ACTIVITIES,
-            ):
-                handle = await env.client.start_workflow(
-                    HelperWorkflow.run,
-                    HelperTask(
-                        org_id="local",
-                        conversation_id=conv,
-                        parent_step=0,
-                        prompt_version=activities.PROMPT_VERSION,
-                        task="do the A work",
-                    ),
-                    id=f"helper:{uuid4().hex}",
-                    task_queue=HELPER_QUEUE,
-                )
-                await handle.signal("message", "check the red one")
-                return await handle.result()
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
 
-    assert asyncio.run(scenario()) == "checked the red one"
+    assert result.reply == "the helper checked it"
     assert any(
         "the main agent says: check the red one" in m["content"]
         for payload in seen
@@ -776,13 +774,10 @@ def test_a_message_reaches_the_helper(monkeypatch):
 
 def test_a_stopped_helper_reports_stopped(monkeypatch):
     conv = f"t-{uuid4().hex}"
-    seen: list = []
-    stopped = {"n": 0}
 
     def on_started(last, payload):
-        helper_id = last.split("started ")[1]
-        stopped["n"] += 1
-        return '{"tool": "stop_helper", "argument": "' + helper_id + '"}'
+        task_id = last.split("started ")[1]
+        return '{"tool": "stop_helper", "argument": "' + task_id + '"}'
 
     _fake_router(
         monkeypatch,
@@ -790,11 +785,10 @@ def test_a_stopped_helper_reports_stopped(monkeypatch):
             ("do the A work", '{"tool": "echo", "argument": "working"}'),
             ("tool result: echo -> working", '{"tool": "echo", "argument": "working"}'),
             ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
-            ("started helper:", on_started),
-            ("tool result: stop_helper", '{"tool": "collect", "argument": "all"}'),
-            ("tool result: collect", '{"final": "the helper was stopped"}'),
+            (_starts("tool result: delegate -> started"), on_started),
+            (_starts("tool result: stop_helper"), '{"tool": "collect", "argument": "all"}'),
+            (_starts("tool result: collect"), '{"final": "the helper was stopped"}'),
         ],
-        seen,
     )
 
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
@@ -803,6 +797,9 @@ def test_a_stopped_helper_reports_stopped(monkeypatch):
     assert any("stopped" in row for row in asyncio.run(
         _column("select content from messages where conversation_id = %s", (conv,))
     ))
+    assert asyncio.run(
+        _scalar("select status from tasks where conversation_id = %s", (conv,))
+    ) == "stopped"
 
 
 def test_a_final_with_pending_helpers_is_refused(monkeypatch):
@@ -821,9 +818,9 @@ def test_a_final_with_pending_helpers_is_refused(monkeypatch):
         [
             ("do the A work", '{"final": "A report"}'),
             ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
-            ("started helper:", on_started),
-            ("outstanding helpers", '{"tool": "collect", "argument": "all"}'),
-            ("tool result: collect", '{"final": "now done"}'),
+            (_starts("tool result: delegate -> started"), on_started),
+            (lambda last, payload: "outstanding helpers" in last, '{"tool": "collect", "argument": "all"}'),
+            (_starts("tool result: collect"), '{"final": "now done"}'),
         ],
         seen,
     )
@@ -831,14 +828,77 @@ def test_a_final_with_pending_helpers_is_refused(monkeypatch):
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
 
     assert result.reply == "now done"
-    assert any(
-        "outstanding helpers" in payload["messages"][-1]["content"]
-        for payload in seen
-    )
+    assert any("outstanding helpers" in p["messages"][-1]["content"] for p in seen)
     roles = asyncio.run(
         _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
     )
     assert roles == ["user", "tool", "tool", "assistant"]
+
+
+def test_helpers_reports_task_status(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    asked = {"n": 0}
+
+    def on_started(last, payload):
+        return '{"tool": "helpers", "argument": ""}'
+
+    def on_helpers(last, payload):
+        asked["n"] += 1
+        if asked["n"] == 1:
+            return '{"tool": "collect", "argument": "all"}'
+        return '{"final": "checked and collected"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"final": "A report"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            (_starts("tool result: delegate -> started"), on_started),
+            (_starts("tool result: helpers"), on_helpers),
+            (_starts("tool result: collect"), '{"tool": "helpers", "argument": ""}'),
+        ],
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "checked and collected"
+    rows = asyncio.run(
+        _column("select content from messages where conversation_id = %s and role = 'tool'", (conv,))
+    )
+    assert any("t1 running: do the A work" in row for row in rows)
+    assert any("t1 done" in row for row in rows)
+
+
+def test_stop_all_stops_every_task(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    started = {"n": 0}
+
+    def on_started(last, payload):
+        started["n"] += 1
+        if started["n"] == 1:
+            return '{"tool": "delegate", "argument": "do the B work"}'
+        return '{"tool": "stop_helper", "argument": "all"}'
+
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"tool": "echo", "argument": "working"}'),
+            ("do the B work", '{"tool": "echo", "argument": "working"}'),
+            ("tool result: echo -> working", '{"tool": "echo", "argument": "working"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            (_starts("tool result: delegate -> started"), on_started),
+            (_starts("tool result: stop_helper"), '{"tool": "collect", "argument": "all"}'),
+            (_starts("tool result: collect"), '{"final": "both stopped"}'),
+        ],
+    )
+
+    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
+
+    assert result.reply == "both stopped"
+    statuses = asyncio.run(
+        _column("select status from tasks where conversation_id = %s", (conv,))
+    )
+    assert statuses == ["stopped", "stopped"]
 
 
 def test_two_json_actions_in_one_reply_take_the_first():
@@ -855,12 +915,14 @@ def test_two_json_actions_in_one_reply_take_the_first():
 def test_every_tool_spec_has_exactly_one_handler():
     from agent_service import workflow as workflow_module
 
-    activity = {t.name for t in activities.TOOL_SPECS if t.site == "activity"}
-    flow = {t.name for t in activities.TOOL_SPECS if t.site == "workflow"}
+    activity = {tool.name for tool in activities.TOOL_SPECS if tool.site == "activity"}
+    flow = {tool.name for tool in activities.TOOL_SPECS if tool.site == "workflow"}
 
     assert activity == set(activities.ACTIVITY_TOOLS)
     assert flow == set(workflow_module.WORKFLOW_TOOL_NAMES)
-    assert all(t.schema for t in activities.TOOL_SPECS)
-    assert set(activities.NEEDS_APPROVAL) == {t.name for t in activities.TOOL_SPECS if t.approval}
-    for spec in activities.TOOL_SPECS:
-        assert spec.name in activities.RULES
+    assert all(tool.schema for tool in activities.TOOL_SPECS)
+    assert set(activities.NEEDS_APPROVAL) == {
+        tool.name for tool in activities.TOOL_SPECS if tool.approval
+    }
+    for tool in activities.TOOL_SPECS:
+        assert tool.name in activities.RULES
