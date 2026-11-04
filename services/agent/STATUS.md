@@ -15,16 +15,15 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 60 tests
+make test                                # migrate + 61 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **60 tests**, including the item-7 unit cases; migrations through `013`;
-prompt version **8**. CI runs the suite and the link check on every push.
-`make migrate` is safe to rerun.
+State: **61 tests**; migrations through `013`, prompt version **8**. CI runs the
+suite and the link check on every push. `make migrate` is safe to rerun.
 
 The 3 live-model evals in the suite require a valid model key (OpenRouter via
 `OPENROUTER_API_KEY`, or `DEEPSEEK_API_KEY`) and skip when none is present.
@@ -59,6 +58,8 @@ Oldest first. Each item is merged and tested.
 | Deletion | operator tool; hard delete with audit; refuses a busy conversation |
 | Health | `/healthz` and `/readyz` on the worker and the consumer |
 | Dead letters | poison commands go to `agent.commands.dlq`; replay tool |
+| Metrics | the four numbers on `/metrics`; traceparent on run events |
+| Quotas | interactive never dropped; routine/backfill capped per org |
 
 ## 4. How it fits together
 
@@ -69,7 +70,8 @@ Oldest first. Each item is merged and tested.
 | `consumer.py` | Kafka commands, typing, approval resolutions, helper completions, reaper, purge, dead letters |
 | `relay.py` | Publishes the outbox |
 | `delivery.py` | Reference client; prints messages, choices, and typed approvals |
-| `health.py` | Liveness and readiness endpoints |
+| `health.py` | Liveness and readiness endpoints, plus `/metrics` |
+| `metrics.py` | The four numbers as Prometheus text |
 | `maintenance.py` | Retention purge and scoped hard delete |
 | `delete.py` | Operator CLI for deletion |
 | `dlq.py` | Inspect and replay dead letters |
@@ -88,8 +90,8 @@ The current plan is **harden first**:
 | 2 | Typed approvals, edit-then-approve | **done**: typed fields, field or whole-argument edit, choice options |
 | 3 | Injection tagging at the boundary | **done**: external tool output, helper reports, memory provenance |
 | 4 | Silence policy | **done**: 24h routine budget, failed/question reports speak, run events |
-| 5 | Tracing + the four metrics | partial: tokens and cache only |
-| 6 | Quotas + priority | not started |
+| 5 | Tracing + the four metrics | **done**: four numbers on `/metrics`; `traceparent` propagates; no OTel exporter yet |
+| 6 | Quotas + priority | **partial**: interactive never dropped; routine/backfill capped; no preemption or batching yet |
 | 7 | Retention, deletion, health, dead letters | **done**: hourly purge, scoped delete, health endpoints, DLQ |
 | 8 | Evals gate in CI | **done**: tests and links; live model tests skip without a key |
 | 9 | Sandbox client + contract | not started |
@@ -139,6 +141,13 @@ The taxonomy, their fields, and their blockers are in
   command, until commands are authenticated (item 12). The audit row is the only record.
 - **Purge runs in the consumer process.** A paused or scaled-down consumer does
   not purge. This is acceptable until there is a separate maintenance worker.
+- **Quota drops, it does not queue.** A routine or backfill message over the cap
+  is skipped and its offset commits. Interactive is never dropped. Preemption and
+  batching come later.
+- **Consumer lag is approximate.** It is the age of the newest run event, not a
+  Kafka admin measurement.
+- **Metrics use durations from the run events.** No OTel exporter runs yet; the
+  ids are carried and the numbers are served as text.
 
 ## 7. Fresh-session checklist
 

@@ -69,6 +69,7 @@ class RunRequest:
     max_steps: int = 12
     kind: str = "user"  # "user" or "helper"
     failed: bool = False
+    traceparent: str = ""
 
 
 @dataclass
@@ -332,7 +333,15 @@ class RunWorkflow:
         try:
             await workflow.execute_activity(
                 record_run,
-                args=[request.org_id, request.conversation_id, run_id, "started"],
+                args=[
+                    request.org_id,
+                    request.conversation_id,
+                    run_id,
+                    "started",
+                    False,
+                    "",
+                    request.traceparent,
+                ],
                 start_to_close_timeout=timedelta(seconds=10),
             )
             prompt_version: str = await workflow.execute_activity(
@@ -410,6 +419,8 @@ class RunWorkflow:
                             run_id,
                             "completed",
                             not speak,
+                            "",
+                            request.traceparent,
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
@@ -558,6 +569,7 @@ class RunWorkflow:
                     "failed",
                     False,
                     str(exc),
+                    request.traceparent,
                 ],
                 start_to_close_timeout=timedelta(seconds=10),
             )

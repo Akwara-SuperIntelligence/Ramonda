@@ -1797,9 +1797,57 @@ def test_health_endpoints():
         assert alive.read() == b"test alive"
         assert ready.status == 200
         assert ready.read() == b"test ready"
+        metrics = urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/metrics", timeout=5
+        )
+        assert metrics.status == 200
+        body = metrics.read().decode()
+        assert "agent_run_success_rate" in body
+        assert "agent_turn_latency_seconds" in body
+        assert "agent_cache_hit_ratio" in body
+        assert "agent_consumer_lag_seconds" in body
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_routine_turn_over_quota_is_dropped():
+    org = f"quota-{uuid4().hex}"
+    conv = f"quota-{uuid4().hex}"
+    cap_conv = f"quota-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into conversation_locks"
+                " (org_id, conversation_id, workflow_id, expires_at)"
+                " values (%s, %s, 'wf', now() + interval '1 hour'),"
+                " (%s, %s, 'wf2', now() + interval '1 hour')",
+                (org, conv, org, cap_conv),
+            )
+
+    asyncio.run(seed())
+
+    interactive = Envelope(
+        event_id=f"int-{uuid4().hex}",
+        type=SEND_MESSAGE,
+        org_id=org,
+        subject={"conversation_id": conv},
+        payload={"text": "hi"},
+        priority="interactive",
+    )
+    routine = Envelope(
+        event_id=f"rout-{uuid4().hex}",
+        type=SEND_MESSAGE,
+        org_id=org,
+        subject={"conversation_id": conv},
+        payload={"text": "routine"},
+        priority="routine",
+    )
+
+    # With two active runs, routine (cap 1) is over quota; interactive is never dropped.
+    assert asyncio.run(consumer_module._over_quota(routine)) is True
+    assert asyncio.run(consumer_module._over_quota(interactive)) is False
 
 
 def test_dead_letter_wraps_the_raw_event():
