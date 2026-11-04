@@ -467,18 +467,31 @@ def _load_env() -> None:
 
 
 def _api_key() -> str:
-    key = os.environ.get("DEEPSEEK_API_KEY")
+    key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
         _load_env()
-        key = os.environ.get("DEEPSEEK_API_KEY")
+        key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("DEEPSEEK_API_KEY")
     if not key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not set; put it in .env at the repo root")
+        raise RuntimeError(
+            "OPENROUTER_API_KEY is not set; put your OpenRouter key in .env at the repo root"
+        )
     return key
+
+
+def _base_url() -> str:
+    return os.environ.get(
+        "LLM_BASE_URL", "https://openrouter.ai/api/v1/chat/completions"
+    )
+
+
+def _model() -> str:
+    # OpenRouter's id for DeepSeek's chat model.
+    return os.environ.get("DEEPSEEK_MODEL", "deepseek/deepseek-chat")
 
 
 def _post(payload: dict) -> dict:
     request = urllib.request.Request(
-        "https://api.deepseek.com/chat/completions",
+        _base_url(),
         data=json.dumps(payload).encode(),
         headers={
             "Content-Type": "application/json",
@@ -511,7 +524,7 @@ def _parse_reply(text: str) -> ModelReply:
 def _summarize(text: str) -> str:
     body = _post(
         {
-            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "model": _model(),
             "messages": [
                 {
                     "role": "system",
@@ -548,7 +561,7 @@ async def call_model(
         raise ApplicationError(
             f"unknown prompt version: {prompt_version}", non_retryable=True
         )
-    model = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+    model = _model()
     body = _post(
         {
             "model": model,
@@ -602,7 +615,7 @@ async def prewarm(org_id: str, conversation_id: str) -> None:
         return
     _post(
         {
-            "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+            "model": _model(),
             "messages": [
                 {"role": "system", "content": prompt["system"]},
                 {"role": "user", "content": "warmup"},
@@ -1033,7 +1046,7 @@ async def review_action(
     try:
         body = _post(
             {
-                "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"),
+                "model": _model(),
                 "messages": [{"role": "system", "content": prompt}],
                 "temperature": 0,
                 "response_format": {"type": "json_object"},
