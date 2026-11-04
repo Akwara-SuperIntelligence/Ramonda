@@ -64,7 +64,7 @@ Every increment names its sources. This table is the running index.
 | talk §05 — measure the cache | `activities.py` (`call_model`), `migrations/007_context.sql` | Hit and miss tokens stored per call |
 | talk §05 — compact inside the warm window | `activities.py` (`compact`) | Old turns become a summary after a threshold |
 | talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
-| talk §05 — stable section order | `activities.py` (`V6_RULES`, `V6_TOOLS`, `PROMPTS`) | The prefix hash is recorded with every call |
+| talk §05 — stable section order | `activities.py` (`V7_RULES`, `V7_TOOLS`, `PROMPTS`) | The prefix hash is recorded with every call |
 | talk §04 — tool search | `activities.py` (`TOOL_SCHEMAS`, `get_tool_schema`) | Names in the prompt, schema fetched on demand |
 | talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
 | talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |
@@ -79,8 +79,14 @@ Every increment names its sources. This table is the running index.
 | talk §02, §05 — memory layers | `activities.py` (`remember`, `note`, `recall`), `migrations/009_memories.sql` | Facts always in the prompt; scratch for one hour |
 | lesson 07 — memory is stored so it can be recalled | `activities.py` (`load_history`, `recall`) | Facts and recent notes, not just the transcript |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
+| talk §04 — auto-review before the human | `activities.py` (`review_action`), `migrations/011_reviews.sql` | A second model allows, denies, or escalates |
+| talk §04 — typed approvals, edit, then act | `activities.py` (`request_approval`), `delivery.py`, `approve.py` | Fields, edit, review verdict, resolved event |
+| ADR 0001 — choice options | `activities.py` (`_parse_reply`, `send_user`), `delivery.py` | Options on the message event; the card waits for channels |
 
 ## Verified
+
+A live reviewer allowed a birthday email and denied an attempt to send passwords
+and customer data to an outside address.
 
 A worker was killed with `SIGKILL` while 108 turns were in flight. A new worker
 completed all 200, with no duplicate or lost turn.
@@ -191,6 +197,7 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.delivery      # terminal 4
 ../../.venv/bin/python -m agent_service.cli "hello"   # or publish an event
 ../../.venv/bin/python -m agent_service.approve <id> approved
+../../.venv/bin/python -m agent_service.approve <id> approved --argument "edited text"
 ```
 
 Publish an event to `agent.commands`:

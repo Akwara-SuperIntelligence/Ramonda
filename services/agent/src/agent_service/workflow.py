@@ -35,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
     from agent_service.activities import (
         NEEDS_APPROVAL,
         ModelReply,
+        Review,
         ToolResult,
         acquire_lock,
         call_model,
@@ -49,6 +50,7 @@ with workflow.unsafe.imports_passed_through():
         pin_prompt,
         release_lock,
         request_approval,
+        review_action,
         run_tool,
         save_tool_step,
         send_user,
@@ -219,12 +221,16 @@ class RunWorkflow:
     def __init__(self) -> None:
         self._approval_id: str | None = None
         self._decision: str | None = None
+        self._argument: str | None = None
         self._pending: dict[str, Any] = {}
 
     @workflow.signal
-    def resolve(self, decision: str, approval_id: str) -> None:
+    def resolve(
+        self, decision: str, approval_id: str, argument: str | None = None
+    ) -> None:
         if approval_id == self._approval_id:
             self._decision = decision
+            self._argument = argument
 
     async def _workflow_tool(
         self, reply: ModelReply, request: RunRequest, run_id: str, step: int, prompt_version: str
@@ -368,6 +374,7 @@ class RunWorkflow:
                             request.text,
                             reply.text,
                             f"{request.org_id}:{run_id}:save",
+                            reply.options,
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
@@ -378,9 +385,44 @@ class RunWorkflow:
                     )
 
                 if NEEDS_APPROVAL.get(reply.tool):
+                    review: Review = await workflow.execute_activity(
+                        review_action,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            run_id,
+                            step,
+                            reply.tool,
+                            reply.argument,
+                            request.text,
+                        ],
+                        start_to_close_timeout=timedelta(seconds=30),
+                    )
+                    if review.verdict == "deny":
+                        denied = f"denied by reviewer: {review.reason}"
+                        await workflow.execute_activity(
+                            save_tool_step,
+                            args=[
+                                request.org_id,
+                                request.conversation_id,
+                                seq,
+                                step + 1,
+                                f"{reply.tool}({reply.argument}) -> {denied}",
+                            ],
+                            start_to_close_timeout=timedelta(seconds=10),
+                        )
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": f"tool result: {reply.tool} {denied}",
+                            }
+                        )
+                        continue
+
                     approval_id = f"{request.org_id}:{run_id}:{step}:approval"
                     self._approval_id = approval_id
                     self._decision = None
+                    self._argument = None
                     await workflow.execute_activity(
                         request_approval,
                         args=[
@@ -390,6 +432,8 @@ class RunWorkflow:
                             reply.tool,
                             reply.argument,
                             approval_id,
+                            review.verdict,
+                            review.reason,
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
@@ -406,6 +450,7 @@ class RunWorkflow:
                             args=[approval_id],
                             start_to_close_timeout=timedelta(seconds=10),
                         )
+                    reply.argument = self._argument or reply.argument
                     if decision != "approved":
                         await workflow.execute_activity(
                             save_tool_step,

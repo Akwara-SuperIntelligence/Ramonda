@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from contextlib import AsyncExitStack
 import re
 import os
@@ -43,13 +44,14 @@ from agent_service.activities import (
     release_lock,
     report_task,
     request_approval,
+    review_action,
     run_tool,
     save_tool_step,
     send_user,
 )
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
-from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
+from agent_service.events import RESOLVE_APPROVAL, SEND_MESSAGE, TYPING, Envelope
 from agent_service.relay import relay_once
 from agent_service.workflow import HELPER_QUEUE, HelperTask, HelperWorkflow, RunRequest, RunWorkflow
 
@@ -69,6 +71,7 @@ ACTIVITIES = [
     release_lock,
     report_task,
     request_approval,
+    review_action,
     run_tool,
     save_tool_step,
     send_user,
@@ -107,15 +110,24 @@ def _fake_router(monkeypatch, routes: list[tuple], seen: list | None = None) -> 
     return seen
 
 
-def _fake_model(monkeypatch, *replies: str) -> list[dict]:
-    """Answer each model call from a script, and keep what the model was sent."""
+def _fake_model(
+    monkeypatch,
+    *replies: str,
+    review: str = '{"verdict": "allow", "reason": "safe"}',
+) -> list[dict]:
+    """Answer each model call from a script, and keep what the model was sent.
+
+    A reviewer call gets `review`; the script feeds the main loop only.
+    """
     script = iter(replies)
     seen: list[dict] = []
 
     def fake(payload: dict) -> dict:
         seen.append(payload)
+        system = payload["messages"][0]["content"]
+        content = review if "security reviewer" in system else next(script)
         return {
-            "choices": [{"message": {"content": next(script)}}],
+            "choices": [{"message": {"content": content}}],
             "usage": {
                 "prompt_tokens": 10,
                 "completion_tokens": 2,
@@ -327,9 +339,11 @@ def test_a_second_approval_decision_is_ignored():
     class Handle:
         def __init__(self) -> None:
             self.decisions: list[str] = []
+            self.arguments: list[str | None] = []
 
         async def signal(self, name: str, args: list) -> None:
             self.decisions.append(args[0])
+            self.arguments.append(args[2])
 
     class Client:
         def __init__(self) -> None:
@@ -338,13 +352,18 @@ def test_a_second_approval_decision_is_ignored():
         def get_workflow_handle(self, workflow_id: str) -> Handle:
             return self.handle
 
-    def envelope(decision: str, event_id: str) -> Envelope:
+    def envelope(
+        decision: str, event_id: str, argument: str | None = None
+    ) -> Envelope:
+        payload = {"approval_id": approval_id, "decision": decision}
+        if argument is not None:
+            payload["argument"] = argument
         return Envelope(
             event_id=event_id,
-            type=APPROVAL_RESOLVED,
+            type=RESOLVE_APPROVAL,
             org_id="local",
             subject={"approval_id": approval_id},
-            payload={"approval_id": approval_id, "decision": decision},
+            payload=payload,
         )
 
     asyncio.run(seed())
@@ -352,9 +371,16 @@ def test_a_second_approval_decision_is_ignored():
     first_id = f"resolve-{uuid4().hex}"
     first = asyncio.run(handle(client, envelope("approved", first_id)))
     second = asyncio.run(handle(client, envelope("denied", f"resolve-{uuid4().hex}")))
+    third = asyncio.run(
+        handle(client, envelope("approved", f"resolve-{uuid4().hex}", "hacked"))
+    )
 
-    assert first is not None and second is None
-    assert client.handle.decisions == ["approved"]
+    assert first is not None and second is None and third is not None
+    assert client.handle.decisions == ["approved", "approved"]
+    assert client.handle.arguments == ["a@b", "a@b"]
+    assert asyncio.run(
+        _scalar("select arguments from approvals where id = %s", (approval_id,))
+    ) == "a@b"
     assert asyncio.run(
         _scalar("select status from approvals where id = %s", (approval_id,))
     ) == "approved"
@@ -411,7 +437,7 @@ async def _start_and_resolve(conv: str, decision: str | None):
                     env.client,
                     Envelope(
                         event_id=f"resolve:{conv}",
-                        type=APPROVAL_RESOLVED,
+                        type=RESOLVE_APPROVAL,
                         org_id="local",
                         subject={"approval_id": _approval_id(conv)},
                         payload={"approval_id": _approval_id(conv), "decision": decision},
@@ -433,6 +459,14 @@ def test_an_irreversible_tool_runs_only_after_approval(monkeypatch):
     assert asyncio.run(
         _scalar("select status from approvals where id = %s", (_approval_id(conv),))
     ) == "approved"
+    payload = json.loads(
+        asyncio.run(
+            _scalar("select payload::text from approvals where id = %s", (_approval_id(conv),))
+        )
+    )
+    assert payload["kind"] == "action"
+    assert [field["label"] for field in payload["fields"]] == ["To", "Message"]
+    assert payload["review"]["verdict"] == "allow"
 
 
 def test_a_denied_tool_does_not_run(monkeypatch):
@@ -458,6 +492,142 @@ def test_an_unanswered_approval_expires(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (f"local:run:{conv}:0:0",))
     ) == 0
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from outbox where id = %s",
+            (f"approval-resolved:{_approval_id(conv)}:expired",),
+        )
+    ) == 1
+
+
+def test_a_reviewer_denial_does_not_ask_the_human(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "send_email", "argument": "a@b"}',
+        '{"final": "ok"}',
+        review='{"verdict": "deny", "reason": "looks unsafe"}',
+    )
+
+    result = asyncio.run(_run(RunRequest(conv, "send mail"), f"turn:{uuid4().hex}"))
+
+    assert result.reply == "ok"
+    assert asyncio.run(
+        _scalar("select verdict from reviews where conversation_id = %s", (conv,))
+    ) == "deny"
+    assert asyncio.run(
+        _scalar("select count(*) from approvals where conversation_id = %s", (conv,))
+    ) == 0
+
+
+def test_reviewer_failure_escalates_to_the_human(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b"}', '{"final": "sent"}', review="not json")
+
+    result = asyncio.run(_start_and_resolve(conv, "approved"))
+
+    assert result.reply == "sent"
+    payload = json.loads(
+        asyncio.run(
+            _scalar("select payload::text from approvals where id = %s", (_approval_id(conv),))
+        )
+    )
+    assert payload["review"]["verdict"] == "escalate"
+
+
+def test_editing_an_approval_changes_the_effect(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b original"}', '{"final": "sent"}')
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                wf = await env.client.start_workflow(
+                    RunWorkflow.run,
+                    RunRequest(conv, "send mail"),
+                    id=f"run:{conv}:0",
+                    task_queue=SERVICE_QUEUE,
+                )
+                for _ in range(200):
+                    if await _scalar(
+                        "select count(*) from approvals where id = %s",
+                        (_approval_id(conv),),
+                    ):
+                        break
+                    await asyncio.sleep(0.05)
+                await handle(
+                    env.client,
+                    Envelope(
+                        event_id=f"resolve-{uuid4().hex}",
+                        type=RESOLVE_APPROVAL,
+                        org_id="local",
+                        subject={"approval_id": _approval_id(conv)},
+                        payload={
+                            "approval_id": _approval_id(conv),
+                            "decision": "approved",
+                            "argument": "c@d edited",
+                        },
+                    ),
+                )
+                return await wf.result()
+
+    result = asyncio.run(scenario())
+
+    assert result.reply == "sent"
+    assert asyncio.run(
+        _scalar("select payload from effects where token = %s", (f"local:run:{conv}:0:0",))
+    ) == "c@d edited"
+    assert asyncio.run(
+        _scalar("select arguments from approvals where id = %s", (_approval_id(conv),))
+    ) == "c@d edited"
+    resolved = json.loads(
+        asyncio.run(
+            _scalar(
+                "select payload from outbox where id = %s",
+                (f"approval-resolved:{_approval_id(conv)}:approved",),
+            )
+        )
+    )["payload"]
+    assert resolved["decision"] == "approved"
+    assert resolved["argument"] == "c@d edited"
+
+
+def test_choice_options_are_stored_on_the_message(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    run_id = f"turn:{uuid4().hex}"
+    _fake_model(monkeypatch, '{"final": "Which one?", "options": ["A poem", "A song"]}')
+
+    result = asyncio.run(_run(RunRequest(conv, "make something"), run_id))
+
+    assert result.reply == "Which one?"
+    payload = json.loads(
+        asyncio.run(
+            _scalar("select payload from outbox where id = %s", (f"local:{run_id}:save",))
+        )
+    )["payload"]
+    assert payload["text"] == "Which one?"
+    assert payload["options"] == ["A poem", "A song"]
+    stored = asyncio.run(
+        _scalar(
+            "select content from messages where conversation_id = %s and role = 'assistant'",
+            (conv,),
+        )
+    )
+    assert "A. A poem" in stored
+    assert "B. A song" in stored
+
+
+def test_options_are_capped_at_five():
+    reply = activities._parse_reply(
+        '{"final": "pick", "options": ["1", "2", "3", "4", "5", "6"]}'
+    )
+    assert reply.options == ["1", "2", "3", "4", "5"]
+    assert activities._parse_reply('{"final": "pick", "options": "nope"}').options == []
 
 
 def test_the_conversation_lock_is_exclusive():
@@ -562,10 +732,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "7")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "8")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("6", "6")
+    assert (first, second) == ("7", "7")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
