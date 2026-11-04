@@ -952,6 +952,18 @@ async def send_user(
 
 
 @activity.defn
+async def routine_active(org_id: str, routine_id: str) -> bool:
+    """True only while the routine row exists and is enabled."""
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select enabled from routines where id = %s and org_id = %s",
+            (routine_id, org_id),
+        )
+        row = await cursor.fetchone()
+    return bool(row and row[0])
+
+
+@activity.defn
 async def should_speak(
     org_id: str,
     conversation_id: str,
@@ -963,7 +975,7 @@ async def should_speak(
 
     Sources: talk §03 (the agent knows when to stay quiet); lesson 04.
     """
-    if kind == "user" or failed:
+    if kind in ("user", "routine") or failed:
         return True
     needs_input = "?" in text or any(
         phrase in text.lower()

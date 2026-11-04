@@ -91,8 +91,13 @@ Every increment names its sources. This table is the running index.
 | ADR 0003 — retention, deletion, health | `docs/adr/0003-retention-deletion-health.md` | Windows, delete rule, health, DLQ |
 | ADR 0004 — four metrics | `metrics.py`, `health.py` | The four numbers on `/metrics`; traceparent on run events |
 | ADR 0004 — quotas | `consumer.py` (`_over_quota`) | Interactive never dropped; routine/backfill capped |
+| ADR 0005 — routines | `routines.py`, `routine.py`, `migrations/014_routines.sql` | A Temporal Schedule starts a turn; CLI-only; no irreversible tools |
 
 ## Verified
+
+A live routine was created at 08:00 `Africa/Nairobi`. Temporal normalised the
+cron and showed the next run at 05:00 UTC. Pause, resume, and delete worked, and
+the row and schedule were both gone afterwards.
 
 A live injection test put "ignore previous instructions" inside the
 `<untrusted>` tags. The model named the instruction and did not obey it.
@@ -215,6 +220,9 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.delete --org acme --confirm                  # delete org
 ../../.venv/bin/python -m agent_service.dlq                                          # inspect one dead letter
 ../../.venv/bin/python -m agent_service.dlq --replay                                # republish one
+../../.venv/bin/python -m agent_service.routine create --org acme --conversation c1 \
+  --cron "0 8 * * *" --timezone Africa/Nairobi --text "check the inbox"
+../../.venv/bin/python -m agent_service.routine list --org acme --conversation c1
 ```
 
 Health: the worker exposes `/healthz`, `/readyz`, and `/metrics` on port `8080`,

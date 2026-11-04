@@ -15,14 +15,14 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 61 tests
+make test                                # migrate + 66 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **61 tests**; migrations through `013`, prompt version **8**. CI runs the
+State: **66 tests**; migrations through `014`, prompt version **8**. CI runs the
 suite and the link check on every push. `make migrate` is safe to rerun.
 
 The 3 live-model evals in the suite require a valid model key (OpenRouter via
@@ -60,6 +60,8 @@ Oldest first. Each item is merged and tested.
 | Dead letters | poison commands go to `agent.commands.dlq`; replay tool |
 | Metrics | the four numbers on `/metrics`; traceparent on run events |
 | Quotas | interactive never dropped; routine/backfill capped per org |
+| Routines | a Temporal Schedule starts a `kind="routine"` turn; CLI-only |
+| Live routine | 08:00 Nairobi; next run 05:00 UTC; pause, resume, delete |
 
 ## 4. How it fits together
 
@@ -73,11 +75,13 @@ Oldest first. Each item is merged and tested.
 | `health.py` | Liveness and readiness endpoints, plus `/metrics` |
 | `metrics.py` | The four numbers as Prometheus text |
 | `maintenance.py` | Retention purge and scoped hard delete |
+| `routines.py` | The routine row and its Temporal Schedule |
+| `routine.py` | Operator CLI to create, list, pause, resume, and delete routines |
 | `delete.py` | Operator CLI for deletion |
 | `dlq.py` | Inspect and replay dead letters |
 | `worker.py` | Two queues: `agent-orchestrator`, `agent-helper` |
 | `events.py` | Envelope, event types, topics |
-| `migrations/` | `001`–`013`, idempotent |
+| `migrations/` | `001`–`014`, idempotent |
 | `skills/<name>/SKILL.md` | Model-read skills |
 
 ## 5. What is left
@@ -99,6 +103,7 @@ The current plan is **harden first**:
 | 11 | Secret broker | not started |
 | 12 | Authenticated commands | not started |
 | 13 | Real delivery client | not started |
+| 14 | Routines / schedules | **done**: Temporal Schedule per routine, CLI-only |
 
 Permission approvals, the choice card itself, and custom rules are deferred.
 The taxonomy, their fields, and their blockers are in
@@ -108,6 +113,10 @@ The taxonomy, their fields, and their blockers are in
 
 - **Commands are unauthenticated.** Anyone who can publish to `agent.commands`
   can approve. The edge and identity provider are item 12.
+- **Routines are CLI-only.** There is no `UpdateRoutine` bus command until
+  commands are authenticated (item 12). A schedule is created by `routine.py`.
+- **Routine turns cannot run irreversible tools.** No human is present to
+  approve, so the workflow denies an approval tool before the gate.
 - **The consumer stops on an unhandled error.** The offset stays uncommitted and
   the bus redelivers. A poison command goes to `agent.commands.dlq`; a transient
   error does not diverge poison from retry.

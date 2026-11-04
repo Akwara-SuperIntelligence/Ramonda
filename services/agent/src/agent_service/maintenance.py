@@ -55,6 +55,7 @@ SCOPED = [
     "conversations",
     "effects",
     "outbox",
+    "routines",
 ]
 
 

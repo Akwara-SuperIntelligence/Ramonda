@@ -52,6 +52,7 @@ with workflow.unsafe.imports_passed_through():
         release_lock,
         request_approval,
         review_action,
+        routine_active,
         run_tool,
         save_tool_step,
         send_user,
@@ -67,9 +68,10 @@ class RunRequest:
     text: str
     org_id: str = "local"
     max_steps: int = 12
-    kind: str = "user"  # "user" or "helper"
+    kind: str = "user"  # "user", "helper", or "routine"
     failed: bool = False
     traceparent: str = ""
+    routine_id: str = ""
 
 
 @dataclass
@@ -323,6 +325,20 @@ class RunWorkflow:
     async def run(self, request: RunRequest) -> RunResult:
         run_id = workflow.info().workflow_id
 
+        if request.kind == "routine":
+            active = await workflow.execute_activity(
+                routine_active,
+                args=[request.org_id, request.routine_id],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            if not active:
+                return RunResult(
+                    conversation_id=request.conversation_id,
+                    reply="",
+                    steps=0,
+                    silent=True,
+                )
+
         while not await workflow.execute_activity(
             acquire_lock,
             args=[request.org_id, request.conversation_id, run_id],
@@ -430,6 +446,24 @@ class RunWorkflow:
                         steps=step + 1,
                         silent=not speak,
                     )
+
+                if request.kind == "routine" and NEEDS_APPROVAL.get(reply.tool):
+                    denied = "routine turns cannot run irreversible tools"
+                    await workflow.execute_activity(
+                        save_tool_step,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            seq,
+                            step + 1,
+                            f"{reply.tool}({reply.argument}) -> {denied}",
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    history.append(
+                        {"role": "user", "content": f"tool result: {reply.tool} {denied}"}
+                    )
+                    continue
 
                 if NEEDS_APPROVAL.get(reply.tool):
                     review: Review = await workflow.execute_activity(

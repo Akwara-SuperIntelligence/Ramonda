@@ -32,6 +32,7 @@ from temporalio.worker import Worker
 from agent_service import activities
 from agent_service import consumer as consumer_module
 from agent_service import maintenance
+from agent_service import routines
 from agent_service.activities import (
     acquire_lock,
     call_model,
@@ -48,6 +49,7 @@ from agent_service.activities import (
     report_task,
     request_approval,
     review_action,
+    routine_active,
     run_tool,
     save_tool_step,
     send_user,
@@ -78,6 +80,7 @@ ACTIVITIES = [
     report_task,
     request_approval,
     review_action,
+    routine_active,
     run_tool,
     save_tool_step,
     send_user,
@@ -1704,6 +1707,11 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
                 " values (%s, %s, 1, 0, 'm', 'h', 1, 0, 1, 1)",
                 (org, conv),
             )
+            await conn.execute(
+                "insert into routines (id, org_id, conversation_id, cron, text)"
+                " values ('rt_del', %s, %s, '0 8 * * *', 'x')",
+                (org, conv),
+            )
 
     asyncio.run(seed())
     counts = asyncio.run(maintenance.delete_scope(org, conv))
@@ -1712,6 +1720,7 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
     assert counts["effects"] == 1
     assert counts["outbox"] == 1
     assert counts["conversations"] == 1
+    assert counts["routines"] == 1
     assert asyncio.run(
         _scalar(
             "select count(*) from messages where conversation_id in (%s, %s)",
@@ -1871,3 +1880,161 @@ def test_dead_letter_wraps_the_raw_event():
     assert topic == consumer_module.DLQ_TOPIC
     assert data["error"] == "ValueError: bad event"
     assert data["event"]["raw"] == "not json"
+
+
+class _FakeHandle:
+    def __init__(self) -> None:
+        self.paused = 0
+        self.unpaused = 0
+        self.deleted = 0
+
+    async def pause(self) -> None:
+        self.paused += 1
+
+    async def unpause(self) -> None:
+        self.unpaused += 1
+
+    async def delete(self) -> None:
+        self.deleted += 1
+
+    async def update(self, updater) -> None:
+        updater(None)
+
+
+class _FakeScheduleClient:
+    def __init__(self) -> None:
+        self.created: dict = {}
+        self.handles: dict = {}
+
+    async def create_schedule(self, schedule_id, schedule):
+        self.created[schedule_id] = schedule
+        handle = _FakeHandle()
+        self.handles[schedule_id] = handle
+        return handle
+
+    def get_schedule_handle(self, schedule_id):
+        return self.handles.setdefault(schedule_id, _FakeHandle())
+
+
+def test_create_routine_writes_row_and_schedule():
+    org = f"rt-{uuid4().hex}"
+    conv = f"rt-{uuid4().hex}"
+    client = _FakeScheduleClient()
+
+    routine_id = asyncio.run(
+        routines.create_routine(
+            org, conv, "0 8 * * *", "check the inbox", "Africa/Nairobi", client=client
+        )
+    )
+
+    assert routine_id.startswith("rt_")
+    row = asyncio.run(routines.get_routine(routine_id))
+    assert row is not None
+    assert row["cron"] == "0 8 * * *"
+    assert row["enabled"] is True
+    schedule = client.created[f"routine:{routine_id}"]
+    request = schedule.action.args[0]
+    assert request.kind == "routine"
+    assert request.routine_id == routine_id
+    assert request.conversation_id == conv
+
+    asyncio.run(routines.set_enabled(routine_id, False, client=client))
+    assert asyncio.run(routines.get_routine(routine_id))["enabled"] is False
+    asyncio.run(routines.set_enabled(routine_id, True, client=client))
+    asyncio.run(routines.delete_routine(routine_id, client=client))
+    assert asyncio.run(routines.get_routine(routine_id)) is None
+
+
+def test_create_routine_rejects_an_unknown_timezone():
+    with pytest.raises(ValueError):
+        asyncio.run(
+            routines.create_routine(
+                "local", "c", "0 8 * * *", "x", "Mars/Olympus"
+            )
+        )
+
+
+def test_a_routine_cannot_run_an_irreversible_tool(monkeypatch):
+    org = "local"
+    conv = f"rt-{uuid4().hex}"
+    routine_id = f"rt_{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into routines"
+                " (id, org_id, conversation_id, cron, text)"
+                " values (%s, %s, %s, '0 8 * * *', 'send the email')",
+                (routine_id, org, conv),
+            )
+
+    asyncio.run(seed())
+    _fake_model(
+        monkeypatch,
+        '{"tool": "send_email", "argument": "a@b"}',
+        '{"final": "I cannot send it"}',
+    )
+
+    result = asyncio.run(
+        _run(
+            RunRequest(
+                conv, "send the email", org_id=org, kind="routine", routine_id=routine_id
+            ),
+            f"turn:{uuid4().hex}",
+        )
+    )
+
+    assert result.reply == "I cannot send it"
+    assert asyncio.run(
+        _scalar("select count(*) from approvals where conversation_id = %s", (conv,))
+    ) == 0
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from effects"
+            " where conversation_id = %s and kind = 'send_email'",
+            (conv,),
+        )
+    ) == 0
+    step = asyncio.run(
+        _scalar(
+            "select content from messages where conversation_id = %s and role = 'tool'",
+            (conv,),
+        )
+    )
+    assert "routine turns cannot run irreversible tools" in (step or "")
+
+
+def test_a_disabled_routine_does_not_run(monkeypatch):
+    org = "local"
+    conv = f"rt-{uuid4().hex}"
+    routine_id = f"rt_{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into routines"
+                " (id, org_id, conversation_id, cron, text, enabled)"
+                " values (%s, %s, %s, '0 8 * * *', 'x', false)",
+                (routine_id, org, conv),
+            )
+
+    asyncio.run(seed())
+    _fake_model(monkeypatch)
+
+    result = asyncio.run(
+        _run(
+            RunRequest(
+                conv, "x", org_id=org, kind="routine", routine_id=routine_id
+            ),
+            f"turn:{uuid4().hex}",
+        )
+    )
+
+    assert result.silent is True
+    assert asyncio.run(
+        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
+    ) == 0
+
+
+def test_a_routine_turn_always_speaks():
+    assert asyncio.run(should_speak("local", "c", "routine", False, "no question")) is True

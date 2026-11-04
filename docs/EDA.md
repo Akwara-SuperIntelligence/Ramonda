@@ -154,7 +154,8 @@ The kinds of human interaction behind `agent.approval.requested` and the
 in [ADR 0002](adr/0002-trust-and-silence.md). Retention windows, deletion, health
 endpoints, and the dead-letter policy are in [ADR 0003](adr/0003-retention-deletion-health.md).
 The four metrics, traceparent propagation, and the quota guard are in
-[ADR 0004](adr/0004-metrics-quotas.md).
+[ADR 0004](adr/0004-metrics-quotas.md). Routines are in
+[ADR 0005](adr/0005-routines.md).
 
 ### 4.3 Commands accepted
 
@@ -168,6 +169,10 @@ The four metrics, traceparent propagation, and the quota guard are in
 
 Commands are idempotent on `command_id`, carry a reply event, and are the only
 write path from outside. Everything else is read-only.
+
+`UpdateRoutine` is specified but not on the bus yet. Until commands are
+authenticated, `routine.py` writes the row and the Temporal Schedule directly.
+See [ADR 0005](adr/0005-routines.md).
 
 `ResolveApproval` carries `approval_id`, `decision`, and an optional `argument`.
 The argument replaces the reviewed string before the effect runs. The approval

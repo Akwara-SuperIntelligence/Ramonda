@@ -16,6 +16,12 @@ import asyncio
 import json
 
 from agent_service.maintenance import delete_scope
+from agent_service.routines import delete_schedules_for
+
+
+async def _delete(org_id: str, conversation_id: str | None) -> dict[str, int]:
+    await delete_schedules_for(org_id, conversation_id)
+    return await delete_scope(org_id, conversation_id)
 
 
 def main_cli() -> None:
@@ -29,7 +35,7 @@ def main_cli() -> None:
     scope = args.conversation or f"the whole org {args.org}"
     print(f"deleting {scope}", flush=True)
     try:
-        counts = asyncio.run(delete_scope(args.org, args.conversation))
+        counts = asyncio.run(_delete(args.org, args.conversation))
     except RuntimeError as exc:
         raise SystemExit(str(exc))
     print(json.dumps(counts, indent=2), flush=True)
