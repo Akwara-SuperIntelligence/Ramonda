@@ -1,5 +1,8 @@
 # services/agent
 
+New here? Start with [STATUS.md](STATUS.md): where the service is, what is left,
+and how to verify it.
+
 The agent service: one deployable that hosts the event consumer, the Temporal
 orchestrator, and the harness worker. Python.
 
