@@ -23,7 +23,12 @@ from agent_service.consumer import TOPIC
 from agent_service.events import RESOLVE_APPROVAL, Envelope
 
 
-async def main(approval_id: str, decision: str, argument: str | None = None) -> None:
+async def main(
+    approval_id: str,
+    decision: str,
+    argument: str | None = None,
+    fields: list[dict] | None = None,
+) -> None:
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         cursor = await conn.execute(
             "select org_id from approvals where id = %s", (approval_id,)
@@ -33,7 +38,9 @@ async def main(approval_id: str, decision: str, argument: str | None = None) -> 
         raise SystemExit(f"no such approval: {approval_id}")
 
     payload = {"approval_id": approval_id, "decision": decision}
-    if argument is not None:
+    if fields is not None:
+        payload["fields"] = fields
+    elif argument is not None:
         payload["argument"] = argument
     envelope = Envelope(
         event_id=f"resolve:{approval_id}:{uuid4().hex}",
@@ -50,7 +57,13 @@ async def main(approval_id: str, decision: str, argument: str | None = None) -> 
         await producer.send_and_wait(TOPIC, envelope.to_json())
     finally:
         await producer.stop()
-    edit = f" (edited: {argument})" if argument is not None else ""
+    edit = ""
+    if fields is not None:
+        edit = " (edited: " + ", ".join(
+            f"{field['label']}={field['value']}" for field in fields
+        ) + ")"
+    elif argument is not None:
+        edit = f" (edited: {argument})"
     print(f"{decision}: {approval_id}{edit}")
 
 
@@ -58,9 +71,25 @@ def main_cli() -> None:
     parser = argparse.ArgumentParser(description="resolve an approval")
     parser.add_argument("approval_id")
     parser.add_argument("decision", choices=["approved", "denied"])
-    parser.add_argument("--argument", help="edited arguments to approve")
+    parser.add_argument("--argument", help="whole argument to approve")
+    parser.add_argument(
+        "--field",
+        action="append",
+        metavar="LABEL=VALUE",
+        help="edit one field; repeat for more fields",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.approval_id, args.decision, args.argument))
+    if args.argument and args.field:
+        parser.error("use --argument or --field, not both")
+    fields = None
+    if args.field:
+        fields = []
+        for item in args.field:
+            label, separator, value = item.partition("=")
+            if not separator:
+                parser.error("--field needs LABEL=VALUE")
+            fields.append({"label": label, "value": value})
+    asyncio.run(main(args.approval_id, args.decision, args.argument, fields))
 
 
 if __name__ == "__main__":

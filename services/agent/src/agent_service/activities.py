@@ -909,12 +909,46 @@ def _approval_fields(tool: str, argument: str) -> list[dict]:
     if tool == "send_email":
         to, _, text = argument.partition(" ")
         return [
-            {"label": "To", "value": to, "editable": True},
-            {"label": "Message", "value": text, "editable": True, "multiline": True},
+            {"key": "to", "label": "To", "value": to, "editable": True},
+            {
+                "key": "message",
+                "label": "Message",
+                "value": text,
+                "editable": True,
+                "multiline": True,
+            },
         ]
     return [
-        {"label": "Arguments", "value": argument, "editable": True, "multiline": True}
+        {
+            "key": "arguments",
+            "label": "Arguments",
+            "value": argument,
+            "editable": True,
+            "multiline": True,
+        }
     ]
+
+
+def _argument_from_fields(tool: str, fields: list) -> str:
+    """Rebuild the tool argument from the fields the client edited."""
+    if not isinstance(fields, list):
+        raise ValueError("fields must be a list")
+    values: dict[str, str] = {}
+    for field in fields:
+        if not isinstance(field, dict):
+            raise ValueError("each field must be an object")
+        name = str(field.get("key") or field.get("label") or "").lower()
+        value = field.get("value")
+        if not name or not isinstance(value, str):
+            raise ValueError("field needs a key or label and a string value")
+        values[name] = value
+    if tool == "send_email":
+        if "to" not in values or "message" not in values:
+            raise ValueError("send_email needs To and Message fields")
+        return f"{values['to']} {values['message']}"
+    if "arguments" in values:
+        return values["arguments"]
+    raise ValueError(f"no argument field for {tool}")
 
 
 def _approval_payload(

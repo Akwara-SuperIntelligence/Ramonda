@@ -15,14 +15,14 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 45 tests
+make test                                # migrate + 46 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **45 tests**, 4 of them live model tests; migrations through `011`;
+State: **46 tests**, 4 of them live model tests; migrations through `011`;
 prompt version **7**. CI runs the suite and the link check on every push.
 `make migrate` is safe to rerun.
 
@@ -71,7 +71,7 @@ The current plan is **harden first**:
 | # | Item | Status |
 |---|---|---|
 | 1 | Auto-review before the human gate | **done** |
-| 2 | Typed approvals, edit-then-approve | **done**: typed action approvals, edit, choice options |
+| 2 | Typed approvals, edit-then-approve | **done**: typed fields, field or whole-argument edit, choice options |
 | 3 | Injection tagging at the boundary | not started |
 | 4 | Silence policy | not started |
 | 5 | Tracing + the four metrics | partial: tokens and cache only |

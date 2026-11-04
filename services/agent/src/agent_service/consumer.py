@@ -23,7 +23,13 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
-from agent_service.activities import _dsn, _resolved_envelope, prewarm, reap_tasks
+from agent_service.activities import (
+    _argument_from_fields,
+    _dsn,
+    _resolved_envelope,
+    prewarm,
+    reap_tasks,
+)
 from agent_service.events import (
     APPROVAL_TOPIC,
     HELPER_COMPLETED,
@@ -74,12 +80,23 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     approval_id = envelope.payload["approval_id"]
     decision = envelope.payload["decision"]
     argument = envelope.payload.get("argument")
+    fields = envelope.payload.get("fields")
     if decision not in DECISIONS:
         raise ValueError(f"unknown decision: {decision}")
     if argument is not None and not isinstance(argument, str):
         raise ValueError("argument must be a string")
+    if fields is not None and not isinstance(fields, list):
+        raise ValueError("fields must be a list")
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
+            if fields is not None:
+                cursor = await conn.execute(
+                    "select action from approvals where id = %s", (approval_id,)
+                )
+                base = await cursor.fetchone()
+                if base is None:
+                    return None
+                argument = _argument_from_fields(base[0], fields)
             cursor = await conn.execute(
                 "update approvals set status = %s, resolved_at = now(),"
                 " arguments = coalesce(%s, arguments)"

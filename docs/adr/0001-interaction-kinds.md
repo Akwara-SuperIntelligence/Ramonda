@@ -31,8 +31,8 @@ An action approval payload:
   "action": "send_email",
   "arguments": "sarah@example.com Happy birthday",
   "fields": [
-    {"label": "To", "value": "sarah@example.com", "editable": true},
-    {"label": "Message", "value": "Happy birthday", "editable": true, "multiline": true}
+    {"key": "to", "label": "To", "value": "sarah@example.com", "editable": true},
+    {"key": "message", "label": "Message", "value": "Happy birthday", "editable": true, "multiline": true}
   ],
   "consequences": "The recipient will receive this now.",
   "decisions": ["approve", "edit", "deny"],
@@ -57,8 +57,8 @@ is. The terminal client prints the card. A Slack or web client draws it.
 
 One irreversible effect. The payload has typed fields, a draft, consequences,
 and the reviewer verdict. The human approves, edits, or denies. The approval is
-single-use and has a 10-minute deadline. An edit replaces the arguments and
-voids the old request.
+single-use and has a 10-minute deadline. An edit replaces the arguments before
+the effect runs. The approval stays single-use.
 
 ### permission
 
