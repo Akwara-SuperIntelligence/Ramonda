@@ -14,10 +14,11 @@ Delta
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 
 import psycopg
-from aiokafka import AIOKafkaConsumer
+from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from temporalio.client import Client, WorkflowHandle
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -40,10 +41,13 @@ from agent_service.events import (
     TYPING,
     Envelope,
 )
+from agent_service.health import start_health_server
+from agent_service.maintenance import purge
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
 
 TOPIC = "agent.commands"
+DLQ_TOPIC = "agent.commands.dlq"
 DECISIONS = ("approved", "denied")
 
 
@@ -131,12 +135,15 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
                     approval_id, decision, org_id, conversation_id, argument
                 )
                 await conn.execute(
-                    "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-                    " on conflict do nothing",
+                    "insert into outbox"
+                    " (id, topic, payload, org_id, conversation_id)"
+                    " values (%s, %s, %s, %s, %s) on conflict do nothing",
                     (
                         f"approval-resolved:{approval_id}:{decision}",
                         APPROVAL_TOPIC,
                         event.to_json().decode(),
+                        org_id,
+                        conversation_id,
                     ),
                 )
     handle = client.get_workflow_handle(workflow_id)
@@ -191,7 +198,30 @@ async def _reap_loop() -> None:
         await asyncio.sleep(60)
 
 
+async def _maintenance_loop() -> None:
+    while True:
+        try:
+            counts = await purge()
+            if counts:
+                print(f"[purged] {counts}", flush=True)
+        except Exception as exc:
+            print(f"[purge failed] {exc}", flush=True)
+        await asyncio.sleep(3600)
+
+
+async def _dead_letter(producer: AIOKafkaProducer, message, exc: Exception) -> None:
+    try:
+        event = json.loads(message.value)
+    except Exception:
+        event = {"raw": message.value.decode(errors="replace")}
+    payload = json.dumps(
+        {"error": f"{type(exc).__name__}: {exc}", "event": event}
+    ).encode()
+    await producer.send_and_wait(DLQ_TOPIC, payload)
+
+
 async def main() -> None:
+    start_health_server(int(os.environ.get("HEALTH_PORT", "8081")), "consumer")
     client = await Client.connect(
         os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
     )
@@ -202,22 +232,29 @@ async def main() -> None:
         group_id="agent-service",
         auto_offset_reset="earliest",
     )
+    producer = AIOKafkaProducer(
+        bootstrap_servers=os.environ.get("KAFKA_BROKERS", "localhost:9092")
+    )
     await consumer.start()
+    await producer.start()
     reaper = asyncio.create_task(_reap_loop())
+    maintenance = asyncio.create_task(_maintenance_loop())
     print(f"consumer ready: {TOPIC}", flush=True)
     try:
         async for message in consumer:
             try:
                 await handle(client, Envelope.from_json(message.value))
             except (ValueError, KeyError) as exc:
-                # Poison command: record it and move on.
-                print(f"[skip] {exc}", flush=True)
+                await _dead_letter(producer, message, exc)
+                print(f"[dlq] {exc}", flush=True)
             # An unhandled error stops the consumer before this line. The
             # offset stays uncommitted and the bus redelivers the command.
             await consumer.commit()
     finally:
         reaper.cancel()
+        maintenance.cancel()
         await consumer.stop()
+        await producer.stop()
 
 
 if __name__ == "__main__":

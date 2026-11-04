@@ -447,5 +447,6 @@ design. They exist; they are not specified here.
 - Identity provider: Zitadel or Keycloak?
 - BYOC packaging: Helm chart only, or an operator the customer runs?
 - Whether the edge gateway lives in this repository or its own.
-- Event log retention window, and what is archived where.
+- What the analytics and evals archive from the retained rows (the agent service
+  retention windows are set in [ADR 0003](adr/0003-retention-deletion-health.md)).
 - Whether the evals service reads the agent database or only the event archive.

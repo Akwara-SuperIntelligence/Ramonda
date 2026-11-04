@@ -38,6 +38,7 @@ from agent_service.activities import (
     send_user,
     should_speak,
 )
+from agent_service.health import start_health_server
 from agent_service.workflow import HELPER_QUEUE, HelperWorkflow, RunWorkflow
 
 TASK_QUEUE = "agent-orchestrator"
@@ -68,6 +69,7 @@ ACTIVITIES = [
 
 async def main() -> None:
     address = os.environ.get("TEMPORAL_ADDRESS", "localhost:7233")
+    start_health_server(int(os.environ.get("HEALTH_PORT", "8080")), "worker")
     client = await Client.connect(address)
     workers = [
         Worker(
