@@ -146,6 +146,10 @@ unknown types.
 Do **not** emit an event per tool call or per model call. That is trace data, not
 domain data; it belongs in spans. The bus is for facts other services act on.
 
+The kinds of human interaction behind `agent.approval.requested` and the
+`options` field on `agent.message.composed` are in
+[ADR 0001](adr/0001-interaction-kinds.md).
+
 ### 4.3 Commands accepted
 
 | Command | Caller | Effect |
@@ -158,6 +162,10 @@ domain data; it belongs in spans. The bus is for facts other services act on.
 
 Commands are idempotent on `command_id`, carry a reply event, and are the only
 write path from outside. Everything else is read-only.
+
+`ResolveApproval` carries `approval_id`, `decision`, and an optional `argument`.
+The argument replaces the reviewed string before the effect runs. The approval
+row still changes only from `pending`, so a replay cannot release a second send.
 
 ### 4.4 Tool surface
 

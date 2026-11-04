@@ -23,11 +23,12 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
-from agent_service.activities import _dsn, prewarm, reap_tasks
+from agent_service.activities import _dsn, _resolved_envelope, prewarm, reap_tasks
 from agent_service.events import (
-    APPROVAL_RESOLVED,
+    APPROVAL_TOPIC,
     HELPER_COMPLETED,
     HELPERS_TOPIC,
+    RESOLVE_APPROVAL,
     SEND_MESSAGE,
     TYPING,
     Envelope,
@@ -72,27 +73,49 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     """Record the decision once, then signal. A repeat signal is harmless."""
     approval_id = envelope.payload["approval_id"]
     decision = envelope.payload["decision"]
+    argument = envelope.payload.get("argument")
     if decision not in DECISIONS:
         raise ValueError(f"unknown decision: {decision}")
+    if argument is not None and not isinstance(argument, str):
+        raise ValueError("argument must be a string")
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        cursor = await conn.execute(
-            "update approvals set status = %s, resolved_at = now()"
-            " where id = %s and status = 'pending' returning workflow_id",
-            (decision, approval_id),
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            # A different decision already won; this one is ignored.
+        async with conn.transaction():
             cursor = await conn.execute(
-                "select workflow_id from approvals where id = %s and status = %s",
-                (approval_id, decision),
+                "update approvals set status = %s, resolved_at = now(),"
+                " arguments = coalesce(%s, arguments)"
+                " where id = %s and status = 'pending'"
+                " returning workflow_id, conversation_id, org_id, arguments",
+                (decision, argument, approval_id),
             )
             row = await cursor.fetchone()
-    if row is None:
-        return None
-    handle = client.get_workflow_handle(row[0])
+            if row is None:
+                # A different decision already won; this one is ignored.
+                cursor = await conn.execute(
+                    "select workflow_id, arguments from approvals"
+                    " where id = %s and status = %s",
+                    (approval_id, decision),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                workflow_id, argument = row
+            else:
+                workflow_id, conversation_id, org_id, argument = row
+                event = _resolved_envelope(
+                    approval_id, decision, org_id, conversation_id, argument
+                )
+                await conn.execute(
+                    "insert into outbox (id, topic, payload) values (%s, %s, %s)"
+                    " on conflict do nothing",
+                    (
+                        f"approval-resolved:{approval_id}:{decision}",
+                        APPROVAL_TOPIC,
+                        event.to_json().decode(),
+                    ),
+                )
+    handle = client.get_workflow_handle(workflow_id)
     try:
-        await handle.signal("resolve", args=[decision, approval_id])
+        await handle.signal("resolve", args=[decision, approval_id, argument])
     except RPCError as exc:
         # The turn is already finished; the decision is still recorded.
         if exc.status != RPCStatusCode.NOT_FOUND:
@@ -102,14 +125,14 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
 
 async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     """Handle one command. None if it was already handled or had no effect."""
-    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED, TYPING, HELPER_COMPLETED):
+    if envelope.type not in (SEND_MESSAGE, RESOLVE_APPROVAL, TYPING, HELPER_COMPLETED):
         raise ValueError(f"unsupported event type: {envelope.type}")
     if envelope.type == TYPING:
         if not await _claim(envelope):
             return None
         await prewarm(envelope.org_id, envelope.subject["conversation_id"])
         return None
-    if envelope.type == APPROVAL_RESOLVED:
+    if envelope.type == RESOLVE_APPROVAL:
         return await _resolve(client, envelope)
     if envelope.type == HELPER_COMPLETED:
         task_id = envelope.subject["task_id"]
