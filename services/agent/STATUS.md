@@ -15,16 +15,19 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 53 tests
+make test                                # migrate + 60 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **53 tests**, 4 of them live model tests; migrations through `012`;
+State: **60 tests**, including the item-7 unit cases; migrations through `013`;
 prompt version **8**. CI runs the suite and the link check on every push.
 `make migrate` is safe to rerun.
+
+The 3 live-model evals in the suite require a valid `DEEPSEEK_API_KEY` and skip
+when it is absent.
 
 ## 3. Where we came from
 
@@ -52,6 +55,10 @@ Oldest first. Each item is merged and tested.
 | Untrusted tags | external tool output and helper reports are marked as data |
 | Live injection | the model named the injected instruction and did not obey it |
 | Silence | user turns speak; routine helper reports once a day; run events |
+| Retention | hourly purge; windows in [ADR 0003](../../docs/adr/0003-retention-deletion-health.md) |
+| Deletion | operator tool; hard delete with audit; refuses a busy conversation |
+| Health | `/healthz` and `/readyz` on the worker and the consumer |
+| Dead letters | poison commands go to `agent.commands.dlq`; replay tool |
 
 ## 4. How it fits together
 
@@ -59,12 +66,16 @@ Oldest first. Each item is merged and tested.
 |---|---|
 | `workflow.py` | `RunWorkflow` (one turn) and `HelperWorkflow` (one delegated task) |
 | `activities.py` | Effects, reviewer, approval payloads, trust tags, silence policy, run events, tools, prompts, memory, tasks |
-| `consumer.py` | Kafka commands, typing, approval resolutions, helper completions, reaper loop |
+| `consumer.py` | Kafka commands, typing, approval resolutions, helper completions, reaper, purge, dead letters |
 | `relay.py` | Publishes the outbox |
 | `delivery.py` | Reference client; prints messages, choices, and typed approvals |
+| `health.py` | Liveness and readiness endpoints |
+| `maintenance.py` | Retention purge and scoped hard delete |
+| `delete.py` | Operator CLI for deletion |
+| `dlq.py` | Inspect and replay dead letters |
 | `worker.py` | Two queues: `agent-orchestrator`, `agent-helper` |
 | `events.py` | Envelope, event types, topics |
-| `migrations/` | `001`–`012`, idempotent |
+| `migrations/` | `001`–`013`, idempotent |
 | `skills/<name>/SKILL.md` | Model-read skills |
 
 ## 5. What is left
@@ -79,7 +90,7 @@ The current plan is **harden first**:
 | 4 | Silence policy | **done**: 24h routine budget, failed/question reports speak, run events |
 | 5 | Tracing + the four metrics | partial: tokens and cache only |
 | 6 | Quotas + priority | not started |
-| 7 | Retention, deletion, health, dead letters | not started |
+| 7 | Retention, deletion, health, dead letters | **done**: hourly purge, scoped delete, health endpoints, DLQ |
 | 8 | Evals gate in CI | **done**: tests and links; live model tests skip without a key |
 | 9 | Sandbox client + contract | not started |
 | 10 | Retrieval client + contract | not started |
@@ -96,7 +107,8 @@ The taxonomy, their fields, and their blockers are in
 - **Commands are unauthenticated.** Anyone who can publish to `agent.commands`
   can approve. The edge and identity provider are item 12.
 - **The consumer stops on an unhandled error.** The offset stays uncommitted and
-  the bus redelivers. There is no dead-letter topic yet; that is item 7.
+  the bus redelivers. A poison command goes to `agent.commands.dlq`; a transient
+  error does not diverge poison from retry.
 - **`org_id` is a parameter, not a boundary.** No row-level security yet.
 - **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`8`; adding a
   prompt means adding a version, never editing an old one.
@@ -122,7 +134,11 @@ The taxonomy, their fields, and their blockers are in
   35 minutes is failed by the reaper and reported.
 - **Memory is per conversation.** No cross-conversation profile yet.
 - **Live evals are not in CI.** The unit suite and link check are gated. The
-  four live model tests skip without `DEEPSEEK_API_KEY`.
+  live model tests skip when no valid `DEEPSEEK_API_KEY` is present.
+- **Deletion is destructive and permanent.** It is an operator tool, not a bus
+  command, until commands are authenticated (item 12). The audit row is the only record.
+- **Purge runs in the consumer process.** A paused or scaled-down consumer does
+  not purge. This is acceptable until there is a separate maintenance worker.
 
 ## 7. Fresh-session checklist
 

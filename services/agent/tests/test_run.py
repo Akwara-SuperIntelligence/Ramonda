@@ -19,6 +19,7 @@ import json
 from contextlib import AsyncExitStack
 import re
 import os
+import urllib.request
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,6 +31,7 @@ from temporalio.worker import Worker
 
 from agent_service import activities
 from agent_service import consumer as consumer_module
+from agent_service import maintenance
 from agent_service.activities import (
     acquire_lock,
     call_model,
@@ -54,6 +56,7 @@ from agent_service.activities import (
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
 from agent_service.events import RESOLVE_APPROVAL, SEND_MESSAGE, TYPING, Envelope
+from agent_service.health import start_health_server
 from agent_service.relay import relay_once
 from agent_service.workflow import HELPER_QUEUE, HelperTask, HelperWorkflow, RunRequest, RunWorkflow
 
@@ -1489,3 +1492,334 @@ def test_a_failing_helper_leaves_a_task_for_the_reaper(monkeypatch):
     assert asyncio.run(
         _scalar("select status from tasks where conversation_id = %s", (fresh,))
     ) == "running"
+
+
+def test_retention_windows_are_doubled():
+    assert (
+        maintenance.MESSAGE_DAYS,
+        maintenance.MODEL_CALL_DAYS,
+        maintenance.EFFECT_DAYS,
+        maintenance.INBOX_DAYS,
+        maintenance.OUTBOX_DAYS,
+        maintenance.APPROVAL_DAYS,
+        maintenance.REVIEW_DAYS,
+        maintenance.TASK_DAYS,
+        maintenance.NOTIFICATION_DAYS,
+        maintenance.DELETION_DAYS,
+    ) == (60, 60, 180, 180, 180, 730, 730, 180, 180, 730)
+
+
+def test_purge_deletes_old_rows_and_keeps_new_ones():
+    org = f"ret-{uuid4().hex}"
+    conv = f"ret-{uuid4().hex}"
+    old = f"ret-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into messages"
+                " (org_id, conversation_id, seq, step, role, content, created_at)"
+                " values (%s, %s, 1, 0, 'user', 'old', now() - interval '61 days')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into messages"
+                " (org_id, conversation_id, seq, step, role, content)"
+                " values (%s, %s, 2, 0, 'user', 'new')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into effects"
+                " (token, kind, payload, org_id, conversation_id, created_at)"
+                " values (%s, 'echo', 'x', %s, %s, now() - interval '181 days')",
+                (old, org, conv),
+            )
+            await conn.execute(
+                "insert into approvals"
+                " (id, org_id, conversation_id, workflow_id, action, arguments,"
+                "  status, created_at)"
+                " values (%s, %s, %s, 'wf', 'send_email', 'a@b', 'approved',"
+                "  now() - interval '731 days')",
+                (old, org, conv),
+            )
+            await conn.execute(
+                "insert into reviews"
+                " (org_id, conversation_id, run_id, step, tool, argument, verdict,"
+                "  reason, prompt_version, created_at)"
+                " values (%s, %s, 'run', 0, 'send_email', 'a@b', 'allow', 'ok',"
+                "  '1', now() - interval '731 days')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into tasks"
+                " (id, org_id, conversation_id, description, status,"
+                "  helper_workflow_id, created_at)"
+                " values (%s, %s, %s, 'old', 'done', 'h', now() - interval '181 days')",
+                (old, org, conv),
+            )
+            await conn.execute(
+                "insert into notifications (org_id, conversation_id, last_at)"
+                " values (%s, %s, now() - interval '181 days')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into inbox (event_id, org_id, received_at)"
+                " values (%s, %s, now() - interval '181 days')",
+                (old, org),
+            )
+            await conn.execute(
+                "insert into outbox"
+                " (id, topic, payload, org_id, conversation_id, created_at)"
+                " values (%s, 'agent.messages', '{}', %s, %s,"
+                "  now() - interval '181 days')",
+                (old, org, conv),
+            )
+            await conn.execute(
+                "insert into model_calls"
+                " (org_id, conversation_id, seq, step, model, prompt_hash,"
+                "  prompt_version, prompt_tokens, cache_hit, cache_miss,"
+                "  completion_tokens, created_at)"
+                " values (%s, %s, 1, 0, 'm', 'h', '1', 10, 1, 9, 2,"
+                "  now() - interval '61 days')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into memories"
+                " (org_id, conversation_id, kind, content, created_at)"
+                " values (%s, %s, 'fact', 'kept', now() - interval '400 days')",
+                (org, conv),
+            )
+
+    asyncio.run(seed())
+    counts = asyncio.run(maintenance.purge())
+
+    assert counts.get("messages", 0) >= 1
+    assert counts.get("effects", 0) >= 1
+    assert counts.get("approvals", 0) >= 1
+    assert counts.get("reviews", 0) >= 1
+    assert counts.get("tasks", 0) >= 1
+    assert counts.get("notifications", 0) >= 1
+    assert counts.get("inbox", 0) >= 1
+    assert counts.get("outbox", 0) >= 1
+    assert counts.get("model_calls", 0) >= 1
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id = %s and content = 'old'",
+            (conv,),
+        )
+    ) == 0
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id = %s and content = 'new'",
+            (conv,),
+        )
+    ) == 1
+    assert asyncio.run(
+        _scalar("select count(*) from effects where token = %s", (old,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from approvals where id = %s", (old,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from reviews where conversation_id = %s", (conv,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from tasks where conversation_id = %s", (conv,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from notifications where conversation_id = %s", (conv,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from inbox where event_id = %s", (old,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (old,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from model_calls where conversation_id = %s", (conv,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from memories where conversation_id = %s", (conv,))
+    ) == 1
+
+
+def test_delete_conversation_scopes_rows_and_writes_audit():
+    org = f"del-{uuid4().hex}"
+    conv = f"del-{uuid4().hex}"
+    other = f"del-{uuid4().hex}"
+    token = f"del-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into conversations (org_id, conversation_id) values (%s, %s)",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                " values (%s, %s, 1, 0, 'user', 'x'), (%s, %s, 1, 0, 'user', 'y')",
+                (org, conv, org, other),
+            )
+            await conn.execute(
+                "insert into effects (token, kind, payload, org_id, conversation_id)"
+                " values (%s, 'echo', 'x', %s, %s)",
+                (token, org, conv),
+            )
+            await conn.execute(
+                "insert into outbox (id, topic, payload, org_id, conversation_id)"
+                " values (%s, 'agent.messages', '{}', %s, %s)",
+                (token, org, conv),
+            )
+            await conn.execute(
+                "insert into approvals"
+                " (id, org_id, conversation_id, workflow_id, action, arguments)"
+                " values (%s, %s, %s, 'wf', 'send_email', 'a@b')",
+                (token, org, conv),
+            )
+            await conn.execute(
+                "insert into reviews"
+                " (org_id, conversation_id, run_id, step, tool, argument, verdict)"
+                " values (%s, %s, 'run', 0, 'send_email', 'a@b', 'allow')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into tasks"
+                " (id, org_id, conversation_id, description, status, helper_workflow_id)"
+                " values ('t1', %s, %s, 'x', 'done', 'h')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into notifications (org_id, conversation_id) values (%s, %s)",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into memories (org_id, conversation_id, kind, content)"
+                " values (%s, %s, 'fact', 'x')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into model_calls"
+                " (org_id, conversation_id, seq, step, model, prompt_hash,"
+                "  prompt_tokens, cache_hit, cache_miss, completion_tokens)"
+                " values (%s, %s, 1, 0, 'm', 'h', 1, 0, 1, 1)",
+                (org, conv),
+            )
+
+    asyncio.run(seed())
+    counts = asyncio.run(maintenance.delete_scope(org, conv))
+
+    assert counts["messages"] == 1
+    assert counts["effects"] == 1
+    assert counts["outbox"] == 1
+    assert counts["conversations"] == 1
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id in (%s, %s)",
+            (conv, other),
+        )
+    ) == 1
+    assert asyncio.run(
+        _scalar("select count(*) from deletions where org_id = %s and conversation_id = %s", (org, conv))
+    ) == 1
+    audit = json.loads(
+        asyncio.run(
+            _scalar(
+                "select counts::text from deletions where org_id = %s and conversation_id = %s",
+                (org, conv),
+            )
+        )
+    )
+    assert audit["messages"] == 1
+    assert audit["memories"] == 1
+
+
+def test_delete_refuses_a_busy_conversation():
+    org = f"busy-{uuid4().hex}"
+    conv = f"busy-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into conversation_locks"
+                " (org_id, conversation_id, workflow_id, expires_at)"
+                " values (%s, %s, 'wf', now() + interval '1 hour')",
+                (org, conv),
+            )
+            await conn.execute(
+                "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                " values (%s, %s, 1, 0, 'user', 'x')",
+                (org, conv),
+            )
+
+    asyncio.run(seed())
+    with pytest.raises(RuntimeError):
+        asyncio.run(maintenance.delete_scope(org, conv))
+    assert asyncio.run(
+        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
+    ) == 1
+
+
+def test_delete_org_removes_all_conversations():
+    org = f"orgdel-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into messages (org_id, conversation_id, seq, step, role, content)"
+                " values (%s, 'a', 1, 0, 'user', 'x'), (%s, 'b', 1, 0, 'user', 'y')",
+                (org, org),
+            )
+            await conn.execute(
+                "insert into inbox (event_id, org_id) values (%s, %s)",
+                (f"evt-{uuid4().hex}", org),
+            )
+
+    asyncio.run(seed())
+    counts = asyncio.run(maintenance.delete_scope(org, None))
+
+    assert counts["messages"] == 2
+    assert counts["inbox"] == 1
+    assert asyncio.run(
+        _scalar("select count(*) from messages where org_id = %s", (org,))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select conversation_id from deletions where org_id = %s", (org,))
+    ) == ""
+
+
+def test_health_endpoints():
+    server = start_health_server(0, "test")
+    port = server.server_address[1]
+    try:
+        alive = urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz", timeout=5)
+        ready = urllib.request.urlopen(f"http://127.0.0.1:{port}/readyz", timeout=5)
+        assert alive.status == 200
+        assert alive.read() == b"test alive"
+        assert ready.status == 200
+        assert ready.read() == b"test ready"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dead_letter_wraps_the_raw_event():
+    class Producer:
+        def __init__(self):
+            self.sent = []
+
+        async def send_and_wait(self, topic, value):
+            self.sent.append((topic, value))
+
+    class Message:
+        value = b"not json"
+
+    producer = Producer()
+    asyncio.run(
+        consumer_module._dead_letter(producer, Message(), ValueError("bad event"))
+    )
+
+    topic, value = producer.sent[0]
+    data = json.loads(value)
+    assert topic == consumer_module.DLQ_TOPIC
+    assert data["error"] == "ValueError: bad event"
+    assert data["event"]["raw"] == "not json"

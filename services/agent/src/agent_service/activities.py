@@ -368,12 +368,20 @@ def _dsn() -> str:
     )
 
 
-async def _claim(conn: psycopg.AsyncConnection, token: str, kind: str, payload: str) -> bool:
+async def _claim(
+    conn: psycopg.AsyncConnection,
+    token: str,
+    kind: str,
+    payload: str,
+    org_id: str = "",
+    conversation_id: str = "",
+) -> bool:
     """Insert the effect once. True the first time; False on any repeat."""
     cursor = await conn.execute(
-        "insert into effects (token, kind, payload) values (%s, %s, %s)"
+        "insert into effects (token, kind, payload, org_id, conversation_id)"
+        " values (%s, %s, %s, %s, %s)"
         " on conflict do nothing returning token",
-        (token, kind, payload),
+        (token, kind, payload, org_id, conversation_id),
     )
     return await cursor.fetchone() is not None
 
@@ -675,9 +683,15 @@ async def _report(
         (status, report, org_id, conversation_id, task_id),
     )
     await conn.execute(
-        "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-        " on conflict do nothing",
-        (envelope.event_id, HELPERS_TOPIC, envelope.to_json().decode()),
+        "insert into outbox (id, topic, payload, org_id, conversation_id)"
+        " values (%s, %s, %s, %s, %s) on conflict do nothing",
+        (
+            envelope.event_id,
+            HELPERS_TOPIC,
+            envelope.to_json().decode(),
+            org_id,
+            conversation_id,
+        ),
     )
 
 
@@ -890,7 +904,9 @@ async def send_user(
         )
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
-            if not await _claim(conn, effect_token, "turn", user_text):
+            if not await _claim(
+                conn, effect_token, "turn", user_text, org_id, conversation_id
+            ):
                 return
             await conn.execute(
                 "insert into messages (org_id, conversation_id, seq, step, role, content)"
@@ -901,8 +917,16 @@ async def send_user(
             )
             if notify:
                 await conn.execute(
-                    "insert into outbox (id, topic, payload) values (%s, %s, %s)",
-                    (effect_token, MESSAGE_TOPIC, envelope.to_json().decode()),
+                    "insert into outbox"
+                    " (id, topic, payload, org_id, conversation_id)"
+                    " values (%s, %s, %s, %s, %s)",
+                    (
+                        effect_token,
+                        MESSAGE_TOPIC,
+                        envelope.to_json().decode(),
+                        org_id,
+                        conversation_id,
+                    ),
                 )
                 if routine:
                     await conn.execute(
@@ -975,9 +999,15 @@ async def record_run(
     )
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         await conn.execute(
-            "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-            " on conflict do nothing",
-            (f"run:{run_id}:{status}", RUN_TOPIC, envelope.to_json().decode()),
+            "insert into outbox (id, topic, payload, org_id, conversation_id)"
+            " values (%s, %s, %s, %s, %s) on conflict do nothing",
+            (
+                f"run:{run_id}:{status}",
+                RUN_TOPIC,
+                envelope.to_json().decode(),
+                org_id,
+                conversation_id,
+            ),
         )
 
 
@@ -1172,9 +1202,16 @@ async def request_approval(
                 ),
             )
             await conn.execute(
-                "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-                " on conflict do nothing",
-                (approval_id, APPROVAL_TOPIC, envelope.to_json().decode()),
+                "insert into outbox"
+                " (id, topic, payload, org_id, conversation_id)"
+                " values (%s, %s, %s, %s, %s) on conflict do nothing",
+                (
+                    approval_id,
+                    APPROVAL_TOPIC,
+                    envelope.to_json().decode(),
+                    org_id,
+                    conversation_id,
+                ),
             )
 
 
@@ -1194,12 +1231,15 @@ async def expire_approval(approval_id: str) -> None:
                 return
             envelope = _resolved_envelope(approval_id, "expired", row[0], row[1])
             await conn.execute(
-                "insert into outbox (id, topic, payload) values (%s, %s, %s)"
-                " on conflict do nothing",
+                "insert into outbox"
+                " (id, topic, payload, org_id, conversation_id)"
+                " values (%s, %s, %s, %s, %s) on conflict do nothing",
                 (
                     f"approval-resolved:{approval_id}:expired",
                     APPROVAL_TOPIC,
                     envelope.to_json().decode(),
+                    row[0],
+                    row[1],
                 ),
             )
 
@@ -1214,7 +1254,9 @@ async def _write_memory(
 ) -> None:
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
-            if not await _claim(conn, effect_token, kind, content):
+            if not await _claim(
+                conn, effect_token, kind, content, org_id, conversation_id
+            ):
                 return
             await conn.execute(
                 "insert into memories (org_id, conversation_id, kind, content, source)"
@@ -1242,9 +1284,15 @@ async def _recall(org_id: str, conversation_id: str, query: str) -> str:
     return "\n".join(lines) or f"nothing found for: {query}"
 
 
-async def _effect(tool: str, argument: str, effect_token: str) -> ToolResult:
+async def _effect(
+    tool: str,
+    argument: str,
+    effect_token: str,
+    org_id: str = "",
+    conversation_id: str = "",
+) -> ToolResult:
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        await _claim(conn, effect_token, tool, argument)
+        await _claim(conn, effect_token, tool, argument, org_id, conversation_id)
 
     if len(argument) > SIZE_LIMIT:
         ARTIFACTS.mkdir(parents=True, exist_ok=True)
@@ -1257,11 +1305,11 @@ async def _effect(tool: str, argument: str, effect_token: str) -> ToolResult:
 
 
 async def _echo(org_id, conversation_id, argument, effect_token) -> ToolResult:
-    return await _effect("echo", argument, effect_token)
+    return await _effect("echo", argument, effect_token, org_id, conversation_id)
 
 
 async def _send_email(org_id, conversation_id, argument, effect_token) -> ToolResult:
-    return await _effect("send_email", argument, effect_token)
+    return await _effect("send_email", argument, effect_token, org_id, conversation_id)
 
 
 async def _read_file(org_id, conversation_id, argument, effect_token) -> ToolResult:

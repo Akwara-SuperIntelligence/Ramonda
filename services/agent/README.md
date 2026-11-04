@@ -84,6 +84,11 @@ Every increment names its sources. This table is the running index.
 | ADR 0001 — choice options | `activities.py` (`_parse_reply`, `send_user`), `delivery.py` | Options on the message event; the card waits for channels |
 | ADR 0002 — untrusted input | `activities.py` (`wrap_untrusted`, `run_tool`, `load_history`) | External text tagged as data; facts carry provenance |
 | ADR 0002 — silence | `activities.py` (`should_speak`, `send_user`), `workflow.py` | One routine update per day; run events; silent turns are stored |
+| build §3, EDA §12 — retention | `maintenance.py` (`purge`), `migrations/013_retention.sql` | Hourly purge; windows in ADR 0003 |
+| build §3 — deletion | `maintenance.py` (`delete_scope`), `delete.py` | Hard delete with audit; refuses a busy conversation |
+| build §3 — health | `health.py` | `/healthz` and `/readyz`; readiness checks Postgres |
+| EDA §12 — dead letters | `consumer.py`, `dlq.py` | Poison commands to `agent.commands.dlq`; replay tool |
+| ADR 0003 — retention, deletion, health | `docs/adr/0003-retention-deletion-health.md` | Windows, delete rule, health, DLQ |
 
 ## Verified
 
@@ -204,7 +209,14 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.approve <id> approved
 ../../.venv/bin/python -m agent_service.approve <id> approved --argument "edited text"
 ../../.venv/bin/python -m agent_service.approve <id> approved --field To=a@b --field Message=edited
+../../.venv/bin/python -m agent_service.delete --org acme --conversation c1 --confirm   # delete one
+../../.venv/bin/python -m agent_service.delete --org acme --confirm                  # delete org
+../../.venv/bin/python -m agent_service.dlq                                          # inspect one dead letter
+../../.venv/bin/python -m agent_service.dlq --replay                                # republish one
 ```
+
+Health: the worker exposes `/healthz` and `/readyz` on port `8080`, the consumer
+on `8081` (override with `HEALTH_PORT`).
 
 Publish an event to `agent.commands`:
 

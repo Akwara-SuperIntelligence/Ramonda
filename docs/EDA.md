@@ -149,7 +149,8 @@ domain data; it belongs in spans. The bus is for facts other services act on.
 The kinds of human interaction behind `agent.approval.requested` and the
 `options` field on `agent.message.composed` are in
 [ADR 0001](adr/0001-interaction-kinds.md). Trust tags and the silence policy are
-in [ADR 0002](adr/0002-trust-and-silence.md).
+in [ADR 0002](adr/0002-trust-and-silence.md). Retention windows, deletion, health
+endpoints, and the dead-letter policy are in [ADR 0003](adr/0003-retention-deletion-health.md).
 
 ### 4.3 Commands accepted
 
