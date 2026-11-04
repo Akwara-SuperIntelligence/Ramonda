@@ -27,6 +27,7 @@ reference.
 | Which language, and why? | `docs/LANGUAGE.md` |
 | What does a term mean? | `GLOSSARY.md` |
 | How was a mechanism demonstrated? | `course/lessons/` |
+| Where is the agent service now, and what is left? | `services/agent/STATUS.md` |
 
 ## Before you finish
 
