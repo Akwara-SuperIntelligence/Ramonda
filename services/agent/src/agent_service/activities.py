@@ -123,6 +123,25 @@ Skills: status-update. Read one with read_skill before using it."""
 V3_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
+# Frozen. Do not edit: conversations pinned to this version must keep it.
+V4_RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate, collect, helpers, message_helper, stop_helper.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Delegate starts a helper and returns its id; it does not wait. collect waits
+for reports. helpers lists what is running. message_helper and stop_helper
+manage one helper. Collect or stop every helper before you answer.
+Delegate work that needs many tool calls or reads a lot of data. The helper
+returns a report; give it a self-contained task.
+Skills: status-update. Read one with read_skill before using it."""
+V4_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
 RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
 To call a tool: {"tool": "<name>", "argument": "<text>"}
@@ -132,9 +151,10 @@ Do not call a tool that already succeeded in this conversation.
 Tools: """ + TOOL_NAMES + """.
 Use remember for facts that must survive. Use note for the current task.
 Call get_tool_schema with a tool name before you use a tool you do not know.
-Delegate starts a helper and returns its id; it does not wait. collect waits
-for reports. helpers lists what is running. message_helper and stop_helper
-manage one helper. Collect or stop every helper before you answer.
+Delegate starts a helper and returns a task id; it does not wait. collect waits
+for reports. helpers lists tasks and their status. message_helper and
+stop_helper take a task id; stop_helper also takes all. Collect or stop every
+task before you answer.
 Delegate work that needs many tool calls or reads a lot of data. The helper
 returns a report; give it a self-contained task.
 Skills: status-update. Read one with read_skill before using it."""
@@ -162,7 +182,7 @@ SYSTEM = RULES + "\n\n" + TOOLS
 
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
-PROMPT_VERSION = "4"
+PROMPT_VERSION = "5"
 PROMPTS = {
     "1": {
         "system": V1_RULES + "\n\n" + V1_TOOLS,
@@ -178,6 +198,11 @@ PROMPTS = {
         "system": V3_RULES + "\n\n" + V3_TOOLS,
         "rules": _hash(V3_RULES),
         "tools": _hash(V3_TOOLS),
+    },
+    "4": {
+        "system": V4_RULES + "\n\n" + V4_TOOLS,
+        "rules": _hash(V4_RULES),
+        "tools": _hash(V4_TOOLS),
     },
     PROMPT_VERSION: {
         "system": SYSTEM,
@@ -458,6 +483,53 @@ async def prewarm(org_id: str, conversation_id: str) -> None:
             "max_tokens": 1,
         }
     )
+
+
+@activity.defn
+async def create_task(
+    org_id: str, conversation_id: str, description: str, helper_workflow_id: str
+) -> str:
+    """Insert the to-do item and return its short id (t1, t2, ...)."""
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select count(*) from tasks where org_id = %s and conversation_id = %s",
+            (org_id, conversation_id),
+        )
+        task_id = f"t{(await cursor.fetchone())[0] + 1}"
+        await conn.execute(
+            "insert into tasks (id, org_id, conversation_id, description, helper_workflow_id)"
+            " values (%s, %s, %s, %s, %s)",
+            (task_id, org_id, conversation_id, description, helper_workflow_id),
+        )
+        return task_id
+
+
+@activity.defn
+async def finish_task(
+    org_id: str,
+    conversation_id: str,
+    task_id: str,
+    status: str,
+    report: str,
+) -> None:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "update tasks set status = %s, report = %s, updated_at = now()"
+            " where org_id = %s and conversation_id = %s and id = %s",
+            (status, report, org_id, conversation_id, task_id),
+        )
+
+
+@activity.defn
+async def list_tasks(org_id: str, conversation_id: str) -> str:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select id, status, description from tasks"
+            " where org_id = %s and conversation_id = %s order by created_at",
+            (org_id, conversation_id),
+        )
+        rows = [f"{task_id} {status}: {description}" async for task_id, status, description in cursor]
+        return "\n".join(rows) or "no tasks"
 
 
 @activity.defn
