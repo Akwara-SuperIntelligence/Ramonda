@@ -19,6 +19,9 @@ import os
 import psycopg
 from aiokafka import AIOKafkaConsumer
 from temporalio.client import Client, WorkflowHandle
+from temporalio.common import WorkflowIDReusePolicy
+from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from agent_service.activities import _dsn, prewarm, reap_tasks
 from agent_service.events import (
@@ -47,19 +50,26 @@ async def _claim(envelope: Envelope) -> bool:
 
 
 async def _start(client: Client, envelope: Envelope, text: str) -> WorkflowHandle:
-    return await client.start_workflow(
-        RunWorkflow.run,
-        RunRequest(
-            conversation_id=envelope.subject["conversation_id"],
-            text=text,
-            org_id=envelope.org_id,
-        ),
-        id=f"turn:{envelope.event_id}",
-        task_queue=TASK_QUEUE,
-    )
+    """Start the turn. The workflow ID makes a repeat safe."""
+    workflow_id = f"turn:{envelope.event_id}"
+    try:
+        return await client.start_workflow(
+            RunWorkflow.run,
+            RunRequest(
+                conversation_id=envelope.subject["conversation_id"],
+                text=text,
+                org_id=envelope.org_id,
+            ),
+            id=workflow_id,
+            task_queue=TASK_QUEUE,
+            id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+        )
+    except WorkflowAlreadyStartedError:
+        return client.get_workflow_handle(workflow_id)
 
 
 async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
+    """Record the decision once, then signal. A repeat signal is harmless."""
     approval_id = envelope.payload["approval_id"]
     decision = envelope.payload["decision"]
     if decision not in DECISIONS:
@@ -71,20 +81,32 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
             (decision, approval_id),
         )
         row = await cursor.fetchone()
+        if row is None:
+            # A different decision already won; this one is ignored.
+            cursor = await conn.execute(
+                "select workflow_id from approvals where id = %s and status = %s",
+                (approval_id, decision),
+            )
+            row = await cursor.fetchone()
     if row is None:
         return None
     handle = client.get_workflow_handle(row[0])
-    await handle.signal("resolve", args=[decision, approval_id])
-    return handle
+    try:
+        await handle.signal("resolve", args=[decision, approval_id])
+    except RPCError as exc:
+        # The turn is already finished; the decision is still recorded.
+        if exc.status != RPCStatusCode.NOT_FOUND:
+            raise
+    return handle if await _claim(envelope) else None
 
 
 async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     """Handle one command. None if it was already handled or had no effect."""
     if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED, TYPING, HELPER_COMPLETED):
         raise ValueError(f"unsupported event type: {envelope.type}")
-    if not await _claim(envelope):
-        return None
     if envelope.type == TYPING:
+        if not await _claim(envelope):
+            return None
         await prewarm(envelope.org_id, envelope.subject["conversation_id"])
         return None
     if envelope.type == APPROVAL_RESOLVED:
@@ -92,8 +114,14 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     if envelope.type == HELPER_COMPLETED:
         task_id = envelope.subject["task_id"]
         text = f"helper {task_id} finished: {envelope.payload['report']}"
-        return await _start(client, envelope, text)
-    return await _start(client, envelope, envelope.payload["text"])
+    else:
+        text = envelope.payload["text"]
+    handle = await _start(client, envelope, text)
+    # The inbox is written after the effect. A crash here repeats the start,
+    # which the workflow ID absorbs; it does not lose the command.
+    if not await _claim(envelope):
+        return None
+    return handle
 
 
 async def _reap_loop() -> None:
@@ -125,8 +153,11 @@ async def main() -> None:
         async for message in consumer:
             try:
                 await handle(client, Envelope.from_json(message.value))
-            except Exception as exc:
+            except (ValueError, KeyError) as exc:
+                # Poison command: record it and move on.
                 print(f"[skip] {exc}", flush=True)
+            # An unhandled error stops the consumer before this line. The
+            # offset stays uncommitted and the bus redelivers the command.
             await consumer.commit()
     finally:
         reaper.cancel()

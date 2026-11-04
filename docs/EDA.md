@@ -166,24 +166,31 @@ The model's tools are the narrow waist: `run_shell`, `send_user`, `remember`,
 crosses the product boundary, which is why channel changes never touch the
 harness. `retrieve` is the only door to organisational knowledge.
 
-## 5. Exactly-once is a lie; here are the three dedupe layers
+## 5. Exactly-once is a lie; here are the dedupe layers
 
 | Layer | Mechanism | Catches |
 |---|---|---|
-| Inbox | `inbox(event_id)` unique constraint, same transaction as the effect | Redelivery from the bus |
-| Workflow | Workflow ID `turn:{event_id}`, one execution per event | Duplicate starts |
+| Inbox | `inbox(event_id)` unique constraint, written after the idempotent effect | A second handling after a crash |
+| Workflow | Workflow ID `turn:{event_id}`; an already-started reply is success | Duplicate starts |
 | Conversation | `conversation_locks` row held for the whole turn | Two turns at once on one conversation |
 | Effect | Effect token `sha256(run_id, step_index, tool_name)` on every side effect | Activity retry |
+| Approval | `update ... where status = 'pending'` plus the stored decision; a repeat signal is safe | Replayed approval |
 
 - **Outbox.** Write product state and the outgoing event in one Postgres
   transaction; a relay or CDC publishes. Never publish from the workflow body,
   and never write the database and publish as two separate steps.
+- **Order the inbox after the effect.** A workflow start cannot share the
+  database transaction. Start with the deterministic workflow ID, treat
+  "already started" as success, then record the inbox. A crash before the inbox
+  write repeats an idempotent effect; it does not lose the command.
 - **Effect tokens** go into sandbox calls, egress writes, payments, and message
   sends. The receiving side dedupes on the token, not on our retries.
-- **Kafka offsets** commit only after the effect or the inbox row commits.
-  Duplicates are safe because of the inbox; lost events are not.
+- **Kafka offsets** commit only after the effect or the inbox row commits. An
+  unhandled error stops the consumer before it commits, so the bus redelivers.
+  Duplicates are safe; lost events are not.
 - **Approvals are single-use** with an expiry; a replayed approval event must not
-  release a second send.
+  release a second send. The approval row is the claim: it changes only from
+  `pending`, and a repeat of the stored decision may signal again.
 
 ## 6. Ordering, priority, fairness
 

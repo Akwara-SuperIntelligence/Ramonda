@@ -8,8 +8,9 @@ orchestrator, and the harness worker. Python.
 
 ## Status
 
-No code yet. This directory is where [docs/EDA.md](../../docs/EDA.md) becomes
-software.
+A working slice: a durable turn, event ingress and egress, Postgres state,
+approvals, memory, and delegation. Not production. [STATUS.md](STATUS.md) is the
+current state and the remaining work.
 
 ## Read first
 
@@ -28,18 +29,11 @@ the identity provider.
 
 Does not own the bus, the graph store, the sandbox, or the identity provider.
 
-## Target layout
+## Layout
 
-```
-src/agent_service/
-  consumer/     inbox, dedupe, envelope handling
-  workflows/    thin, deterministic, versioned
-  activities/   harness: model, context, tools, memory
-  tools/        run_shell, send_user, remember, recall, delegate, retrieve, browser
-tests/
-migrations/
-Dockerfile
-```
+The service is flat modules: `consumer.py`, `workflow.py`, `activities.py`,
+`relay.py`, `delivery.py`, `events.py`, `worker.py`, plus `tests/`,
+`migrations/`, and `skills/`. [STATUS.md](STATUS.md) §4 says what each one does.
 
 ## Coverage
 
@@ -70,7 +64,7 @@ Every increment names its sources. This table is the running index.
 | talk §05 — measure the cache | `activities.py` (`call_model`), `migrations/007_context.sql` | Hit and miss tokens stored per call |
 | talk §05 — compact inside the warm window | `activities.py` (`compact`) | Old turns become a summary after a threshold |
 | talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
-| talk §05 — stable section order | `activities.py` (`RULES`, `TOOLS`, `PROMPT_HASH`) | The prefix hash is recorded with every call |
+| talk §05 — stable section order | `activities.py` (`V6_RULES`, `V6_TOOLS`, `PROMPTS`) | The prefix hash is recorded with every call |
 | talk §04 — tool search | `activities.py` (`TOOL_SCHEMAS`, `get_tool_schema`) | Names in the prompt, schema fetched on demand |
 | talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
 | talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |

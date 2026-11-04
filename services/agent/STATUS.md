@@ -4,27 +4,25 @@ Start here in a fresh session. This file records **state**, not history. The
 design lives in [docs/EDA.md](../../docs/EDA.md) and
 [docs/BUILD.md](../../docs/BUILD.md); do not duplicate it here.
 
-Last updated at commit `62a6365`.
-
 ## 1. What this service is
 
 The always-on agent: one deployable containing the event consumer, the Temporal
 orchestrator, and the harness. It owns conversations, episodic memory, run
 orchestration, approvals, and delegation. It calls retrieval, the sandbox,
-secrets, the LLM, and channels — none of which exist yet.
+secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ## 2. Run and verify
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 38 tests
+make test                                # migrate + 40 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **38 tests**, 3 of them live model evals; migrations through `010`;
+State: **40 tests**, 3 of them live model evals; migrations through `010`;
 prompt version **6**. `make migrate` is safe to rerun.
 
 ## 3. Where we came from
@@ -63,7 +61,7 @@ Oldest first. Each item is merged and tested.
 
 ## 5. What is left
 
-The current plan is **harden first** (see section 5 of the previous session):
+The current plan is **harden first**:
 
 | # | Item | Status |
 |---|---|---|
@@ -74,7 +72,7 @@ The current plan is **harden first** (see section 5 of the previous session):
 | 5 | Tracing + the four metrics | partial: tokens and cache only |
 | 6 | Quotas + priority | not started |
 | 7 | Retention, deletion, health, dead letters | not started |
-| 8 | Evals gate in CI | partial: 38 tests, no gate |
+| 8 | Evals gate in CI | partial: 40 tests, no gate |
 | 9 | Sandbox client + contract | not started |
 | 10 | Retrieval client + contract | not started |
 | 11 | Secret broker | not started |
@@ -85,6 +83,8 @@ The current plan is **harden first** (see section 5 of the previous session):
 
 - **Commands are unauthenticated.** Anyone who can publish to `agent.commands`
   can approve. The edge and identity provider are item 12.
+- **The consumer stops on an unhandled error.** The offset stays uncommitted and
+  the bus redelivers. There is no dead-letter topic yet; that is item 7.
 - **`org_id` is a parameter, not a boundary.** No row-level security yet.
 - **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`6`; adding a
   prompt means adding a version, never editing an old one.
@@ -121,6 +121,8 @@ Call these with the Skill tool when they apply:
 
 - Every module states **Sources** (talk §, lesson) and **Delta** (what we add).
 - Every side effect carries an **effect token**; a retry is a no-op.
+- Write the **inbox after the effect**. A crash repeats an idempotent effect; it
+  does not lose the command.
 - Tools are declared once in `TOOL_SPECS`; the prompt, schema lookup, and
   approval policy derive from it.
 - The outbox is the only way to publish; never write the database and publish

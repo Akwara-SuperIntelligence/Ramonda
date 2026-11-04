@@ -88,7 +88,6 @@ TOOL_SPECS = [
     ),
 ]
 
-TOOL_NAMES = ", ".join(tool.name for tool in TOOL_SPECS)
 TOOL_SCHEMAS = {tool.name: tool.schema for tool in TOOL_SPECS}
 NEEDS_APPROVAL = {tool.name: True for tool in TOOL_SPECS if tool.approval}
 
@@ -164,13 +163,14 @@ Skills: status-update. Read one with read_skill before using it."""
 V5_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
-RULES = """You are an agent on a server. You work in steps.
+# Frozen. Do not edit. Add version 7 as a new block above PROMPTS.
+V6_RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
 To call a tool: {"tool": "<name>", "argument": "<text>"}
 To answer: {"final": "<text>"}
 You may call tools over several steps before you answer.
 Do not call a tool that already succeeded in this conversation.
-Tools: """ + TOOL_NAMES + """.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate, collect, helpers, message_helper, stop_helper.
 Use remember for facts that must survive. Use note for the current task.
 Call get_tool_schema with a tool name before you use a tool you do not know.
 Delegate starts a helper and returns a task id; it does not wait. collect waits
@@ -180,7 +180,7 @@ tasks run; a finished task reports to you as a new message.
 Delegate work that needs many tool calls or reads a lot of data. The helper
 returns a report; give it a self-contained task.
 Skills: status-update. Read one with read_skill before using it."""
-V3_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+V6_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
 # Frozen. Do not edit: conversations pinned to this version must keep it.
@@ -196,11 +196,6 @@ Call get_tool_schema with a tool name before you use a tool you do not know.
 Skills: status-update. Read one with read_skill before using it."""
 V2_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
-
-TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
-Answer: {"final": "<text>"}"""
-
-SYSTEM = RULES + "\n\n" + TOOLS
 
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
@@ -231,10 +226,10 @@ PROMPTS = {
         "rules": _hash(V5_RULES),
         "tools": _hash(V5_TOOLS),
     },
-    PROMPT_VERSION: {
-        "system": SYSTEM,
-        "rules": _hash(RULES),
-        "tools": _hash(TOOLS),
+    "6": {
+        "system": V6_RULES + "\n\n" + V6_TOOLS,
+        "rules": _hash(V6_RULES),
+        "tools": _hash(V6_TOOLS),
     },
 }
 

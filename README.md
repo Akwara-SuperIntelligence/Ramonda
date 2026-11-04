@@ -6,7 +6,7 @@ work, has its own computer, and asks before it does something irreversible.
 
 This repository holds two tracks that share one vocabulary:
 
-- **The product** — `docs/` specifies it, `services/` will implement it. One
+- **The product** — `docs/` specifies it, `services/` implements it. One
   service lives here: the agent service.
 - **The course** — `course/` builds the primitives one at a time, with toy but
   behaviourally accurate code. It is frozen reference, not shipped code.
@@ -109,8 +109,7 @@ defined where they are first used in [docs/EDA.md](docs/EDA.md) and
 
 `docs/` describes the target system. `services/agent/` holds the first working
 slice: a durable turn, a real model call, and Postgres-backed conversation state.
-It is not production yet.
-Production code does not exist yet.
+It is not production yet. The rest of the system is specified but not built.
 
 `course/build/` is course code: standard library only, one file per lesson, and
 deliberately incomplete. Do not ship it. It exists to make the behaviour

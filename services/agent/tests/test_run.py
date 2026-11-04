@@ -28,6 +28,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from agent_service import activities
+from agent_service import consumer as consumer_module
 from agent_service.activities import (
     acquire_lock,
     call_model,
@@ -263,6 +264,105 @@ def test_an_event_starts_one_turn(monkeypatch):
     ) == 3
 
 
+def test_a_failed_inbox_write_does_not_lose_the_turn(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"final": "done"}')
+    envelope = Envelope(
+        event_id=f"e-{uuid4().hex}",
+        type=SEND_MESSAGE,
+        org_id="acme",
+        subject={"conversation_id": conv},
+        payload={"text": "hello"},
+    )
+    claim = consumer_module._claim
+    attempts: list[str] = []
+
+    async def flaky(env):
+        attempts.append(env.event_id)
+        if len(attempts) == 1:
+            raise RuntimeError("database down")
+        return await claim(env)
+
+    monkeypatch.setattr(consumer_module, "_claim", flaky)
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                with pytest.raises(RuntimeError):
+                    await handle(env.client, envelope)
+                second = await handle(env.client, envelope)
+                await second.result()
+                return second
+
+    assert asyncio.run(scenario()) is not None
+    assert len(attempts) == 2
+    assert asyncio.run(
+        _scalar("select count(*) from inbox where event_id = %s", (envelope.event_id,))
+    ) == 1
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id = %s and org_id = 'acme'",
+            (conv,),
+        )
+    ) == 2
+
+
+def test_a_second_approval_decision_is_ignored():
+    approval_id = f"approval-{uuid4().hex}"
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into approvals"
+                " (id, org_id, conversation_id, workflow_id, action, arguments)"
+                " values (%s, 'local', 'c', 'wf', 'send_email', 'a@b')",
+                (approval_id,),
+            )
+
+    class Handle:
+        def __init__(self) -> None:
+            self.decisions: list[str] = []
+
+        async def signal(self, name: str, args: list) -> None:
+            self.decisions.append(args[0])
+
+    class Client:
+        def __init__(self) -> None:
+            self.handle = Handle()
+
+        def get_workflow_handle(self, workflow_id: str) -> Handle:
+            return self.handle
+
+    def envelope(decision: str, event_id: str) -> Envelope:
+        return Envelope(
+            event_id=event_id,
+            type=APPROVAL_RESOLVED,
+            org_id="local",
+            subject={"approval_id": approval_id},
+            payload={"approval_id": approval_id, "decision": decision},
+        )
+
+    asyncio.run(seed())
+    client = Client()
+    first_id = f"resolve-{uuid4().hex}"
+    first = asyncio.run(handle(client, envelope("approved", first_id)))
+    second = asyncio.run(handle(client, envelope("denied", f"resolve-{uuid4().hex}")))
+
+    assert first is not None and second is None
+    assert client.handle.decisions == ["approved"]
+    assert asyncio.run(
+        _scalar("select status from approvals where id = %s", (approval_id,))
+    ) == "approved"
+    assert asyncio.run(
+        _scalar("select count(*) from inbox where event_id = %s", (first_id,))
+    ) == 1
+
+
 def test_relay_publishes_each_row_once():
     class Producer:
         def __init__(self):
@@ -413,8 +513,9 @@ def test_compaction_summarises_old_turns(monkeypatch):
 
 
 def test_tool_schemas_are_loaded_on_demand():
-    assert "send_email:" not in activities.SYSTEM
-    assert "get_tool_schema:" in activities.SYSTEM
+    system = activities.PROMPTS[activities.PROMPT_VERSION]["system"]
+    assert "send_email:" not in system
+    assert "get_tool_schema:" in system
 
     token = f"schema-{uuid4().hex}"
     schema = asyncio.run(run_tool("local", "schema", "get_tool_schema", "send_email", token))
@@ -894,7 +995,7 @@ def test_every_tool_spec_has_exactly_one_handler():
         tool.name for tool in activities.TOOL_SPECS if tool.approval
     }
     for tool in activities.TOOL_SPECS:
-        assert tool.name in activities.RULES
+        assert tool.name in activities.PROMPTS[activities.PROMPT_VERSION]["system"]
 
 
 async def _task_status(conv: str):
