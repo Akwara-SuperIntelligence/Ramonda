@@ -198,6 +198,7 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.cli "hello"   # or publish an event
 ../../.venv/bin/python -m agent_service.approve <id> approved
 ../../.venv/bin/python -m agent_service.approve <id> approved --argument "edited text"
+../../.venv/bin/python -m agent_service.approve <id> approved --field To=a@b --field Message=edited
 ```
 
 Publish an event to `agent.commands`:

@@ -411,7 +411,7 @@ def _approval_id(conv: str) -> str:
     return f"local:run:{conv}:0:0:approval"
 
 
-async def _start_and_resolve(conv: str, decision: str | None):
+async def _start_and_resolve(conv: str, decision: str | None, **extra):
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(
             env.client,
@@ -440,7 +440,11 @@ async def _start_and_resolve(conv: str, decision: str | None):
                         type=RESOLVE_APPROVAL,
                         org_id="local",
                         subject={"approval_id": _approval_id(conv)},
-                        payload={"approval_id": _approval_id(conv), "decision": decision},
+                        payload={
+                            "approval_id": _approval_id(conv),
+                            "decision": decision,
+                            **extra,
+                        },
                     ),
                 )
             return await wf.result()
@@ -539,44 +543,9 @@ def test_editing_an_approval_changes_the_effect(monkeypatch):
     conv = f"t-{uuid4().hex}"
     _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b original"}', '{"final": "sent"}')
 
-    async def scenario():
-        async with await WorkflowEnvironment.start_time_skipping() as env:
-            async with Worker(
-                env.client,
-                task_queue=SERVICE_QUEUE,
-                workflows=[RunWorkflow],
-                activities=ACTIVITIES,
-            ):
-                wf = await env.client.start_workflow(
-                    RunWorkflow.run,
-                    RunRequest(conv, "send mail"),
-                    id=f"run:{conv}:0",
-                    task_queue=SERVICE_QUEUE,
-                )
-                for _ in range(200):
-                    if await _scalar(
-                        "select count(*) from approvals where id = %s",
-                        (_approval_id(conv),),
-                    ):
-                        break
-                    await asyncio.sleep(0.05)
-                await handle(
-                    env.client,
-                    Envelope(
-                        event_id=f"resolve-{uuid4().hex}",
-                        type=RESOLVE_APPROVAL,
-                        org_id="local",
-                        subject={"approval_id": _approval_id(conv)},
-                        payload={
-                            "approval_id": _approval_id(conv),
-                            "decision": "approved",
-                            "argument": "c@d edited",
-                        },
-                    ),
-                )
-                return await wf.result()
-
-    result = asyncio.run(scenario())
+    result = asyncio.run(
+        _start_and_resolve(conv, "approved", argument="c@d edited")
+    )
 
     assert result.reply == "sent"
     assert asyncio.run(
@@ -595,6 +564,30 @@ def test_editing_an_approval_changes_the_effect(monkeypatch):
     )["payload"]
     assert resolved["decision"] == "approved"
     assert resolved["argument"] == "c@d edited"
+
+
+def test_editing_fields_changes_the_effect(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(monkeypatch, '{"tool": "send_email", "argument": "a@b original"}', '{"final": "sent"}')
+
+    result = asyncio.run(
+        _start_and_resolve(
+            conv,
+            "approved",
+            fields=[
+                {"label": "To", "value": "c@d"},
+                {"label": "Message", "value": "edited"},
+            ],
+        )
+    )
+
+    assert result.reply == "sent"
+    assert asyncio.run(
+        _scalar("select payload from effects where token = %s", (f"local:run:{conv}:0:0",))
+    ) == "c@d edited"
+    assert asyncio.run(
+        _scalar("select arguments from approvals where id = %s", (_approval_id(conv),))
+    ) == "c@d edited"
 
 
 def test_choice_options_are_stored_on_the_message(monkeypatch):
