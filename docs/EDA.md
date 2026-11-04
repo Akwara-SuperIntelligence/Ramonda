@@ -148,7 +148,8 @@ domain data; it belongs in spans. The bus is for facts other services act on.
 
 The kinds of human interaction behind `agent.approval.requested` and the
 `options` field on `agent.message.composed` are in
-[ADR 0001](adr/0001-interaction-kinds.md).
+[ADR 0001](adr/0001-interaction-kinds.md). Trust tags and the silence policy are
+in [ADR 0002](adr/0002-trust-and-silence.md).
 
 ### 4.3 Commands accepted
 
@@ -242,6 +243,9 @@ ready). Temporal has no index of "who is waiting for X", so maintain one:
 | Scratchpad | Files, ephemeral | This service | This hour, then discarded |
 | Skills | Markdown files | This service | On demand |
 | Org knowledge | HelixDB graph and vectors | Ingestion | Via `retrieve`, lazily |
+
+Facts carry provenance. A fact from the user is trusted. A fact learned from a
+tool is injected as untrusted data. See [ADR 0002](adr/0002-trust-and-silence.md).
 
 HelixDB specifics:
 

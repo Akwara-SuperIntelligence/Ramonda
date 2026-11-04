@@ -28,6 +28,7 @@ from agent_service.activities import (
     load_history,
     next_turn,
     pin_prompt,
+    record_run,
     release_lock,
     report_task,
     request_approval,
@@ -35,6 +36,7 @@ from agent_service.activities import (
     run_tool,
     save_tool_step,
     send_user,
+    should_speak,
 )
 from agent_service.workflow import HELPER_QUEUE, HelperWorkflow, RunWorkflow
 
@@ -52,6 +54,7 @@ ACTIVITIES = [
     load_history,
     next_turn,
     pin_prompt,
+    record_run,
     release_lock,
     report_task,
     request_approval,
@@ -59,6 +62,7 @@ ACTIVITIES = [
     run_tool,
     save_tool_step,
     send_user,
+    should_speak,
 ]
 
 

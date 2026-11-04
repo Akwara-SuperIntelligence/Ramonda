@@ -15,15 +15,15 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 46 tests
+make test                                # migrate + 53 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **46 tests**, 4 of them live model tests; migrations through `011`;
-prompt version **7**. CI runs the suite and the link check on every push.
+State: **53 tests**, 4 of them live model tests; migrations through `012`;
+prompt version **8**. CI runs the suite and the link check on every push.
 `make migrate` is safe to rerun.
 
 ## 3. Where we came from
@@ -49,19 +49,22 @@ Oldest first. Each item is merged and tested.
 | Typed approvals | structured card, edit-then-approve, `agent.approval.resolved` |
 | Choice options | `options` on `agent.message.composed`; the card waits for channels |
 | Live reviewer | allowed a birthday email; denied a password exfiltration |
+| Untrusted tags | external tool output and helper reports are marked as data |
+| Live injection | the model named the injected instruction and did not obey it |
+| Silence | user turns speak; routine helper reports once a day; run events |
 
 ## 4. How it fits together
 
 | File | Role |
 |---|---|
 | `workflow.py` | `RunWorkflow` (one turn) and `HelperWorkflow` (one delegated task) |
-| `activities.py` | All effects, the reviewer, approval payloads, the tool handlers, prompt versions, memory, tasks |
+| `activities.py` | Effects, reviewer, approval payloads, trust tags, silence policy, run events, tools, prompts, memory, tasks |
 | `consumer.py` | Kafka commands, typing, approval resolutions, helper completions, reaper loop |
 | `relay.py` | Publishes the outbox |
 | `delivery.py` | Reference client; prints messages, choices, and typed approvals |
 | `worker.py` | Two queues: `agent-orchestrator`, `agent-helper` |
 | `events.py` | Envelope, event types, topics |
-| `migrations/` | `001`–`011`, idempotent |
+| `migrations/` | `001`–`012`, idempotent |
 | `skills/<name>/SKILL.md` | Model-read skills |
 
 ## 5. What is left
@@ -72,8 +75,8 @@ The current plan is **harden first**:
 |---|---|---|
 | 1 | Auto-review before the human gate | **done** |
 | 2 | Typed approvals, edit-then-approve | **done**: typed fields, field or whole-argument edit, choice options |
-| 3 | Injection tagging at the boundary | not started |
-| 4 | Silence policy | not started |
+| 3 | Injection tagging at the boundary | **done**: external tool output, helper reports, memory provenance |
+| 4 | Silence policy | **done**: 24h routine budget, failed/question reports speak, run events |
 | 5 | Tracing + the four metrics | partial: tokens and cache only |
 | 6 | Quotas + priority | not started |
 | 7 | Retention, deletion, health, dead letters | not started |
@@ -95,8 +98,16 @@ The taxonomy, their fields, and their blockers are in
 - **The consumer stops on an unhandled error.** The offset stays uncommitted and
   the bus redelivers. There is no dead-letter topic yet; that is item 7.
 - **`org_id` is a parameter, not a boundary.** No row-level security yet.
-- **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`7`; adding a
+- **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`8`; adding a
   prompt means adding a version, never editing an old one.
+- **Untrusted tags are a prompt rule, not a boundary.** They mark text and tell
+  the model to treat it as data. The human gate and the sandbox are separate guards.
+- **Memory provenance is a heuristic.** A fact is `user` only when it appears
+  verbatim in the user's message. A paraphrase is marked `tool`.
+- **Silence uses a heuristic.** A helper report speaks on failure, on a question,
+  or once per conversation per 24 hours. Tune it with evals.
+- **Run events go to the outbox.** `delivery.py` does not print them; analytics
+  and evals consume the topic later.
 - **The reviewer is a filter, not a guarantee.** It is another model. It can be
   wrong in both directions. The human gate and the sandbox remain separate guards.
 - **Only `send_email` has typed approval fields.** Any other action falls back to
@@ -146,6 +157,9 @@ Call these with the Skill tool when they apply:
 - Auto-review is a filter before the human gate. Deny becomes a tool result;
   a reviewer failure escalates.
 - Approval payloads are typed data. The client renders by `kind` and `fields`.
+- External text is tagged `<untrusted>` and treated as data.
+- Silence is a policy in the harness, not a model choice. A silent turn still
+  stores its transcript and emits `agent.run.completed`.
 - The outbox is the only way to publish; never write the database and publish
   separately.
 - Workflow code is deterministic; all I/O is an activity.
