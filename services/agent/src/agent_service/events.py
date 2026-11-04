@@ -21,9 +21,13 @@ HELPER_COMPLETED = "agent.helper.completed"
 MESSAGE_COMPOSED = "agent.message.composed"
 APPROVAL_REQUESTED = "agent.approval.requested"
 APPROVAL_RESOLVED = "agent.approval.resolved"
+RUN_STARTED = "agent.run.started"
+RUN_COMPLETED = "agent.run.completed"
+RUN_FAILED = "agent.run.failed"
 MESSAGE_TOPIC = "agent.messages"
 APPROVAL_TOPIC = "agent.approvals"
 HELPERS_TOPIC = "agent.helpers"
+RUN_TOPIC = "agent.runs"
 
 
 @dataclass

@@ -29,6 +29,7 @@ from agent_service.activities import (
     _resolved_envelope,
     prewarm,
     reap_tasks,
+    wrap_untrusted,
 )
 from agent_service.events import (
     APPROVAL_TOPIC,
@@ -56,7 +57,13 @@ async def _claim(envelope: Envelope) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def _start(client: Client, envelope: Envelope, text: str) -> WorkflowHandle:
+async def _start(
+    client: Client,
+    envelope: Envelope,
+    text: str,
+    kind: str = "user",
+    failed: bool = False,
+) -> WorkflowHandle:
     """Start the turn. The workflow ID makes a repeat safe."""
     workflow_id = f"turn:{envelope.event_id}"
     try:
@@ -66,6 +73,8 @@ async def _start(client: Client, envelope: Envelope, text: str) -> WorkflowHandl
                 conversation_id=envelope.subject["conversation_id"],
                 text=text,
                 org_id=envelope.org_id,
+                kind=kind,
+                failed=failed,
             ),
             id=workflow_id,
             task_queue=TASK_QUEUE,
@@ -153,10 +162,17 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
         return await _resolve(client, envelope)
     if envelope.type == HELPER_COMPLETED:
         task_id = envelope.subject["task_id"]
-        text = f"helper {task_id} finished: {envelope.payload['report']}"
+        report = envelope.payload["report"]
+        text = f"helper {task_id} finished: {wrap_untrusted(report)}"
+        handle = await _start(
+            client,
+            envelope,
+            text,
+            kind="helper",
+            failed=envelope.payload.get("status") == "failed",
+        )
     else:
-        text = envelope.payload["text"]
-    handle = await _start(client, envelope, text)
+        handle = await _start(client, envelope, envelope.payload["text"])
     # The inbox is written after the effect. A crash here repeats the start,
     # which the workflow ID absorbs; it does not lose the command.
     if not await _claim(envelope):

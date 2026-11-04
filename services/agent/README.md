@@ -64,7 +64,7 @@ Every increment names its sources. This table is the running index.
 | talk §05 — measure the cache | `activities.py` (`call_model`), `migrations/007_context.sql` | Hit and miss tokens stored per call |
 | talk §05 — compact inside the warm window | `activities.py` (`compact`) | Old turns become a summary after a threshold |
 | talk §05 — long output to a file | `activities.py` (`run_tool`, `read_file`) | The context gets a stored name, not a blob |
-| talk §05 — stable section order | `activities.py` (`V7_RULES`, `V7_TOOLS`, `PROMPTS`) | The prefix hash is recorded with every call |
+| talk §05 — stable section order | `activities.py` (`V8_RULES`, `V8_TOOLS`, `PROMPTS`) | The prefix hash is recorded with every call |
 | talk §04 — tool search | `activities.py` (`TOOL_SCHEMAS`, `get_tool_schema`) | Names in the prompt, schema fetched on demand |
 | talk §05 — pin the prefix per conversation | `activities.py` (`pin_prompt`, `PROMPTS`) | A deploy adds a version; running turns keep theirs |
 | talk §05 — hash each section | `activities.py` (`call_model`), `migrations/008_prompt_pin.sql` | Rules, tools, and memory hashed separately |
@@ -82,8 +82,13 @@ Every increment names its sources. This table is the running index.
 | talk §04 — auto-review before the human | `activities.py` (`review_action`), `migrations/011_reviews.sql` | A second model allows, denies, or escalates |
 | talk §04 — typed approvals, edit, then act | `activities.py` (`request_approval`), `delivery.py`, `approve.py` | Fields, edit, review verdict, resolved event |
 | ADR 0001 — choice options | `activities.py` (`_parse_reply`, `send_user`), `delivery.py` | Options on the message event; the card waits for channels |
+| ADR 0002 — untrusted input | `activities.py` (`wrap_untrusted`, `run_tool`, `load_history`) | External text tagged as data; facts carry provenance |
+| ADR 0002 — silence | `activities.py` (`should_speak`, `send_user`), `workflow.py` | One routine update per day; run events; silent turns are stored |
 
 ## Verified
+
+A live injection test put "ignore previous instructions" inside the
+`<untrusted>` tags. The model named the instruction and did not obey it.
 
 A live reviewer allowed a birthday email and denied an attempt to send passwords
 and customer data to an outside address.

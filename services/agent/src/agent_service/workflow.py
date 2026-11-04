@@ -48,12 +48,14 @@ with workflow.unsafe.imports_passed_through():
         report_task,
         list_tasks,
         pin_prompt,
+        record_run,
         release_lock,
         request_approval,
         review_action,
         run_tool,
         save_tool_step,
         send_user,
+        should_speak,
     )
 
 
@@ -65,6 +67,8 @@ class RunRequest:
     text: str
     org_id: str = "local"
     max_steps: int = 12
+    kind: str = "user"  # "user" or "helper"
+    failed: bool = False
 
 
 @dataclass
@@ -74,6 +78,7 @@ class RunResult:
     conversation_id: str
     reply: str
     steps: int
+    silent: bool = False
 
 
 @dataclass
@@ -187,6 +192,7 @@ class HelperWorkflow:
                     reply.tool,
                     reply.argument,
                     f"{run_id}:{step}",
+                    task.task,
                 ],
                 start_to_close_timeout=timedelta(seconds=10),
             )
@@ -324,6 +330,11 @@ class RunWorkflow:
             await workflow.sleep(1)
 
         try:
+            await workflow.execute_activity(
+                record_run,
+                args=[request.org_id, request.conversation_id, run_id, "started"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
             prompt_version: str = await workflow.execute_activity(
                 pin_prompt,
                 args=[request.org_id, request.conversation_id],
@@ -364,6 +375,17 @@ class RunWorkflow:
                 )
 
                 if reply.kind == "final":
+                    speak: bool = await workflow.execute_activity(
+                        should_speak,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            request.kind,
+                            request.failed,
+                            request.text,
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
                     await workflow.execute_activity(
                         send_user,
                         args=[
@@ -375,6 +397,19 @@ class RunWorkflow:
                             reply.text,
                             f"{request.org_id}:{run_id}:save",
                             reply.options,
+                            speak,
+                            request.kind == "helper",
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    await workflow.execute_activity(
+                        record_run,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            run_id,
+                            "completed",
+                            not speak,
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
@@ -382,6 +417,7 @@ class RunWorkflow:
                         conversation_id=request.conversation_id,
                         reply=reply.text,
                         steps=step + 1,
+                        silent=not speak,
                     )
 
                 if NEEDS_APPROVAL.get(reply.tool):
@@ -484,6 +520,7 @@ class RunWorkflow:
                             reply.tool,
                             reply.argument,
                             f"{request.org_id}:{run_id}:{step}",
+                            request.text,
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
@@ -511,6 +548,20 @@ class RunWorkflow:
                 f"step budget exhausted after {request.max_steps} steps",
                 non_retryable=True,
             )
+        except Exception as exc:
+            await workflow.execute_activity(
+                record_run,
+                args=[
+                    request.org_id,
+                    request.conversation_id,
+                    run_id,
+                    "failed",
+                    False,
+                    str(exc),
+                ],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+            raise
         finally:
             await workflow.execute_activity(
                 release_lock,

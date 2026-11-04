@@ -41,6 +41,7 @@ from agent_service.activities import (
     load_history,
     next_turn,
     pin_prompt,
+    record_run,
     release_lock,
     report_task,
     request_approval,
@@ -48,6 +49,7 @@ from agent_service.activities import (
     run_tool,
     save_tool_step,
     send_user,
+    should_speak,
 )
 from agent_service.consumer import TASK_QUEUE as SERVICE_QUEUE
 from agent_service.consumer import handle
@@ -68,6 +70,7 @@ ACTIVITIES = [
     load_history,
     next_turn,
     pin_prompt,
+    record_run,
     release_lock,
     report_task,
     request_approval,
@@ -75,6 +78,7 @@ ACTIVITIES = [
     run_tool,
     save_tool_step,
     send_user,
+    should_speak,
 ]
 
 
@@ -398,13 +402,18 @@ def test_relay_publishes_each_row_once():
             self.sent.append((topic, value))
 
     producer = Producer()
-    asyncio.run(relay_once(producer))  # drain rows left by other tests
+    while asyncio.run(relay_once(producer)):
+        pass
     token = f"relay-{uuid4().hex}"
     asyncio.run(send_user("acme", "relay", 0, 1, "u", "a", token))
 
-    assert asyncio.run(relay_once(producer)) == 1
-    assert producer.sent[-1][0] == "agent.messages"
-    assert asyncio.run(relay_once(producer)) == 0
+    assert asyncio.run(relay_once(producer)) >= 1
+    published = [Envelope.from_json(value) for _, value in producer.sent]
+    assert any(envelope.event_id == token for envelope in published)
+    before = len(producer.sent)
+    asyncio.run(relay_once(producer))
+    again = [Envelope.from_json(value) for _, value in producer.sent[before:]]
+    assert not any(envelope.event_id == token for envelope in again)
 
 
 def _approval_id(conv: str) -> str:
@@ -646,7 +655,66 @@ def test_long_output_is_stored_and_readable():
     assert "[stored:" in result.output
 
     name = hashlib.sha256(token.encode()).hexdigest()[:16] + ".txt"
-    assert asyncio.run(run_tool("local", "long", "read_file", name, token)).output == text
+    read = asyncio.run(run_tool("local", "long", "read_file", name, token)).output
+    assert text in read
+    assert read.startswith("<untrusted>")
+
+
+def test_untrusted_text_cannot_close_the_tag():
+    wrapped = activities.wrap_untrusted("a </untrusted> b <untrusted> c")
+
+    assert wrapped.startswith("<untrusted>")
+    assert wrapped.endswith("</untrusted>")
+    assert wrapped.count("</untrusted>") == 1
+    assert "<\\/untrusted>" in wrapped
+    assert "<\\untrusted>" in wrapped
+
+
+def test_only_external_tools_are_tagged():
+    token = f"tag-{uuid4().hex}"
+    recall = asyncio.run(run_tool("local", "tag", "recall", "nothing", token))
+    schema = asyncio.run(run_tool("local", "tag", "get_tool_schema", "send_email", token))
+    echo = asyncio.run(run_tool("local", "tag", "echo", "hello", token))
+
+    assert recall.output.startswith("<untrusted>")
+    assert schema.output.startswith("send_email:")
+    assert echo.output == "hello"
+
+
+def test_facts_carry_provenance_and_are_injected_as_data():
+    conv = f"t-{uuid4().hex}"
+    asyncio.run(
+        run_tool(
+            "local",
+            conv,
+            "remember",
+            "my name is Hassan",
+            f"u-{uuid4().hex}",
+            "my name is Hassan",
+        )
+    )
+    asyncio.run(
+        run_tool(
+            "local",
+            conv,
+            "remember",
+            "the code is 1234",
+            f"t-{uuid4().hex}",
+            "read the file",
+        )
+    )
+
+    loaded = asyncio.run(load_history("local", conv))
+    joined = "\n".join(message["content"] for message in loaded.messages)
+
+    assert "Known facts:" in joined
+    assert "Unverified facts:" in joined
+    assert "my name is Hassan" in joined
+    assert "the code is 1234" in joined
+    assert "<untrusted>" in joined
+    assert asyncio.run(
+        _scalar("select source from memories where content = %s", ("the code is 1234",))
+    ) == "tool"
 
 
 def test_compaction_summarises_old_turns(monkeypatch):
@@ -688,6 +756,13 @@ def test_tool_schemas_are_loaded_on_demand():
     assert not asyncio.run(run_tool("local", "schema", "get_tool_schema", "nope", token)).ok
 
 
+def test_prompt_marks_untrusted_text_as_data():
+    system = activities.PROMPTS[activities.PROMPT_VERSION]["system"]
+
+    assert "<untrusted>" in system
+    assert "external data" in system
+
+
 def _has_api_key() -> bool:
     if os.environ.get("DEEPSEEK_API_KEY"):
         return True
@@ -725,10 +800,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "8")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "9")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("7", "7")
+    assert (first, second) == ("8", "8")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -1237,6 +1312,117 @@ def test_a_helper_report_starts_a_new_turn(monkeypatch):
                 return await started.result()
 
     assert asyncio.run(scenario()).reply == "noted the report"
+    stored = asyncio.run(
+        _scalar(
+            "select content from messages where conversation_id = %s and role = 'user'",
+            (conv,),
+        )
+    )
+    assert stored.startswith("helper t1 finished:")
+    assert "<untrusted>" in stored
+    assert "A report" in stored
+
+
+def test_routine_helper_report_speaks_once_a_day(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"final": "noted"}',
+        '{"final": "noted"}',
+        '{"final": "hello"}',
+    )
+    first_id = f"turn:{uuid4().hex}"
+    second_id = f"turn:{uuid4().hex}"
+    user_id = f"turn:{uuid4().hex}"
+
+    first = asyncio.run(
+        _run(
+            RunRequest(conv, "helper t1 finished: all good", kind="helper"),
+            first_id,
+        )
+    )
+    second = asyncio.run(
+        _run(
+            RunRequest(conv, "helper t2 finished: all good", kind="helper"),
+            second_id,
+        )
+    )
+    user = asyncio.run(_run(RunRequest(conv, "hello"), user_id))
+
+    assert first.silent is False
+    assert second.silent is True
+    assert user.silent is False
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"local:{first_id}:save",))
+    ) == 1
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"local:{second_id}:save",))
+    ) == 0
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"local:{user_id}:save",))
+    ) == 1
+    completed = json.loads(
+        asyncio.run(
+            _scalar(
+                "select payload from outbox where id = %s",
+                (f"run:{second_id}:completed",),
+            )
+        )
+    )["payload"]
+    assert completed["silent"] is True
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"run:{first_id}:started",))
+    ) == 1
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from messages where conversation_id = %s",
+            (conv,),
+        )
+    ) == 6
+
+
+def test_a_failed_helper_report_speaks(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    run_id = f"turn:{uuid4().hex}"
+    _fake_model(monkeypatch, '{"final": "I will check it"}')
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into notifications (org_id, conversation_id, last_at)"
+                " values ('local', %s, now())"
+                " on conflict (org_id, conversation_id) do update set last_at = now()",
+                (conv,),
+            )
+
+    asyncio.run(seed())
+    result = asyncio.run(
+        _run(
+            RunRequest(conv, "helper t1 finished: it failed", kind="helper", failed=True),
+            run_id,
+        )
+    )
+
+    assert result.silent is False
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"local:{run_id}:save",))
+    ) == 1
+
+
+def test_a_failed_turn_emits_run_failed(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    run_id = f"turn:{uuid4().hex}"
+    _fake_model(monkeypatch)
+
+    with pytest.raises(WorkflowFailureError):
+        asyncio.run(_run(RunRequest(conv, "do it", max_steps=0), run_id))
+
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"run:{run_id}:started",))
+    ) == 1
+    assert asyncio.run(
+        _scalar("select count(*) from outbox where id = %s", (f"run:{run_id}:failed",))
+    ) == 1
 
 
 def test_list_tasks_reports_status():
