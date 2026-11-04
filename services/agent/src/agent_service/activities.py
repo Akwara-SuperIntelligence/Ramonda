@@ -989,6 +989,7 @@ async def record_run(
     status: str,
     silent: bool = False,
     reason: str = "",
+    traceparent: str = "",
 ) -> None:
     """Publish a run lifecycle event. Idempotent per run and status."""
     event_types = {
@@ -1009,6 +1010,7 @@ async def record_run(
         subject={"conversation_id": conversation_id, "run_id": run_id},
         payload=payload,
         occurred_at=datetime.now(timezone.utc).isoformat(),
+        traceparent=traceparent,
     )
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         await conn.execute(

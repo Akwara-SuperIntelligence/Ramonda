@@ -89,6 +89,8 @@ Every increment names its sources. This table is the running index.
 | build §3 — health | `health.py` | `/healthz` and `/readyz`; readiness checks Postgres |
 | EDA §12 — dead letters | `consumer.py`, `dlq.py` | Poison commands to `agent.commands.dlq`; replay tool |
 | ADR 0003 — retention, deletion, health | `docs/adr/0003-retention-deletion-health.md` | Windows, delete rule, health, DLQ |
+| ADR 0004 — four metrics | `metrics.py`, `health.py` | The four numbers on `/metrics`; traceparent on run events |
+| ADR 0004 — quotas | `consumer.py` (`_over_quota`) | Interactive never dropped; routine/backfill capped |
 
 ## Verified
 
@@ -215,8 +217,8 @@ To run a real turn, start the worker, then either the CLI or the consumer:
 ../../.venv/bin/python -m agent_service.dlq --replay                                # republish one
 ```
 
-Health: the worker exposes `/healthz` and `/readyz` on port `8080`, the consumer
-on `8081` (override with `HEALTH_PORT`).
+Health: the worker exposes `/healthz`, `/readyz`, and `/metrics` on port `8080`,
+the consumer on `8081` (override with `HEALTH_PORT`).
 
 Publish an event to `agent.commands`:
 

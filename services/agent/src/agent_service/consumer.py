@@ -50,6 +50,30 @@ TOPIC = "agent.commands"
 DLQ_TOPIC = "agent.commands.dlq"
 DECISIONS = ("approved", "denied")
 
+# Per-org active-run caps by priority. Interactive is never dropped.
+# routine/backfill are skipped (offset still commits) when the org is over cap,
+# until preemption and batching exist. See ADR 0004.
+MAX_ACTIVE_RUNS = {"interactive": 2, "routine": 1, "backfill": 1}
+
+
+async def _active_runs(org_id: str) -> int:
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select count(*) from conversation_locks"
+            " where org_id = %s and expires_at > now()",
+            (org_id,),
+        )
+        return (await cursor.fetchone())[0]
+
+
+async def _over_quota(envelope: Envelope) -> bool:
+    """True when starting this turn would exceed the org's active-run cap."""
+    if envelope.priority == "interactive":
+        return False
+    cap = MAX_ACTIVE_RUNS.get(envelope.priority, MAX_ACTIVE_RUNS["routine"])
+    active = await _active_runs(envelope.org_id)
+    return active >= cap
+
 
 async def _claim(envelope: Envelope) -> bool:
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
@@ -79,6 +103,7 @@ async def _start(
                 org_id=envelope.org_id,
                 kind=kind,
                 failed=failed,
+                traceparent=envelope.traceparent,
             ),
             id=workflow_id,
             task_queue=TASK_QUEUE,
@@ -179,6 +204,8 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
             failed=envelope.payload.get("status") == "failed",
         )
     else:
+        if await _over_quota(envelope):
+            return None
         handle = await _start(client, envelope, envelope.payload["text"])
     # The inbox is written after the effect. A crash here repeats the start,
     # which the workflow ID absorbs; it does not lose the command.

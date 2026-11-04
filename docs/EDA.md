@@ -151,6 +151,8 @@ The kinds of human interaction behind `agent.approval.requested` and the
 [ADR 0001](adr/0001-interaction-kinds.md). Trust tags and the silence policy are
 in [ADR 0002](adr/0002-trust-and-silence.md). Retention windows, deletion, health
 endpoints, and the dead-letter policy are in [ADR 0003](adr/0003-retention-deletion-health.md).
+The four metrics, traceparent propagation, and the quota guard are in
+[ADR 0004](adr/0004-metrics-quotas.md).
 
 ### 4.3 Commands accepted
 
