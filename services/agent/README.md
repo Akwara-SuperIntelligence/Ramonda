@@ -75,6 +75,7 @@ Every increment names its sources. This table is the running index.
 | talk §02, §04 — sub-agents | `workflow.py` (`HelperWorkflow`, `delegate`) | Fresh context on its own queue; a report back |
 | talk §04 — the main agent manages helpers | `workflow.py` (`helpers`, `collect`, `message_helper`, `stop_helper`) | Start without blocking, check, message, stop, collect |
 | talk §04 — a to-do list tracks every request | `migrations/010_tasks.sql`, `activities.py` (`create_task`, `list_tasks`) | Short ids (`t1`), status, report per task |
+| talk §04 — the main agent keeps talking while helpers work | `workflow.py` (`ABANDON`), `activities.py` (`report_task`), `consumer.py` | The turn ends; the report arrives as `agent.helper.completed` |
 | lesson 06 — a second loop | `workflow.py`, `worker.py` | The helper shares the pinned prompt; its calls record under a negative seq |
 | talk §06, lesson 10 — evals from real failures | `tests/test_evals.py` | Repeat rule and memory recall, asserted on the live model |
 | talk §02, §05 — memory layers | `activities.py` (`remember`, `note`, `recall`), `migrations/009_memories.sql` | Facts always in the prompt; scratch for one hour |
@@ -124,6 +125,9 @@ reports before answering.
 A live turn delegated one task, checked it with `helpers` (`t1 running`), and
 collected the report. The task row ended as `done`.
 
+A live turn answered "started t1, I did not wait". The helper finished, published
+`agent.helper.completed`, and a new turn began with the report as its input.
+
 ## Known limits
 
 Two behaviours are mitigations, not guarantees, and one is a lease. They are
@@ -149,8 +153,9 @@ recorded here so a later change does not assume more than the code provides.
   that wrote it. A cross-conversation profile needs an actor identity we do not
   pass yet.
 - **Scratch is one hour.** The interval is fixed in the query, not configurable.
-- **A failed turn terminates its helpers.** The default parent close policy is
-  terminate; a budget failure drops the children with the parent.
+- **A helper that dies without reporting leaves its task `running`.** The child
+  is abandoned with a 30-minute execution timeout; nothing reaps the row. Add a
+  reaper with the quota work.
 - **Task ids are short but still copied.** `t1` is easier than a workflow id,
   and `collect all` / `stop_helper all` avoid the copy entirely.
 - **The to-do list is per conversation.** Tasks are not yet visible across

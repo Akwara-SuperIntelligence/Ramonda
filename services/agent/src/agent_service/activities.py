@@ -28,6 +28,8 @@ from temporalio.exceptions import ApplicationError
 from agent_service.events import (
     APPROVAL_REQUESTED,
     APPROVAL_TOPIC,
+    HELPER_COMPLETED,
+    HELPERS_TOPIC,
     MESSAGE_COMPOSED,
     MESSAGE_TOPIC,
     Envelope,
@@ -142,6 +144,26 @@ Skills: status-update. Read one with read_skill before using it."""
 V4_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
 Answer: {"final": "<text>"}"""
 
+# Frozen. Do not edit: conversations pinned to this version must keep it.
+V5_RULES = """You are an agent on a server. You work in steps.
+Each step, reply with one JSON object and nothing else.
+To call a tool: {"tool": "<name>", "argument": "<text>"}
+To answer: {"final": "<text>"}
+You may call tools over several steps before you answer.
+Do not call a tool that already succeeded in this conversation.
+Tools: echo, send_email, read_file, get_tool_schema, remember, note, recall, read_skill, delegate, collect, helpers, message_helper, stop_helper.
+Use remember for facts that must survive. Use note for the current task.
+Call get_tool_schema with a tool name before you use a tool you do not know.
+Delegate starts a helper and returns a task id; it does not wait. collect waits
+for reports. helpers lists tasks and their status. message_helper and
+stop_helper take a task id; stop_helper also takes all. Collect or stop every
+task before you answer.
+Delegate work that needs many tool calls or reads a lot of data. The helper
+returns a report; give it a self-contained task.
+Skills: status-update. Read one with read_skill before using it."""
+V5_TOOLS = """get_tool_schema: {"tool": "get_tool_schema", "argument": "<tool name>"}
+Answer: {"final": "<text>"}"""
+
 RULES = """You are an agent on a server. You work in steps.
 Each step, reply with one JSON object and nothing else.
 To call a tool: {"tool": "<name>", "argument": "<text>"}
@@ -152,9 +174,9 @@ Tools: """ + TOOL_NAMES + """.
 Use remember for facts that must survive. Use note for the current task.
 Call get_tool_schema with a tool name before you use a tool you do not know.
 Delegate starts a helper and returns a task id; it does not wait. collect waits
-for reports. helpers lists tasks and their status. message_helper and
-stop_helper take a task id; stop_helper also takes all. Collect or stop every
-task before you answer.
+for a report. helpers lists tasks and their status. message_helper and
+stop_helper take a task id; stop_helper also takes all. You may answer while
+tasks run; a finished task reports to you as a new message.
 Delegate work that needs many tool calls or reads a lot of data. The helper
 returns a report; give it a self-contained task.
 Skills: status-update. Read one with read_skill before using it."""
@@ -182,7 +204,7 @@ SYSTEM = RULES + "\n\n" + TOOLS
 
 # A deploy adds a version and keeps the old ones, so running conversations
 # keep the text they started with.
-PROMPT_VERSION = "5"
+PROMPT_VERSION = "6"
 PROMPTS = {
     "1": {
         "system": V1_RULES + "\n\n" + V1_TOOLS,
@@ -203,6 +225,11 @@ PROMPTS = {
         "system": V4_RULES + "\n\n" + V4_TOOLS,
         "rules": _hash(V4_RULES),
         "tools": _hash(V4_TOOLS),
+    },
+    "5": {
+        "system": V5_RULES + "\n\n" + V5_TOOLS,
+        "rules": _hash(V5_RULES),
+        "tools": _hash(V5_TOOLS),
     },
     PROMPT_VERSION: {
         "system": SYSTEM,
@@ -530,6 +557,33 @@ async def list_tasks(org_id: str, conversation_id: str) -> str:
         )
         rows = [f"{task_id} {status}: {description}" async for task_id, status, description in cursor]
         return "\n".join(rows) or "no tasks"
+
+
+@activity.defn
+async def report_task(
+    org_id: str, conversation_id: str, task_id: str, status: str, report: str
+) -> None:
+    """Write the task result and queue the completion event, atomically."""
+    envelope = Envelope(
+        event_id=f"helper:{org_id}:{conversation_id}:{task_id}",
+        type=HELPER_COMPLETED,
+        org_id=org_id,
+        subject={"conversation_id": conversation_id, "task_id": task_id},
+        payload={"report": report, "status": status},
+        occurred_at=datetime.now(timezone.utc).isoformat(),
+    )
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "update tasks set status = %s, report = %s, updated_at = now()"
+                " where org_id = %s and conversation_id = %s and id = %s",
+                (status, report, org_id, conversation_id, task_id),
+            )
+            await conn.execute(
+                "insert into outbox (id, topic, payload) values (%s, %s, %s)"
+                " on conflict do nothing",
+                (envelope.event_id, HELPERS_TOPIC, envelope.to_json().decode()),
+            )
 
 
 @activity.defn

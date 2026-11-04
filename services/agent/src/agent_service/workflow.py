@@ -44,6 +44,7 @@ with workflow.unsafe.imports_passed_through():
         next_turn,
         create_task,
         finish_task,
+        report_task,
         list_tasks,
         pin_prompt,
         release_lock,
@@ -81,6 +82,7 @@ class HelperTask:
     conversation_id: str
     parent_step: int
     prompt_version: str
+    task_id: str
     task: str
 
 
@@ -118,6 +120,17 @@ class HelperWorkflow:
 
         for step in range(HELPER_MAX_STEPS):
             if self._stop:
+                await workflow.execute_activity(
+                    report_task,
+                    args=[
+                        task.org_id,
+                        task.conversation_id,
+                        task.task_id,
+                        "stopped",
+                        "stopped",
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
                 return "stopped"
             for text in self._messages:
                 history.append(
@@ -138,6 +151,17 @@ class HelperWorkflow:
                 start_to_close_timeout=timedelta(seconds=30),
             )
             if reply.kind == "final":
+                await workflow.execute_activity(
+                    report_task,
+                    args=[
+                        task.org_id,
+                        task.conversation_id,
+                        task.task_id,
+                        "done",
+                        reply.text,
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
                 return reply.text
 
             if NEEDS_APPROVAL.get(reply.tool):
@@ -171,6 +195,17 @@ class HelperWorkflow:
                 }
             )
 
+        await workflow.execute_activity(
+            report_task,
+            args=[
+                task.org_id,
+                task.conversation_id,
+                task.task_id,
+                "failed",
+                "helper step budget exhausted",
+            ],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
         return "helper step budget exhausted"
 
 
@@ -196,6 +231,11 @@ class RunWorkflow:
     ) -> str:
         if reply.tool == "delegate":
             helper_id = f"helper:{run_id}:{step}"
+            task_id: str = await workflow.execute_activity(
+                create_task,
+                args=[request.org_id, request.conversation_id, reply.argument, helper_id],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
             handle = await workflow.start_child_workflow(
                 HelperWorkflow.run,
                 HelperTask(
@@ -203,15 +243,14 @@ class RunWorkflow:
                     conversation_id=request.conversation_id,
                     parent_step=step,
                     prompt_version=prompt_version,
+                    task_id=task_id,
                     task=reply.argument,
                 ),
                 id=helper_id,
                 task_queue=HELPER_QUEUE,
-            )
-            task_id: str = await workflow.execute_activity(
-                create_task,
-                args=[request.org_id, request.conversation_id, reply.argument, helper_id],
-                start_to_close_timeout=timedelta(seconds=10),
+                # The helper outlives the turn and reports by event.
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+                execution_timeout=timedelta(minutes=30),
             )
             self._pending[task_id] = handle
             return f"started {task_id}"
@@ -226,15 +265,13 @@ class RunWorkflow:
                     continue
                 try:
                     report = await child
-                    status = "stopped" if report == "stopped" else "done"
                 except Exception as exc:
                     report = f"helper failed: {type(exc).__name__}"
-                    status = "failed"
-                await workflow.execute_activity(
-                    finish_task,
-                    args=[request.org_id, request.conversation_id, task_id, status, report],
-                    start_to_close_timeout=timedelta(seconds=10),
-                )
+                    await workflow.execute_activity(
+                        finish_task,
+                        args=[request.org_id, request.conversation_id, task_id, "failed", report],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
                 lines.append(f"{task_id}: {report}")
             return "\n".join(lines) or "no tasks"
 
@@ -321,20 +358,6 @@ class RunWorkflow:
                 )
 
                 if reply.kind == "final":
-                    if self._pending:
-                        # The manager closes out its helpers before reporting.
-                        history.append(
-                            {
-                                "role": "user",
-                                "content": (
-                                    "You have outstanding helpers: "
-                                    + ", ".join(self._pending)
-                                    + ". Collect their reports with collect, or stop "
-                                    "them with stop_helper, then answer."
-                                ),
-                            }
-                        )
-                        continue
                     await workflow.execute_activity(
                         send_user,
                         args=[

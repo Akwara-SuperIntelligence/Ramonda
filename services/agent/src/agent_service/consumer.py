@@ -21,7 +21,14 @@ from aiokafka import AIOKafkaConsumer
 from temporalio.client import Client, WorkflowHandle
 
 from agent_service.activities import _dsn, prewarm
-from agent_service.events import APPROVAL_RESOLVED, SEND_MESSAGE, TYPING, Envelope
+from agent_service.events import (
+    APPROVAL_RESOLVED,
+    HELPER_COMPLETED,
+    HELPERS_TOPIC,
+    SEND_MESSAGE,
+    TYPING,
+    Envelope,
+)
 from agent_service.worker import TASK_QUEUE
 from agent_service.workflow import RunRequest, RunWorkflow
 
@@ -39,12 +46,12 @@ async def _claim(envelope: Envelope) -> bool:
         return await cursor.fetchone() is not None
 
 
-async def _start(client: Client, envelope: Envelope) -> WorkflowHandle:
+async def _start(client: Client, envelope: Envelope, text: str) -> WorkflowHandle:
     return await client.start_workflow(
         RunWorkflow.run,
         RunRequest(
             conversation_id=envelope.subject["conversation_id"],
-            text=envelope.payload["text"],
+            text=text,
             org_id=envelope.org_id,
         ),
         id=f"turn:{envelope.event_id}",
@@ -73,7 +80,7 @@ async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
 
 async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     """Handle one command. None if it was already handled or had no effect."""
-    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED, TYPING):
+    if envelope.type not in (SEND_MESSAGE, APPROVAL_RESOLVED, TYPING, HELPER_COMPLETED):
         raise ValueError(f"unsupported event type: {envelope.type}")
     if not await _claim(envelope):
         return None
@@ -82,7 +89,11 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
         return None
     if envelope.type == APPROVAL_RESOLVED:
         return await _resolve(client, envelope)
-    return await _start(client, envelope)
+    if envelope.type == HELPER_COMPLETED:
+        task_id = envelope.subject["task_id"]
+        text = f"helper {task_id} finished: {envelope.payload['report']}"
+        return await _start(client, envelope, text)
+    return await _start(client, envelope, envelope.payload["text"])
 
 
 async def main() -> None:
@@ -91,6 +102,7 @@ async def main() -> None:
     )
     consumer = AIOKafkaConsumer(
         TOPIC,
+        HELPERS_TOPIC,
         bootstrap_servers=os.environ.get("KAFKA_BROKERS", "localhost:9092"),
         group_id="agent-service",
         auto_offset_reset="earliest",

@@ -40,6 +40,7 @@ from agent_service.activities import (
     next_turn,
     pin_prompt,
     release_lock,
+    report_task,
     request_approval,
     run_tool,
     save_tool_step,
@@ -65,6 +66,7 @@ ACTIVITIES = [
     next_turn,
     pin_prompt,
     release_lock,
+    report_task,
     request_approval,
     run_tool,
     save_tool_step,
@@ -459,10 +461,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "6")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "7")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("5", "5")
+    assert (first, second) == ("6", "6")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -802,39 +804,6 @@ def test_a_stopped_helper_reports_stopped(monkeypatch):
     ) == "stopped"
 
 
-def test_a_final_with_pending_helpers_is_refused(monkeypatch):
-    conv = f"t-{uuid4().hex}"
-    seen: list = []
-    started = {"n": 0}
-
-    def on_started(last, payload):
-        started["n"] += 1
-        if started["n"] == 1:
-            return '{"final": "done early"}'
-        return '{"tool": "collect", "argument": "all"}'
-
-    _fake_router(
-        monkeypatch,
-        [
-            ("do the A work", '{"final": "A report"}'),
-            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
-            (_starts("tool result: delegate -> started"), on_started),
-            (lambda last, payload: "outstanding helpers" in last, '{"tool": "collect", "argument": "all"}'),
-            (_starts("tool result: collect"), '{"final": "now done"}'),
-        ],
-        seen,
-    )
-
-    result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
-
-    assert result.reply == "now done"
-    assert any("outstanding helpers" in p["messages"][-1]["content"] for p in seen)
-    roles = asyncio.run(
-        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
-    )
-    assert roles == ["user", "tool", "tool", "assistant"]
-
-
 def test_helpers_reports_task_status(monkeypatch):
     conv = f"t-{uuid4().hex}"
     asked = {"n": 0}
@@ -865,7 +834,7 @@ def test_helpers_reports_task_status(monkeypatch):
     rows = asyncio.run(
         _column("select content from messages where conversation_id = %s and role = 'tool'", (conv,))
     )
-    assert any("t1 running: do the A work" in row for row in rows)
+    assert any("t1 " in row and "do the A work" in row for row in rows)
     assert any("t1 done" in row for row in rows)
 
 
@@ -926,3 +895,94 @@ def test_every_tool_spec_has_exactly_one_handler():
     }
     for tool in activities.TOOL_SPECS:
         assert tool.name in activities.RULES
+
+
+async def _task_status(conv: str):
+    async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+        cursor = await conn.execute(
+            "select status from tasks where conversation_id = %s", (conv,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+def test_a_turn_can_end_with_a_task_running(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_router(
+        monkeypatch,
+        [
+            ("do the A work", '{"final": "A report"}'),
+            ("coordinate the work", '{"tool": "delegate", "argument": "do the A work"}'),
+            (_starts("tool result: delegate -> started"), '{"final": "started it"}'),
+        ],
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with AsyncExitStack() as stack:
+                for worker in _two_workers(env.client):
+                    await stack.enter_async_context(worker)
+                result = await env.client.execute_workflow(
+                    RunWorkflow.run,
+                    RunRequest(conv, "coordinate the work"),
+                    id=f"turn:{uuid4().hex}",
+                    task_queue=SERVICE_QUEUE,
+                )
+                for _ in range(100):
+                    status = await _task_status(conv)
+                    if status not in (None, "running"):
+                        break
+                    await asyncio.sleep(0.05)
+                return result, status
+
+    result, status = asyncio.run(scenario())
+
+    assert result.reply == "started it"
+    assert status == "done"
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from outbox where id = %s",
+            (f"helper:local:{conv}:t1",),
+        )
+    ) == 1
+
+
+def test_a_helper_report_starts_a_new_turn(monkeypatch):
+    conv = f"t-{uuid4().hex}"
+    _fake_router(
+        monkeypatch,
+        [(_starts("helper t1 finished:"), '{"final": "noted the report"}')],
+    )
+    envelope = Envelope(
+        event_id=f"helper:local:{conv}:t1",
+        type="agent.helper.completed",
+        org_id="local",
+        subject={"conversation_id": conv, "task_id": "t1"},
+        payload={"report": "A report", "status": "done"},
+    )
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=SERVICE_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                started = await handle(env.client, envelope)
+                return await started.result()
+
+    assert asyncio.run(scenario()).reply == "noted the report"
+
+
+def test_list_tasks_reports_status():
+    conv = f"t-{uuid4().hex}"
+    task_id = asyncio.run(
+        activities.create_task("local", conv, "do the thing", "helper:x")
+    )
+
+    assert asyncio.run(activities.list_tasks("local", conv)) == "t1 running: do the thing"
+
+    asyncio.run(activities.finish_task("local", conv, task_id, "done", "ok"))
+
+    assert "t1 done: do the thing" in asyncio.run(activities.list_tasks("local", conv))
