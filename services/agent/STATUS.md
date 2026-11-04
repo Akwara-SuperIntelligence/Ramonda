@@ -23,7 +23,8 @@ make test                                # migrate + 40 tests
 ```
 
 State: **40 tests**, 3 of them live model evals; migrations through `010`;
-prompt version **6**. `make migrate` is safe to rerun.
+prompt version **6**. CI runs the suite and the link check on every push.
+`make migrate` is safe to rerun.
 
 ## 3. Where we came from
 
@@ -72,7 +73,7 @@ The current plan is **harden first**:
 | 5 | Tracing + the four metrics | partial: tokens and cache only |
 | 6 | Quotas + priority | not started |
 | 7 | Retention, deletion, health, dead letters | not started |
-| 8 | Evals gate in CI | partial: 40 tests, no gate |
+| 8 | Evals gate in CI | partial: CI runs tests and links; live evals skip without a key |
 | 9 | Sandbox client + contract | not started |
 | 10 | Retrieval client + contract | not started |
 | 11 | Secret broker | not started |
@@ -93,7 +94,8 @@ The current plan is **harden first**:
 - **Helpers are bounded** at 30 minutes and 5 steps; a task with no report after
   35 minutes is failed by the reaper and reported.
 - **Memory is per conversation.** No cross-conversation profile yet.
-- **No CI gate.** Evals run only when someone runs pytest.
+- **Live evals are not in CI.** The unit suite and link check are gated. The
+  three live model evals skip without `DEEPSEEK_API_KEY`.
 
 ## 7. Fresh-session checklist
 
