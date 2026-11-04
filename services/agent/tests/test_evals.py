@@ -28,13 +28,14 @@ pytestmark = [
     pytest.mark.filterwarnings("ignore::DeprecationWarning"),
     pytest.mark.skipif(
         not (
-            os.environ.get("DEEPSEEK_API_KEY")
+            os.environ.get("OPENROUTER_API_KEY")
+            or os.environ.get("DEEPSEEK_API_KEY")
             or any(
                 (folder / ".env").is_file()
                 for folder in Path(__file__).resolve().parents
             )
         ),
-        reason="no DEEPSEEK_API_KEY",
+        reason="no model API key",
     ),
 ]
 

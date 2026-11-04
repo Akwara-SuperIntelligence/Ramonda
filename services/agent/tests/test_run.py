@@ -767,12 +767,12 @@ def test_prompt_marks_untrusted_text_as_data():
 
 
 def _has_api_key() -> bool:
-    if os.environ.get("DEEPSEEK_API_KEY"):
+    if os.environ.get("OPENROUTER_API_KEY") or os.environ.get("DEEPSEEK_API_KEY"):
         return True
     return any((folder / ".env").is_file() for folder in Path(__file__).resolve().parents)
 
 
-@pytest.mark.skipif(not _has_api_key(), reason="no DEEPSEEK_API_KEY")
+@pytest.mark.skipif(not _has_api_key(), reason="no model API key")
 def test_compaction_uses_the_live_model():
     conv = f"t-{uuid4().hex}"
 

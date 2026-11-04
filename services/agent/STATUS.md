@@ -26,8 +26,8 @@ State: **60 tests**, including the item-7 unit cases; migrations through `013`;
 prompt version **8**. CI runs the suite and the link check on every push.
 `make migrate` is safe to rerun.
 
-The 3 live-model evals in the suite require a valid `DEEPSEEK_API_KEY` and skip
-when it is absent.
+The 3 live-model evals in the suite require a valid model key (OpenRouter via
+`OPENROUTER_API_KEY`, or `DEEPSEEK_API_KEY`) and skip when none is present.
 
 ## 3. Where we came from
 
@@ -36,7 +36,7 @@ Oldest first. Each item is merged and tested.
 | Step | What it bought |
 |---|---|
 | Durable turn | A turn resumes after `SIGKILL`; proved with 108 turns in flight |
-| Real model | DeepSeek behind an activity; the workflow never calls the network |
+| Real model | DeepSeek via OpenRouter behind an activity; the workflow never calls the network |
 | Postgres state | `messages`, `effects` (idempotent per token), `inbox`, `outbox` |
 | Event ingress | Kafka protocol via Redpanda; dedupe before the workflow |
 | Reply as event | Outbox plus relay; `delivery.py` prints |
@@ -134,7 +134,7 @@ The taxonomy, their fields, and their blockers are in
   35 minutes is failed by the reaper and reported.
 - **Memory is per conversation.** No cross-conversation profile yet.
 - **Live evals are not in CI.** The unit suite and link check are gated. The
-  live model tests skip when no valid `DEEPSEEK_API_KEY` is present.
+  live model tests skip when no valid model key is present.
 - **Deletion is destructive and permanent.** It is an operator tool, not a bus
   command, until commands are authenticated (item 12). The audit row is the only record.
 - **Purge runs in the consumer process.** A paused or scaled-down consumer does

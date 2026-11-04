@@ -49,7 +49,7 @@ Every increment names its sources. This table is the running index.
 | EDA §5 — every effect carries a token | `activities.py`, `migrations/001_init.sql` | The effects table is the claim; a repeat is a no-op |
 | talk §05 — memory lives outside the context window | `activities.py` (`load_history`, `save_turn`) | History is read from Postgres, not carried in the input |
 | lesson 07 — memory is stored so it can be recalled | `workflow.py`, `migrations/001_init.sql` | A turn is appended once, keyed by `(conversation, seq)` |
-| talk §02 — the model chooses, the harness executes | `activities.py` | Real DeepSeek call replaces the scripted reply |
+| talk §02 — the model chooses, the harness executes | `activities.py` | DeepSeek via OpenRouter replaces the scripted reply |
 | talk §03 — the agent wakes on an event | `consumer.py` | A Kafka topic replaces the CLI as the trigger |
 | EDA §4.1 — the event envelope | `events.py` | The first working contract between services |
 | EDA §5 — dedupe before the workflow | `consumer.py`, `migrations/002_inbox.sql` | The inbox makes redelivery a no-op |
