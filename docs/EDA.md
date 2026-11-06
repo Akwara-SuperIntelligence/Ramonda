@@ -186,6 +186,12 @@ The model's tools are the narrow waist: `run_shell`, `send_user`, `remember`,
 crosses the product boundary, which is why channel changes never touch the
 harness. `retrieve` is the only door to organisational knowledge.
 
+Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
+needs the retrieval service. The service currently offers `read_file`,
+`read_skill`, `remember`, `note`, `recall`, `get_tool_schema`, `delegate`, and a
+simulated `send_email`. Computer-dependent work is deferred; see
+[ADR 0008](adr/0008-harness-first.md).
+
 ## 5. Exactly-once is a lie; here are the dedupe layers
 
 | Layer | Mechanism | Catches |
@@ -390,6 +396,11 @@ service to function.
 - Approval SLA per action class, and what "expired" means for money movement.
 - Whether `agent.observation.recorded` should feed ingestion, and under whose
   schema.
+- Memory storage: the database, or the files EDA §8 describes.
+- Skill capture: should the agent write a skill from a recorded session, and who
+  approves it?
+- MCP: a tool source, or keep the fixed tool registry?
+- Long-run turns: raise the step budget, or use `continue-as-new`?
 
 ## References
 

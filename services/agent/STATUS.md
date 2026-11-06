@@ -116,6 +116,14 @@ The taxonomy, their fields, and their blockers are in
 
 - **Commands are unauthenticated.** Anyone who can publish to `agent.commands`
   can approve. The edge and identity provider are item 12.
+- **Computer-dependent work is deferred.** `run_shell`, `browser`, and computer
+  use need the sandbox (item 9). "Learn by watching" needs the sandbox and a
+  skill-writing path; it is not built. See
+  [ADR 0008](../../docs/adr/0008-harness-first.md).
+- **Memory is in Postgres, not files.** EDA §8 describes profile and log files.
+  The code uses the `memories` and `messages` tables. The storage decision is open.
+- **MCP is not in the tool registry.** The tool list is fixed; a third-party tool
+  is new code. MCP is an open question in EDA §15.
 - **Routines are CLI-only.** There is no `UpdateRoutine` bus command until
   commands are authenticated (item 12). A schedule is created by `routine.py`.
 - **Routine turns cannot run irreversible tools.** No human is present to
