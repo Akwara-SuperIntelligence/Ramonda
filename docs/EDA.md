@@ -155,7 +155,8 @@ in [ADR 0002](adr/0002-trust-and-silence.md). Retention windows, deletion, healt
 endpoints, and the dead-letter policy are in [ADR 0003](adr/0003-retention-deletion-health.md).
 The four metrics, traceparent propagation, and the quota guard are in
 [ADR 0004](adr/0004-metrics-quotas.md). Routines are in
-[ADR 0005](adr/0005-routines.md).
+[ADR 0005](adr/0005-routines.md). Artifacts are in
+[ADR 0006](adr/0006-object-storage.md).
 
 ### 4.3 Commands accepted
 

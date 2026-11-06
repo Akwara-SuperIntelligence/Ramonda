@@ -15,14 +15,14 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 66 tests
+make test                                # migrate + 71 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **66 tests**; migrations through `014`, prompt version **8**. CI runs the
+State: **71 tests**; migrations through `015`, prompt version **8**. CI runs the
 suite and the link check on every push. `make migrate` is safe to rerun.
 
 The 3 live-model evals in the suite require a valid model key (OpenRouter via
@@ -62,6 +62,7 @@ Oldest first. Each item is merged and tested.
 | Quotas | interactive never dropped; routine/backfill capped per org |
 | Routines | a Temporal Schedule starts a `kind="routine"` turn; CLI-only |
 | Live routine | 08:00 Nairobi; next run 05:00 UTC; pause, resume, delete |
+| Artifacts | long output and `read_file` use S3-compatible storage; opaque refs |
 
 ## 4. How it fits together
 
@@ -74,6 +75,7 @@ Oldest first. Each item is merged and tested.
 | `delivery.py` | Reference client; prints messages, choices, and typed approvals |
 | `health.py` | Liveness and readiness endpoints, plus `/metrics` |
 | `metrics.py` | The four numbers as Prometheus text |
+| `storage.py` | Artifact buckets: S3-compatible, local fallback, opaque refs |
 | `maintenance.py` | Retention purge and scoped hard delete |
 | `routines.py` | The routine row and its Temporal Schedule |
 | `routine.py` | Operator CLI to create, list, pause, resume, and delete routines |
@@ -81,7 +83,7 @@ Oldest first. Each item is merged and tested.
 | `dlq.py` | Inspect and replay dead letters |
 | `worker.py` | Two queues: `agent-orchestrator`, `agent-helper` |
 | `events.py` | Envelope, event types, topics |
-| `migrations/` | `001`–`014`, idempotent |
+| `migrations/` | `001`–`015`, idempotent |
 | `skills/<name>/SKILL.md` | Model-read skills |
 
 ## 5. What is left
@@ -104,6 +106,7 @@ The current plan is **harden first**:
 | 12 | Authenticated commands | not started |
 | 13 | Real delivery client | not started |
 | 14 | Routines / schedules | **done**: Temporal Schedule per routine, CLI-only |
+| 15 | Object storage for artifacts | **done**: long output + `read_file`; opaque refs; local fallback in dev |
 
 Permission approvals, the choice card itself, and custom rules are deferred.
 The taxonomy, their fields, and their blockers are in
@@ -117,6 +120,14 @@ The taxonomy, their fields, and their blockers are in
   commands are authenticated (item 12). A schedule is created by `routine.py`.
 - **Routine turns cannot run irreversible tools.** No human is present to
   approve, so the workflow denies an approval tool before the gate.
+- **Artifacts use a local fallback in development.** If `S3_BUCKET` is unset,
+  bytes go to `.agent/artifacts`. A production deployment must set `S3_*` or it
+  writes to ephemeral disk.
+- **Artifacts are long tool output only.** Inbound and outbound chat attachments,
+  file cards, and binary file generation are not built. Those need channels and
+  the sandbox.
+- **Artifact retention is 180 days.** `purge` deletes objects then rows. The
+  bucket also needs a lifecycle rule; that is deployment configuration.
 - **The consumer stops on an unhandled error.** The offset stays uncommitted and
   the bus redelivers. A poison command goes to `agent.commands.dlq`; a transient
   error does not diverge poison from retry.

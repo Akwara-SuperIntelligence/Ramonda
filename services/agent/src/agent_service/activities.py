@@ -13,6 +13,7 @@ Delta
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ import psycopg
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from agent_service import storage
 from agent_service.events import (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
@@ -1322,10 +1324,19 @@ async def _effect(
         await _claim(conn, effect_token, tool, argument, org_id, conversation_id)
 
     if len(argument) > SIZE_LIMIT:
-        ARTIFACTS.mkdir(parents=True, exist_ok=True)
-        stored = hashlib.sha256(effect_token.encode()).hexdigest()[:16] + ".txt"
-        (ARTIFACTS / stored).write_text(argument)
-        output = argument[:500] + f"... [stored: {stored}] ({len(argument)} chars)"
+        artifact_id = await asyncio.to_thread(
+            storage.put,
+            org_id,
+            conversation_id,
+            f"{tool}-output.txt",
+            "text/plain",
+            argument.encode(),
+            effect_token,
+        )
+        output = (
+            argument[:500]
+            + f"... [stored: artifact:{artifact_id}] ({len(argument)} chars)"
+        )
     else:
         output = argument
     return ToolResult(ok=True, output=output)
@@ -1340,6 +1351,15 @@ async def _send_email(org_id, conversation_id, argument, effect_token) -> ToolRe
 
 
 async def _read_file(org_id, conversation_id, argument, effect_token) -> ToolResult:
+    if argument.startswith("artifact:"):
+        artifact_id = argument.removeprefix("artifact:")
+        try:
+            _meta, data = await asyncio.to_thread(
+                storage.get, artifact_id, org_id, conversation_id
+            )
+        except storage.ArtifactNotFound:
+            return ToolResult(ok=False, output=f"no such artifact: {argument}")
+        return ToolResult(ok=True, output=data.decode(errors="replace")[:4000])
     path = ARTIFACTS / Path(argument).name
     if not path.is_file():
         return ToolResult(ok=False, output=f"no such file: {argument}")

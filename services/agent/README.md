@@ -92,8 +92,12 @@ Every increment names its sources. This table is the running index.
 | ADR 0004 — four metrics | `metrics.py`, `health.py` | The four numbers on `/metrics`; traceparent on run events |
 | ADR 0004 — quotas | `consumer.py` (`_over_quota`) | Interactive never dropped; routine/backfill capped |
 | ADR 0005 — routines | `routines.py`, `routine.py`, `migrations/014_routines.sql` | A Temporal Schedule starts a turn; CLI-only; no irreversible tools |
+| ADR 0006 — artifacts | `storage.py`, `migrations/015_artifacts.sql` | S3-compatible store; opaque `artifact:{id}`; local fallback |
 
 ## Verified
+
+A live S3-compatible roundtrip (LocalStack 3.8) stored bytes, read them back,
+enforced the org and conversation scope, and deleted both object and row.
 
 A live routine was created at 08:00 `Africa/Nairobi`. Temporal normalised the
 cron and showed the next run at 05:00 UTC. Pause, resume, and delete worked, and
@@ -197,6 +201,17 @@ the UI, and Redpanda run in Docker.
 ```
 make up                                      # from the repo root
 ../../.venv/bin/pip install -e ".[dev]"      # from this directory, once
+```
+
+Artifacts use `.agent/artifacts` unless `S3_BUCKET` is set. To use an
+S3-compatible bucket (AWS, MinIO, LocalStack), set:
+
+```
+S3_ENDPOINT=http://localhost:4566   # omit for AWS
+S3_BUCKET=agent-artifacts
+S3_ACCESS_KEY=...
+S3_SECRET_KEY=...
+S3_REGION=us-east-1
 ```
 
 ## Run

@@ -13,10 +13,12 @@ Delta
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 import psycopg
 
+from agent_service import storage
 from agent_service.activities import _dsn
 
 MESSAGE_DAYS = 60
@@ -29,6 +31,7 @@ REVIEW_DAYS = 730
 TASK_DAYS = 180
 NOTIFICATION_DAYS = 180
 DELETION_DAYS = 730
+ARTIFACT_DAYS = storage.ARTIFACT_DAYS
 
 RETENTION = [
     ("messages", "created_at", MESSAGE_DAYS),
@@ -56,6 +59,7 @@ SCOPED = [
     "effects",
     "outbox",
     "routines",
+    "artifacts",
 ]
 
 
@@ -77,6 +81,9 @@ async def purge() -> dict[str, int]:
             )
             if cursor.rowcount:
                 counts["conversation_locks"] = cursor.rowcount
+    purged_artifacts = await asyncio.to_thread(storage.purge, ARTIFACT_DAYS)
+    if purged_artifacts:
+        counts["artifacts"] = purged_artifacts
     return counts
 
 
@@ -102,6 +109,8 @@ async def delete_scope(org_id: str, conversation_id: str | None = None) -> dict[
                 )
             if (await cursor.fetchone())[0]:
                 raise RuntimeError("conversation is busy; stop the turn first")
+
+            await asyncio.to_thread(storage.delete_objects, org_id, conversation_id)
 
             for table in SCOPED:
                 if conversation_id is None:

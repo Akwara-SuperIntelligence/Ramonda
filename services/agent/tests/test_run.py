@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 from contextlib import AsyncExitStack
 import re
@@ -33,6 +34,7 @@ from agent_service import activities
 from agent_service import consumer as consumer_module
 from agent_service import maintenance
 from agent_service import routines
+from agent_service import storage
 from agent_service.activities import (
     acquire_lock,
     call_model,
@@ -658,10 +660,10 @@ def test_long_output_is_stored_and_readable():
     text = "x" * 3000
 
     result = asyncio.run(run_tool("local", "long", "echo", text, token))
-    assert "[stored:" in result.output
+    assert "[stored: artifact:" in result.output
 
-    name = hashlib.sha256(token.encode()).hexdigest()[:16] + ".txt"
-    read = asyncio.run(run_tool("local", "long", "read_file", name, token)).output
+    reference = re.search(r"artifact:art_[a-f0-9]+", result.output).group(0)
+    read = asyncio.run(run_tool("local", "long", "read_file", reference, token)).output
     assert text in read
     assert read.startswith("<untrusted>")
 
@@ -2038,3 +2040,120 @@ def test_a_disabled_routine_does_not_run(monkeypatch):
 
 def test_a_routine_turn_always_speaks():
     assert asyncio.run(should_speak("local", "c", "routine", False, "no question")) is True
+
+
+def test_local_artifact_roundtrip_and_scope(monkeypatch):
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    org = f"art-{uuid4().hex}"
+    conv = f"art-{uuid4().hex}"
+
+    artifact_id = storage.put(org, conv, "note.txt", "text/plain", b"hello")
+    meta, data = storage.get(artifact_id, org, conv)
+    assert data == b"hello"
+    assert meta["name"] == "note.txt"
+    with pytest.raises(storage.ArtifactNotFound):
+        storage.get(artifact_id, org, "other")
+
+    storage.delete_objects(org, conv)
+    with pytest.raises(storage.ArtifactNotFound):
+        storage.get(artifact_id, org, conv)
+
+    async def clean():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute("delete from artifacts where id = %s", (artifact_id,))
+
+    asyncio.run(clean())
+
+
+def test_artifact_dedupes_by_content(monkeypatch):
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    org = f"art-{uuid4().hex}"
+    conv = f"art-{uuid4().hex}"
+
+    first = storage.put(org, conv, "a.txt", "text/plain", b"same bytes")
+    second = storage.put(org, conv, "b.txt", "text/plain", b"same bytes")
+    assert first == second
+
+    storage.delete_objects(org, conv)
+
+    async def clean():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute("delete from artifacts where org_id = %s", (org,))
+
+    asyncio.run(clean())
+
+
+def test_s3_key_layout(monkeypatch):
+    class FakeS3:
+        def __init__(self):
+            self.objects = {}
+            self.deleted = []
+
+        def put_object(self, Bucket, Key, Body, ContentType):
+            self.objects[Key] = bytes(Body)
+
+        def get_object(self, Bucket, Key):
+            return {"Body": io.BytesIO(self.objects[Key])}
+
+        def delete_objects(self, Bucket, Delete):
+            self.deleted += [item["Key"] for item in Delete["Objects"]]
+
+    fake = FakeS3()
+    monkeypatch.setenv("S3_BUCKET", "test-bucket")
+    monkeypatch.setattr(storage, "_s3_client", lambda: fake)
+    org = f"art-{uuid4().hex}"
+    conv = f"art-{uuid4().hex}"
+
+    artifact_id = storage.put(org, conv, "a.txt", "text/plain", b"hello")
+    sha = hashlib.sha256(b"hello").hexdigest()
+    key = f"artifacts/{storage._safe(org)}/{storage._safe(conv)}/{sha}"
+    assert key in fake.objects
+    assert storage.get(artifact_id, org, conv)[1] == b"hello"
+
+    storage.delete_objects(org, conv)
+    assert key in fake.deleted
+
+    async def clean():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute("delete from artifacts where id = %s", (artifact_id,))
+
+    asyncio.run(clean())
+
+
+def test_delete_scope_removes_artifacts(monkeypatch):
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    org = f"artdel-{uuid4().hex}"
+    conv = f"artdel-{uuid4().hex}"
+    artifact_id = storage.put(org, conv, "a.txt", "text/plain", b"hello")
+
+    counts = asyncio.run(maintenance.delete_scope(org, conv))
+
+    assert counts["artifacts"] == 1
+    assert asyncio.run(
+        _scalar("select count(*) from artifacts where id = %s", (artifact_id,))
+    ) == 0
+    with pytest.raises(storage.ArtifactNotFound):
+        storage.get(artifact_id, org, conv)
+
+
+def test_purge_removes_old_artifacts(monkeypatch):
+    monkeypatch.delenv("S3_BUCKET", raising=False)
+    org = f"artold-{uuid4().hex}"
+    conv = f"artold-{uuid4().hex}"
+    artifact_id = storage.put(org, conv, "a.txt", "text/plain", b"hello")
+
+    async def age():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "update artifacts set created_at = now() - interval '181 days'"
+                " where id = %s",
+                (artifact_id,),
+            )
+
+    asyncio.run(age())
+    counts = asyncio.run(maintenance.purge())
+
+    assert counts.get("artifacts", 0) >= 1
+    assert asyncio.run(
+        _scalar("select count(*) from artifacts where id = %s", (artifact_id,))
+    ) == 0
