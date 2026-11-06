@@ -190,7 +190,8 @@ Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
 needs the retrieval service. The service currently offers `read_file`,
 `read_skill`, `remember`, `note`, `recall`, `get_tool_schema`, `delegate`, and a
 simulated `send_email`. Computer-dependent work is deferred; see
-[ADR 0008](adr/0008-harness-first.md).
+[ADR 0008](adr/0008-harness-first.md). MCP is deferred; see
+[ADR 0009](adr/0009-mcp-and-skill-capture.md).
 
 ## 5. Exactly-once is a lie; here are the dedupe layers
 
@@ -263,6 +264,9 @@ ready). Temporal has no index of "who is waiting for X", so maintain one:
 
 Facts carry provenance. A fact from the user is trusted. A fact learned from a
 tool is injected as untrusted data. See [ADR 0002](adr/0002-trust-and-silence.md).
+
+Skill capture, where the agent watches a session and writes a new skill, is
+deferred. See [ADR 0009](adr/0009-mcp-and-skill-capture.md).
 
 HelixDB specifics:
 
@@ -397,9 +401,8 @@ service to function.
 - Whether `agent.observation.recorded` should feed ingestion, and under whose
   schema.
 - Memory storage: the database, or the files EDA §8 describes.
-- Skill capture: should the agent write a skill from a recorded session, and who
-  approves it?
-- MCP: a tool source, or keep the fixed tool registry?
+- Skill capture: deferred; see [ADR 0009](adr/0009-mcp-and-skill-capture.md).
+- MCP: deferred; see [ADR 0009](adr/0009-mcp-and-skill-capture.md).
 - Long-run turns: raise the step budget, or use `continue-as-new`?
 
 ## References
