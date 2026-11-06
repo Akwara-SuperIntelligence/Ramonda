@@ -22,6 +22,7 @@ feature, not this decision.
 - MinIO's public images now require authentication, so compose does not ship a
   local S3 service. Point `S3_*` at a real bucket, or leave it unset for the
   fallback. The S3 adapter was live-checked against LocalStack 3.8.
+- The default provider is Cloudflare R2; see [ADR 0007](0007-r2-provider.md).
 
 ### Data model
 

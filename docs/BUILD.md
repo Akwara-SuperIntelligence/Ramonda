@@ -398,7 +398,7 @@ audit.
 | Kafka | Topics per event family and priority class; partition key `org_id`; dead-letter topics; retention; per-tenant quotas |
 | Schema registry | Compatibility mode; CI check; one subject per event type |
 | Postgres | One database per service; row-level security where shared; backup and restore drill |
-| Object storage | Versioning; lifecycle; per-stamp buckets; encryption with customer keys in BYOC |
+| Object storage | Cloudflare R2 by default; versioning; lifecycle; per-stamp buckets; encryption with customer keys in BYOC. See [ADR 0007](adr/0007-r2-provider.md) |
 | Identity provider | Realms or organisations per stamp; OIDC clients per service; JWKS rotation |
 | OpenTelemetry | One collector per stamp; trace sampling policy; redaction rules |
 | Kubernetes and Helm | One chart per service; values per profile; canary per stamp |

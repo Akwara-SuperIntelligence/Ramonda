@@ -203,16 +203,19 @@ make up                                      # from the repo root
 ../../.venv/bin/pip install -e ".[dev]"      # from this directory, once
 ```
 
-Artifacts use `.agent/artifacts` unless `S3_BUCKET` is set. To use an
-S3-compatible bucket (AWS, MinIO, LocalStack), set:
+Artifacts use `.agent/artifacts` unless `S3_BUCKET` is set. The default cloud
+provider is Cloudflare R2 ([ADR 0007](../../docs/adr/0007-r2-provider.md)):
 
 ```
-S3_ENDPOINT=http://localhost:4566   # omit for AWS
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 S3_BUCKET=agent-artifacts
+S3_REGION=auto
 S3_ACCESS_KEY=...
 S3_SECRET_KEY=...
-S3_REGION=us-east-1
 ```
+
+Any S3-compatible store also works (AWS, B2, Wasabi, LocalStack). For a local
+S3 test endpoint, set `S3_ENDPOINT=http://localhost:4566` and any test keys.
 
 ## Run
 
