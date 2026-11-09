@@ -46,12 +46,7 @@ def _conv() -> str:
 
 
 async def _seed_fact(conv: str, content: str) -> None:
-    async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-        await conn.execute(
-            "insert into memories (org_id, conversation_id, kind, content)"
-            " values ('local', %s, 'fact', %s)",
-            (conv, content),
-        )
+    transcript.add_fact("local", conv, content, "user")
 
 
 async def _seed_tool_step(conv: str, content: str) -> None:

@@ -13,6 +13,7 @@ Delta
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,10 +21,12 @@ from pathlib import Path
 from agent_service import storage
 
 
+def _conv_prefix(org_id: str, conversation_id: str) -> str:
+    return f"memory/{storage._safe(org_id)}/{storage._safe(conversation_id)}/"
+
+
 def _prefix(org_id: str, conversation_id: str) -> str:
-    return (
-        f"memory/{storage._safe(org_id)}/{storage._safe(conversation_id)}/log/"
-    )
+    return f"{_conv_prefix(org_id, conversation_id)}log/"
 
 
 def _key(org_id: str, conversation_id: str, seq: int) -> str:
@@ -92,6 +95,113 @@ def load(org_id: str, conversation_id: str, after_seq: int = -1) -> list[dict]:
     return out
 
 
+def _read_text(key: str) -> str:
+    try:
+        return storage.get_object(key).decode(errors="replace")
+    except storage.ObjectNotFound:
+        return ""
+
+
+def _write_text(key: str, text: str) -> None:
+    storage.put_object(key, text.encode(), "text/markdown")
+
+
+def _profile_key(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}profile.md"
+
+
+def _tool_facts_key(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}facts-tool.md"
+
+
+def load_facts(org_id: str, conversation_id: str) -> tuple[list[str], list[str]]:
+    """Return the user facts and the tool facts, in that order."""
+    user = [
+        line[2:].strip()
+        for line in _read_text(_profile_key(org_id, conversation_id)).splitlines()
+        if line.startswith("- ")
+    ]
+    tool = [
+        line[2:].strip()
+        for line in _read_text(_tool_facts_key(org_id, conversation_id)).splitlines()
+        if line.startswith("- ")
+    ]
+    return user, tool
+
+
+def add_fact(
+    org_id: str, conversation_id: str, content: str, source: str
+) -> None:
+    """Append one fact to the profile or the tool-facts file. Duplicate safe."""
+    key = (
+        _profile_key(org_id, conversation_id)
+        if source == "user"
+        else _tool_facts_key(org_id, conversation_id)
+    )
+    line = "- " + " ".join(content.split())
+    existing = _read_text(key).splitlines()
+    if line in existing:
+        return
+    _write_text(key, "\n".join([*existing, line]) + "\n")
+
+
+def _scratch_prefix(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}scratch/"
+
+
+def _scratch_key(org_id: str, conversation_id: str, effect_token: str) -> str:
+    digest = hashlib.sha256(effect_token.encode()).hexdigest()[:16]
+    return f"{_scratch_prefix(org_id, conversation_id)}{digest}.md"
+
+
+def add_note(
+    org_id: str, conversation_id: str, content: str, effect_token: str
+) -> None:
+    """One scratch object per effect token, so a retry replaces the same note."""
+    _write_text(_scratch_key(org_id, conversation_id, effect_token), content)
+
+
+def load_scratch(
+    org_id: str, conversation_id: str, hours: int | None = 1
+) -> list[dict]:
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+        if hours is not None
+        else None
+    )
+    notes = []
+    for obj in storage.list_objects(_scratch_prefix(org_id, conversation_id)):
+        if cutoff is not None and obj["last_modified"] < cutoff:
+            continue
+        notes.append(
+            {
+                "content": _read_text(obj["key"]),
+                "created_at": obj["last_modified"],
+            }
+        )
+    notes.sort(key=lambda note: note["created_at"])
+    return notes
+
+
+def _summary_key(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}summary.json"
+
+
+def load_summary(org_id: str, conversation_id: str) -> tuple[str, int]:
+    try:
+        data = json.loads(_read_text(_summary_key(org_id, conversation_id)) or "{}")
+    except json.JSONDecodeError:
+        return "", -1
+    return str(data.get("text", "")), int(data.get("seq", -1))
+
+
+def write_summary(org_id: str, conversation_id: str, text: str, seq: int) -> None:
+    _write_text(
+        _summary_key(org_id, conversation_id),
+        json.dumps({"text": text, "seq": seq}, sort_keys=True),
+    )
+
+
 def search(
     org_id: str, conversation_id: str, query: str, limit: int = 5
 ) -> list[dict]:
@@ -101,7 +211,10 @@ def search(
         for entry in load(org_id, conversation_id)
         if needle in str(entry.get("content", "")).lower()
     ]
-    hits.sort(key=lambda entry: (entry.get("seq", 0), entry.get("step", 0)), reverse=True)
+    hits.sort(
+        key=lambda entry: (entry.get("seq", 0), entry.get("step", 0)),
+        reverse=True,
+    )
     return hits[:limit]
 
 
@@ -109,7 +222,7 @@ def delete_scope(org_id: str, conversation_id: str | None = None) -> int:
     prefix = (
         f"memory/{storage._safe(org_id)}/"
         if conversation_id is None
-        else _prefix(org_id, conversation_id)
+        else _conv_prefix(org_id, conversation_id)
     )
     keys = [obj["key"] for obj in storage.list_objects(prefix)]
     storage.delete_keys(keys)
@@ -121,7 +234,18 @@ def purge(days: int) -> int:
     keys = [
         obj["key"]
         for obj in storage.list_objects("memory/")
-        if obj["last_modified"] < cutoff
+        if "/log/" in obj["key"] and obj["last_modified"] < cutoff
+    ]
+    storage.delete_keys(keys)
+    return len(keys)
+
+
+def purge_scratch(hours: int = 1) -> int:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    keys = [
+        obj["key"]
+        for obj in storage.list_objects("memory/")
+        if "/scratch/" in obj["key"] and obj["last_modified"] < cutoff
     ]
     storage.delete_keys(keys)
     return len(keys)

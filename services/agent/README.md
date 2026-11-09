@@ -76,7 +76,7 @@ Every increment names its sources. This table is the running index.
 | EDA §5 — a projection needs a reconciler | `activities.py` (`reap_tasks`), `consumer.py` | Tasks with no report after 35 minutes become failed and report |
 | lesson 06 — a second loop | `workflow.py`, `worker.py` | The helper shares the pinned prompt; its calls record under a negative seq |
 | talk §06, lesson 10 — evals from real failures | `tests/test_evals.py` | Repeat rule and memory recall, asserted on the live model |
-| talk §02, §05 — memory layers | `activities.py` (`remember`, `note`, `recall`), `migrations/009_memories.sql` | Facts always in the prompt; scratch for one hour |
+| talk §02, §05 — memory layers | `transcript.py` (`load_facts`, `add_note`), ADR 0011 | Facts always in the prompt; scratch for one hour |
 | lesson 07 — memory is stored so it can be recalled | `activities.py` (`load_history`, `recall`) | Facts and recent notes, not just the transcript |
 | EDA §5 — serialise per conversation | `workflow.py`, `migrations/006_locks.sql` | A lock row is held for the whole turn |
 | talk §04 — auto-review before the human | `activities.py` (`review_action`), `migrations/011_reviews.sql` | A second model allows, denies, or escalates |
@@ -94,11 +94,15 @@ Every increment names its sources. This table is the running index.
 | ADR 0005 — routines | `routines.py`, `routine.py`, `migrations/014_routines.sql` | A Temporal Schedule starts a turn; CLI-only; no irreversible tools |
 | ADR 0006 — artifacts | `storage.py`, `migrations/015_artifacts.sql` | S3-compatible store; opaque `artifact:{id}`; local fallback |
 | ADR 0010 — transcript | `transcript.py`, `migrations/016_drop_messages.sql` | Messages are JSONL objects, one per turn; Postgres holds execution state |
+| ADR 0011 — memory files | `transcript.py`, `migrations/017_memory_files.sql` | Profile, tool facts, scratch, and summary are files |
 
 ## Verified
 
 A live file transcript wrote one JSONL object per turn, read it back, enforced
 the turn order, and deleted the scope.
+
+Memory files held user facts, tool facts, scratch, and the summary. The profile
+and the tool facts stayed separate, so provenance survived the move.
 
 A live S3-compatible roundtrip (LocalStack 3.8) stored bytes, read them back,
 enforced the org and conversation scope, and deleted both object and row.

@@ -157,7 +157,8 @@ The four metrics, traceparent propagation, and the quota guard are in
 [ADR 0004](adr/0004-metrics-quotas.md). Routines are in
 [ADR 0005](adr/0005-routines.md). Artifacts are in
 [ADR 0006](adr/0006-object-storage.md). The transcript is in
-[ADR 0010](adr/0010-file-transcript.md).
+[ADR 0010](adr/0010-file-transcript.md). Memory files are in
+[ADR 0011](adr/0011-memory-files.md).
 
 ### 4.3 Commands accepted
 
@@ -257,17 +258,20 @@ ready). Temporal has no index of "who is waiting for X", so maintain one:
 
 | Layer | Lives in | Owner | Read when |
 |---|---|---|---|
-| Core facts | Postgres `memories` (interim) | This service | Every turn |
+| Core facts | `profile.md` and `facts-tool.md` | This service | Every turn |
+| Summary | `summary.json` | This service | Every turn |
 | Dated logs | JSONL objects, one per turn | This service | Loaded for the recent window |
-| Scratchpad | Postgres `memories` (interim) | This service | This hour, then discarded |
+| Scratchpad | `scratch/`, one object per note | This service | This hour, then discarded |
 | Skills | Markdown files | This service | On demand |
 | Org knowledge | HelixDB graph and vectors | Ingestion | Via `retrieve`, lazily |
 
-Messages are files. The transcript is JSONL, one object per turn, under
-`memory/{org}/{conversation}/log/`. A write replaces the entry with the same
-`(step, role)`, so a retry is a no-op. Temporal still runs the turn; activities
-do the I/O. Postgres holds execution state and, for now, facts, scratch, and the
-summary. See [ADR 0010](adr/0010-file-transcript.md).
+All memory is files under `memory/{org}/{conversation}/`. The transcript is
+JSONL, one object per turn. User facts and tool facts are separate files so
+provenance survives. Scratch is one object per effect token. The summary is
+JSON with its cutoff. A write replaces the entry with the same `(step, role)`,
+so a retry is a no-op. Temporal still runs the turn; activities do the I/O.
+Postgres holds execution state only. See [ADR 0010](adr/0010-file-transcript.md)
+and [ADR 0011](adr/0011-memory-files.md).
 
 Facts carry provenance. A fact from the user is trusted. A fact learned from a
 tool is injected as untrusted data. See [ADR 0002](adr/0002-trust-and-silence.md).

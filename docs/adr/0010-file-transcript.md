@@ -46,6 +46,7 @@ entries. The turn object is small.
 - The transcript no longer needs a read replica. R2 is strongly consistent.
 - `recall` is a scan. It is correct now and will need an index later.
 - Facts and scratch pad are still in Postgres. They are the next files to move.
+  This is done in [ADR 0011](0011-memory-files.md).
 - The local fallback under `.agent/` is for development and tests.
 - Existing `messages` rows are not migrated. This is a pre-production cutover.
 

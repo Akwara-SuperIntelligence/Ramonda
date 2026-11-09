@@ -48,7 +48,6 @@ RETENTION = [
 
 SCOPED = [
     "model_calls",
-    "memories",
     "tasks",
     "approvals",
     "reviews",
@@ -86,6 +85,9 @@ async def purge() -> dict[str, int]:
     purged_transcript = await asyncio.to_thread(transcript.purge, MESSAGE_DAYS)
     if purged_transcript:
         counts["transcript"] = purged_transcript
+    purged_scratch = await asyncio.to_thread(transcript.purge_scratch, 1)
+    if purged_scratch:
+        counts["scratch"] = purged_scratch
     return counts
 
 

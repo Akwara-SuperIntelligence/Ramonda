@@ -767,38 +767,28 @@ async def compact(org_id: str, conversation_id: str) -> None:
 
     Sources: talk §05 — compaction while the cache is warm.
     """
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        cursor = await conn.execute(
-            "select summary, summary_seq from conversations"
-            " where org_id = %s and conversation_id = %s",
-            (org_id, conversation_id),
-        )
-        row = await cursor.fetchone()
-        summary, summary_seq = row if row else ("", -1)
+    summary, summary_seq = await asyncio.to_thread(
+        transcript.load_summary, org_id, conversation_id
+    )
+    entries = await asyncio.to_thread(
+        transcript.load, org_id, conversation_id, summary_seq
+    )
+    count = len(entries)
+    max_seq = max((entry["seq"] for entry in entries), default=-1)
+    cutoff = max_seq - KEEP_TURNS
+    if count <= COMPACT_AFTER or cutoff <= summary_seq:
+        return
 
-        entries = await asyncio.to_thread(
-            transcript.load, org_id, conversation_id, summary_seq
-        )
-        count = len(entries)
-        max_seq = max((entry["seq"] for entry in entries), default=-1)
-        cutoff = max_seq - KEEP_TURNS
-        if count <= COMPACT_AFTER or cutoff <= summary_seq:
-            return
-
-        lines = [
-            f'{entry["role"]}: {entry["content"]}'
-            for entry in entries
-            if entry["seq"] <= cutoff
-        ]
-        text = (f"Previous summary:\n{summary}\n\n" if summary else "") + "\n".join(lines)
-        new_summary = _summarize(text)
-        await conn.execute(
-            "insert into conversations (org_id, conversation_id, summary, summary_seq)"
-            " values (%s, %s, %s, %s)"
-            " on conflict (org_id, conversation_id) do update set"
-            " summary = excluded.summary, summary_seq = excluded.summary_seq",
-            (org_id, conversation_id, new_summary, cutoff),
-        )
+    lines = [
+        f'{entry["role"]}: {entry["content"]}'
+        for entry in entries
+        if entry["seq"] <= cutoff
+    ]
+    text = (f"Previous summary:\n{summary}\n\n" if summary else "") + "\n".join(lines)
+    new_summary = _summarize(text)
+    await asyncio.to_thread(
+        transcript.write_summary, org_id, conversation_id, new_summary, cutoff
+    )
 
 
 @activity.defn
@@ -807,75 +797,59 @@ async def load_history(org_id: str, conversation_id: str) -> History:
 
     Sources: talk §05 (memory is layered), lesson 07 (three layers).
     """
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        cursor = await conn.execute(
-            "select summary, summary_seq from conversations"
-            " where org_id = %s and conversation_id = %s",
-            (org_id, conversation_id),
+    summary, summary_seq = await asyncio.to_thread(
+        transcript.load_summary, org_id, conversation_id
+    )
+    entries = await asyncio.to_thread(
+        transcript.load, org_id, conversation_id, summary_seq
+    )
+    facts_user, facts_tool = await asyncio.to_thread(
+        transcript.load_facts, org_id, conversation_id
+    )
+    scratch = [
+        note["content"]
+        for note in await asyncio.to_thread(
+            transcript.load_scratch, org_id, conversation_id, 1
         )
-        row = await cursor.fetchone()
-        summary, summary_seq = row if row else ("", -1)
-        entries = await asyncio.to_thread(
-            transcript.load, org_id, conversation_id, summary_seq
-        )
-        cursor = await conn.execute(
-            "select kind, content, source from memories"
-            " where org_id = %s and conversation_id = %s"
-            " and (kind = 'fact' or created_at > now() - interval '1 hour')"
-            " order by created_at",
-            (org_id, conversation_id),
-        )
-        rows = await cursor.fetchall()
-        facts = [content for kind, content, _ in rows if kind == "fact"]
-        facts_user = [
-            content
-            for kind, content, source in rows
-            if kind == "fact" and source == "user"
-        ]
-        facts_tool = [
-            content
-            for kind, content, source in rows
-            if kind == "fact" and source != "user"
-        ]
-        scratch = [content for kind, content, _ in rows if kind == "scratch"]
+    ]
 
-        history: list[dict] = []
-        if facts_user:
-            history.append(
-                {
-                    "role": "assistant",
-                    "content": "Known facts:\n"
-                    + "\n".join(f"- {fact}" for fact in facts_user),
-                }
-            )
-        if facts_tool:
-            history.append(
-                {
-                    "role": "assistant",
-                    "content": "Unverified facts:\n"
-                    + wrap_untrusted("\n".join(f"- {fact}" for fact in facts_tool)),
-                }
-            )
-        if summary:
-            history.append({"role": "assistant", "content": f"Earlier work: {summary}"})
-        for entry in entries:
-            role, content = entry["role"], entry["content"]
-            if role == "tool":
-                history.append({"role": "user", "content": f"tool result: {content}"})
-            else:
-                history.append({"role": role, "content": content})
-        if scratch:
-            history.append(
-                {
-                    "role": "user",
-                    "content": "Scratchpad:\n"
-                    + wrap_untrusted("\n".join(f"- {item}" for item in scratch)),
-                }
-            )
-        return History(
-            messages=history,
-            memory_hash=_hash(summary + "\n" + "\n".join(facts)),
+    history: list[dict] = []
+    if facts_user:
+        history.append(
+            {
+                "role": "assistant",
+                "content": "Known facts:\n"
+                + "\n".join(f"- {fact}" for fact in facts_user),
+            }
         )
+    if facts_tool:
+        history.append(
+            {
+                "role": "assistant",
+                "content": "Unverified facts:\n"
+                + wrap_untrusted("\n".join(f"- {fact}" for fact in facts_tool)),
+            }
+        )
+    if summary:
+        history.append({"role": "assistant", "content": f"Earlier work: {summary}"})
+    for entry in entries:
+        role, content = entry["role"], entry["content"]
+        if role == "tool":
+            history.append({"role": "user", "content": f"tool result: {content}"})
+        else:
+            history.append({"role": role, "content": content})
+    if scratch:
+        history.append(
+            {
+                "role": "user",
+                "content": "Scratchpad:\n"
+                + wrap_untrusted("\n".join(f"- {item}" for item in scratch)),
+            }
+        )
+    return History(
+        messages=history,
+        memory_hash=_hash(summary + "\n" + "\n".join([*facts_user, *facts_tool])),
+    )
 
 
 @activity.defn
@@ -1300,22 +1274,42 @@ async def _write_memory(
                 conn, effect_token, kind, content, org_id, conversation_id
             ):
                 return
-            await conn.execute(
-                "insert into memories (org_id, conversation_id, kind, content, source)"
-                " values (%s, %s, %s, %s, %s)",
-                (org_id, conversation_id, kind, content, source),
-            )
+            if kind == "fact":
+                await asyncio.to_thread(
+                    transcript.add_fact,
+                    org_id,
+                    conversation_id,
+                    content,
+                    source,
+                )
+            else:
+                await asyncio.to_thread(
+                    transcript.add_note,
+                    org_id,
+                    conversation_id,
+                    content,
+                    effect_token,
+                )
 
 
 async def _recall(org_id: str, conversation_id: str, query: str) -> str:
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        cursor = await conn.execute(
-            "select content, created_at from memories"
-            " where org_id = %s and conversation_id = %s and content ilike %s"
-            " order by created_at desc limit 5",
-            (org_id, conversation_id, f"%{query}%"),
-        )
-        lines = [f"{created:%Y-%m-%d} memory: {content}" async for content, created in cursor]
+    needle = query.lower()
+    facts_user, facts_tool = await asyncio.to_thread(
+        transcript.load_facts, org_id, conversation_id
+    )
+    notes = await asyncio.to_thread(
+        transcript.load_scratch, org_id, conversation_id, None
+    )
+    lines = [
+        f"fact: {fact}"
+        for fact in [*facts_user, *facts_tool]
+        if needle in fact.lower()
+    ][:5]
+    lines += [
+        f'{note["created_at"]:%Y-%m-%d} scratch: {note["content"]}'
+        for note in notes
+        if needle in note["content"].lower()
+    ][:5]
     hits = await asyncio.to_thread(
         transcript.search, org_id, conversation_id, query, 5
     )

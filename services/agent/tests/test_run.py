@@ -711,9 +711,9 @@ def test_facts_carry_provenance_and_are_injected_as_data():
     assert "my name is Hassan" in joined
     assert "the code is 1234" in joined
     assert "<untrusted>" in joined
-    assert asyncio.run(
-        _scalar("select source from memories where content = %s", ("the code is 1234",))
-    ) == "tool"
+    user_facts, tool_facts = transcript.load_facts("local", conv)
+    assert any("Hassan" in fact for fact in user_facts)
+    assert any("1234" in fact for fact in tool_facts)
 
 
 def test_compaction_summarises_old_turns(monkeypatch):
@@ -727,12 +727,9 @@ def test_compaction_summarises_old_turns(monkeypatch):
 
     asyncio.run(activities.compact("local", conv))
 
-    assert asyncio.run(
-        _scalar("select summary from conversations where conversation_id = %s", (conv,))
-    ) == "summary of old turns"
-    assert asyncio.run(
-        _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
-    ) == 3
+    summary, summary_seq = transcript.load_summary("local", conv)
+    assert summary == "summary of old turns"
+    assert summary_seq == 3
 
 
 def test_tool_schemas_are_loaded_on_demand():
@@ -771,14 +768,10 @@ def test_compaction_uses_the_live_model():
 
     asyncio.run(activities.compact("local", conv))
 
-    summary = asyncio.run(
-        _scalar("select summary from conversations where conversation_id = %s", (conv,))
-    )
+    summary, summary_seq = transcript.load_summary("local", conv)
     assert summary
     assert len(summary) > 10
-    assert asyncio.run(
-        _scalar("select summary_seq from conversations where conversation_id = %s", (conv,))
-    ) == 5
+    assert summary_seq == 5
 
 
 def test_prompt_version_is_pinned(monkeypatch):
@@ -843,18 +836,15 @@ def test_a_fact_survives_into_the_next_turn(monkeypatch):
 
 def test_scratch_expires_but_facts_stay():
     conv = f"t-{uuid4().hex}"
+    transcript.add_fact("local", conv, "durable fact", "user")
+    transcript.add_note("local", conv, "fresh note", "fresh-token")
+    transcript.add_note("local", conv, "stale note", "stale-token")
+    stale_path = storage.LOCAL_ROOT / transcript._scratch_key(
+        "local", conv, "stale-token"
+    )
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).timestamp()
+    os.utime(stale_path, (old, old))
 
-    async def seed():
-        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-            await conn.execute(
-                "insert into memories (org_id, conversation_id, kind, content, created_at)"
-                " values ('local', %s, 'fact', 'durable fact', now()),"
-                " ('local', %s, 'scratch', 'fresh note', now()),"
-                " ('local', %s, 'scratch', 'stale note', now() - interval '2 hours')",
-                (conv, conv, conv),
-            )
-
-    asyncio.run(seed())
     loaded = asyncio.run(activities.load_history("local", conv))
     text = "\n".join(message["content"] for message in loaded.messages)
 
@@ -1539,12 +1529,6 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
                 "  now() - interval '61 days')",
                 (org, conv),
             )
-            await conn.execute(
-                "insert into memories"
-                " (org_id, conversation_id, kind, content, created_at)"
-                " values (%s, %s, 'fact', 'kept', now() - interval '400 days')",
-                (org, conv),
-            )
 
     asyncio.run(seed())
     transcript.write_entry(org, conv, 1, 0, "user", "old")
@@ -1552,9 +1536,16 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
     old_time = (datetime.now(timezone.utc) - timedelta(days=61)).timestamp()
     os.utime(old_path, (old_time, old_time))
     transcript.write_entry(org, conv, 2, 0, "user", "new")
+    transcript.add_fact(org, conv, "kept", "user")
+    transcript.add_note(org, conv, "stale scratch", "scratch-token")
+    scratch_path = storage.LOCAL_ROOT / transcript._scratch_key(
+        org, conv, "scratch-token"
+    )
+    os.utime(scratch_path, (old_time, old_time))
     counts = asyncio.run(maintenance.purge())
 
     assert counts.get("transcript", 0) >= 1
+    assert counts.get("scratch", 0) >= 1
     assert counts.get("effects", 0) >= 1
     assert counts.get("approvals", 0) >= 1
     assert counts.get("reviews", 0) >= 1
@@ -1588,9 +1579,9 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
     assert asyncio.run(
         _scalar("select count(*) from model_calls where conversation_id = %s", (conv,))
     ) == 0
-    assert asyncio.run(
-        _scalar("select count(*) from memories where conversation_id = %s", (conv,))
-    ) == 1
+    user_facts, _ = transcript.load_facts(org, conv)
+    assert "kept" in user_facts
+    assert transcript.load_scratch(org, conv, None) == []
 
 
 def test_delete_conversation_scopes_rows_and_writes_audit():
@@ -1638,11 +1629,6 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
                 (org, conv),
             )
             await conn.execute(
-                "insert into memories (org_id, conversation_id, kind, content)"
-                " values (%s, %s, 'fact', 'x')",
-                (org, conv),
-            )
-            await conn.execute(
                 "insert into model_calls"
                 " (org_id, conversation_id, seq, step, model, prompt_hash,"
                 "  prompt_tokens, cache_hit, cache_miss, completion_tokens)"
@@ -1657,15 +1643,17 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
 
     asyncio.run(seed())
     transcript.write_entry(org, conv, 1, 0, "user", "x")
+    transcript.add_fact(org, conv, "x", "user")
     transcript.write_entry(org, other, 1, 0, "user", "y")
     counts = asyncio.run(maintenance.delete_scope(org, conv))
 
-    assert counts["transcript"] == 1
+    assert counts["transcript"] == 2
     assert counts["effects"] == 1
     assert counts["outbox"] == 1
     assert counts["conversations"] == 1
     assert counts["routines"] == 1
     assert transcript.load(org, conv) == []
+    assert transcript.load_facts(org, conv) == ([], [])
     assert [entry["content"] for entry in transcript.load(org, other)] == ["y"]
     assert asyncio.run(
         _scalar("select count(*) from deletions where org_id = %s and conversation_id = %s", (org, conv))
@@ -1678,8 +1666,7 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
             )
         )
     )
-    assert audit["transcript"] == 1
-    assert audit["memories"] == 1
+    assert audit["transcript"] == 2
 
 
 def test_delete_refuses_a_busy_conversation():
@@ -1994,6 +1981,30 @@ def test_transcript_is_files_per_turn():
 
     transcript.delete_scope("local", conv)
     assert transcript.load("local", conv) == []
+
+
+def test_memory_files_hold_profile_scratch_and_summary():
+    conv = f"mem-{uuid4().hex}"
+    transcript.add_fact("local", conv, "likes tea", "user")
+    transcript.add_fact("local", conv, "likes tea", "user")
+    transcript.add_fact("local", conv, "tool fact", "tool")
+    transcript.add_note("local", conv, "scratch note", "note-token")
+    transcript.add_note("local", conv, "scratch note", "note-token")
+    transcript.write_summary("local", conv, "the summary", 3)
+
+    user, tool = transcript.load_facts("local", conv)
+    assert user == ["likes tea"]
+    assert tool == ["tool fact"]
+    assert transcript.load_scratch("local", conv, None)[0]["content"] == "scratch note"
+    assert transcript.load_summary("local", conv) == ("the summary", 3)
+    assert (storage.LOCAL_ROOT / transcript._profile_key("local", conv)).is_file()
+    assert (storage.LOCAL_ROOT / transcript._tool_facts_key("local", conv)).is_file()
+    assert (storage.LOCAL_ROOT / transcript._summary_key("local", conv)).is_file()
+
+    transcript.delete_scope("local", conv)
+    assert transcript.load_facts("local", conv) == ([], [])
+    assert transcript.load_scratch("local", conv, None) == []
+    assert transcript.load_summary("local", conv) == ("", -1)
 
 
 def test_local_artifact_roundtrip_and_scope(monkeypatch):

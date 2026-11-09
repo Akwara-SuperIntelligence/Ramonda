@@ -15,14 +15,14 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 72 tests
+make test                                # migrate + 73 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **72 tests**; migrations through `016`, prompt version **8**. CI runs the
+State: **73 tests**; migrations through `017`, prompt version **8**. CI runs the
 suite and the link check on every push. `make migrate` is safe to rerun.
 
 The 3 live-model evals in the suite require a valid model key (OpenRouter via
@@ -64,6 +64,7 @@ Oldest first. Each item is merged and tested.
 | Live routine | 08:00 Nairobi; next run 05:00 UTC; pause, resume, delete |
 | Artifacts | long output and `read_file` use S3-compatible storage; opaque refs |
 | Transcript | messages are JSONL objects, one per turn; Postgres holds execution state |
+| Memory | `profile.md`, `facts-tool.md`, `scratch/`, `summary.json` are files |
 
 ## 4. How it fits together
 
@@ -77,7 +78,7 @@ Oldest first. Each item is merged and tested.
 | `health.py` | Liveness and readiness endpoints, plus `/metrics` |
 | `metrics.py` | The four numbers as Prometheus text |
 | `storage.py` | Artifact buckets: S3-compatible, local fallback, opaque refs |
-| `transcript.py` | Messages as JSONL objects, one per turn |
+| `transcript.py` | Transcript and memory as files: log, profile, scratch, summary |
 | `maintenance.py` | Retention purge and scoped hard delete |
 | `routines.py` | The routine row and its Temporal Schedule |
 | `routine.py` | Operator CLI to create, list, pause, resume, and delete routines |
@@ -85,7 +86,7 @@ Oldest first. Each item is merged and tested.
 | `dlq.py` | Inspect and replay dead letters |
 | `worker.py` | Two queues: `agent-orchestrator`, `agent-helper` |
 | `events.py` | Envelope, event types, topics |
-| `migrations/` | `001`–`016`, idempotent |
+| `migrations/` | `001`–`017`, idempotent |
 | `skills/<name>/SKILL.md` | Model-read skills |
 
 ## 5. What is left
@@ -110,6 +111,7 @@ The current plan is **harden first**:
 | 14 | Routines / schedules | **done**: Temporal Schedule per routine, CLI-only |
 | 15 | Object storage for artifacts | **done**: long output + `read_file`; opaque refs; local fallback in dev |
 | 16 | Transcript in files | **done**: JSONL per turn; `messages` table dropped |
+| 17 | Memory in files | **done**: profile, tool facts, scratch, summary; `memories` dropped |
 
 Permission approvals, the choice card itself, and custom rules are deferred.
 The taxonomy, their fields, and their blockers are in
@@ -124,13 +126,15 @@ The taxonomy, their fields, and their blockers are in
   skill-writing path; it is deferred in
   [ADR 0008](../../docs/adr/0008-harness-first.md) and
   [ADR 0009](../../docs/adr/0009-mcp-and-skill-capture.md).
-- **Facts and scratch are still in Postgres.** Messages are files. The `memories`
-  table and the `conversations` summary are the next move. See
-  [ADR 0010](../../docs/adr/0010-file-transcript.md).
-- **`recall` scans the transcript.** Object storage has no `grep`. This is correct
-  now and needs an index or the sandbox at scale.
-- **Old `messages` rows are not migrated.** `016` drops the table. This is a
-  pre-production cutover.
+- **All memory is files.** Profile, tool facts, scratch, summary, and transcript
+  live under `memory/{org}/{conversation}/`. Postgres holds execution state only.
+  See [ADR 0011](../../docs/adr/0011-memory-files.md).
+- **The profile is per conversation.** A cross-conversation user profile needs an
+  actor identity, which the harness does not pass yet.
+- **`recall` scans memory and transcript.** Object storage has no `grep`. This is
+  correct now and needs an index or the sandbox at scale.
+- **Old memory and message rows are not migrated.** `016` and `017` drop the
+  tables. This is a pre-production cutover.
 - **MCP is not in the tool registry.** The tool list is fixed; a third-party tool
   is new code. MCP is deferred in
   [ADR 0009](../../docs/adr/0009-mcp-and-skill-capture.md).
