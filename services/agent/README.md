@@ -95,6 +95,7 @@ Every increment names its sources. This table is the running index.
 | ADR 0006 — artifacts | `storage.py`, `migrations/015_artifacts.sql` | S3-compatible store; opaque `artifact:{id}`; local fallback |
 | ADR 0010 — transcript | `transcript.py`, `migrations/016_drop_messages.sql` | Messages are JSONL objects, one per turn; Postgres holds execution state |
 | ADR 0011 — memory files | `transcript.py`, `migrations/017_memory_files.sql` | Profile, tool facts, scratch, and summary are files |
+| ADR 0012 — long runs | `workflow.py`, `activities.py` | Plan, budgets, segments, compaction, stop, progress |
 
 ## Verified
 
@@ -103,6 +104,10 @@ the turn order, and deleted the scope.
 
 Memory files held user facts, tool facts, scratch, and the summary. The profile
 and the tool facts stayed separate, so provenance survived the move.
+
+A 26-step turn crossed a `continue-as-new` boundary, kept its plan, and returned
+one final. The step, token, and time ceilings each returned a final instead of an
+exception. A stop signal ended a running turn.
 
 A live S3-compatible roundtrip (LocalStack 3.8) stored bytes, read them back,
 enforced the org and conversation scope, and deleted both object and row.

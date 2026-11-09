@@ -61,6 +61,14 @@ def metrics_text() -> str:
     lines.append(f"# TYPE {NAMESPACE}cache_hit_ratio gauge")
     lines.append(f"{NAMESPACE}cache_hit_ratio {ratio:.3f}")
 
+    # Token spend over the last 7 days, the cost signal for long runs.
+    tokens = _scalar(
+        "select coalesce(sum(prompt_tokens + completion_tokens), 0)"
+        " from model_calls where created_at > now() - interval '7 days'"
+    ) or 0
+    lines.append(f"# TYPE {NAMESPACE}tokens_total counter")
+    lines.append(f"{NAMESPACE}tokens_total {tokens}")
+
     # Consumer lag: age in seconds of the newest run event.
     lag = _scalar(
         "select extract(epoch from (now() - max(created_at)))"

@@ -41,6 +41,7 @@ from agent_service.activities import (
     acquire_lock,
     call_model,
     compact,
+    compact_steps,
     create_task,
     expire_approval,
     finish_task,
@@ -48,10 +49,14 @@ from agent_service.activities import (
     load_history,
     next_turn,
     pin_prompt,
+    plan_open,
+    record_progress,
     record_run,
     release_lock,
+    renew_lock,
     report_task,
     request_approval,
+    reset_turn_state,
     review_action,
     routine_active,
     run_tool,
@@ -72,6 +77,7 @@ ACTIVITIES = [
     acquire_lock,
     call_model,
     compact,
+    compact_steps,
     create_task,
     expire_approval,
     finish_task,
@@ -79,10 +85,14 @@ ACTIVITIES = [
     load_history,
     next_turn,
     pin_prompt,
+    plan_open,
+    record_progress,
     record_run,
     release_lock,
+    renew_lock,
     report_task,
     request_approval,
+    reset_turn_state,
     review_action,
     routine_active,
     run_tool,
@@ -250,8 +260,9 @@ def test_step_budget_is_enforced(monkeypatch):
     conv = f"t-{uuid4().hex}"
     _fake_model(monkeypatch, '{"tool": "echo", "argument": "hello"}')
 
-    with pytest.raises(WorkflowFailureError):
-        asyncio.run(_run(RunRequest(conv, "hello", max_steps=1), f"run:{conv}:0"))
+    result = asyncio.run(_run(RunRequest(conv, "hello", max_steps=1), f"run:{conv}:0"))
+    assert result.budget_exhausted is True
+    assert "step budget" in result.reply
 
 
 def test_an_event_starts_one_turn(monkeypatch):
@@ -777,10 +788,10 @@ def test_compaction_uses_the_live_model():
 def test_prompt_version_is_pinned(monkeypatch):
     conv = f"t-{uuid4().hex}"
     first = asyncio.run(activities.pin_prompt("local", conv))
-    monkeypatch.setattr(activities, "PROMPT_VERSION", "9")
+    monkeypatch.setattr(activities, "PROMPT_VERSION", "10")
     second = asyncio.run(activities.pin_prompt("local", conv))
 
-    assert (first, second) == ("8", "8")
+    assert (first, second) == ("9", "9")
 
 
 def test_an_unknown_prompt_version_fails_loudly():
@@ -1375,8 +1386,9 @@ def test_a_failed_turn_emits_run_failed(monkeypatch):
     run_id = f"turn:{uuid4().hex}"
     _fake_model(monkeypatch)
 
-    with pytest.raises(WorkflowFailureError):
-        asyncio.run(_run(RunRequest(conv, "do it", max_steps=0), run_id))
+    result = asyncio.run(_run(RunRequest(conv, "do it", max_steps=0), run_id))
+    assert result.budget_exhausted is True
+    assert "step budget" in result.reply
 
     assert asyncio.run(
         _scalar("select count(*) from outbox where id = %s", (f"run:{run_id}:started",))
@@ -1731,6 +1743,7 @@ def test_health_endpoints():
         assert "agent_run_success_rate" in body
         assert "agent_turn_latency_seconds" in body
         assert "agent_cache_hit_ratio" in body
+        assert "agent_tokens_total" in body
         assert "agent_consumer_lag_seconds" in body
     finally:
         server.shutdown()
@@ -2122,3 +2135,144 @@ def test_purge_removes_old_artifacts(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from artifacts where id = %s", (artifact_id,))
     ) == 0
+
+
+def test_a_long_turn_continues_as_new(monkeypatch):
+    conv = f"long-{uuid4().hex}"
+    run_id = f"turn:{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        *(['{"tool": "echo", "argument": "x"}'] * 25 + ['{"final": "done"}']),
+    )
+    monkeypatch.setattr(activities, "_summarize", lambda text: "working summary")
+
+    result = asyncio.run(_run(RunRequest(conv, "keep going"), run_id))
+
+    assert result.reply == "done"
+    assert result.steps == 26
+    assert asyncio.run(
+        _scalar(
+            "select count(*) from outbox where id = %s",
+            (f"run:{run_id}:progress:20",),
+        )
+    ) == 1
+    _, seq, step = transcript.load_working("local", conv)
+    assert seq == 0
+    assert step > 0
+
+
+def test_the_plan_blocks_a_final_until_it_is_checked(monkeypatch):
+    conv = f"plan-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "update_plan", "argument": "- [ ] a\\n- [ ] b"}',
+        '{"final": "done"}',
+        '{"tool": "update_plan", "argument": "- [x] a\\n- [x] b"}',
+        '{"final": "done"}',
+    )
+
+    result = asyncio.run(_run(RunRequest(conv, "do the plan"), f"turn:{uuid4().hex}"))
+
+    assert result.reply == "done"
+    assert result.steps == 4
+    assert transcript.load_plan("local", conv).count("- [ ]") == 0
+
+
+def test_the_token_budget_returns_a_final(monkeypatch):
+    conv = f"budget-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "echo", "argument": "one"}',
+        '{"tool": "echo", "argument": "two"}',
+        '{"final": "never reached"}',
+    )
+
+    result = asyncio.run(
+        _run(
+            RunRequest(conv, "spend", max_steps=10, max_tokens=20),
+            f"turn:{uuid4().hex}",
+        )
+    )
+
+    assert result.budget_exhausted is True
+    assert "token budget" in result.reply
+
+
+def test_a_stop_signal_ends_the_turn(monkeypatch):
+    conv = f"stop-{uuid4().hex}"
+    run_id = f"turn:{uuid4().hex}"
+    _fake_model(monkeypatch, *(['{"tool": "echo", "argument": "x"}'] * 200))
+
+    async def scenario():
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with Worker(
+                env.client,
+                task_queue=TASK_QUEUE,
+                workflows=[RunWorkflow],
+                activities=ACTIVITIES,
+            ):
+                handle = await env.client.start_workflow(
+                    RunWorkflow.run,
+                    RunRequest(conv, "stop me"),
+                    id=run_id,
+                    task_queue=TASK_QUEUE,
+                )
+                await handle.signal("stop", "test stop")
+                return await handle.result()
+
+    result = asyncio.run(scenario())
+
+    assert result.stopped is True
+    assert result.reply == "Stopped at your request."
+
+
+def test_a_new_user_message_stops_the_active_run():
+    conv = f"preempt-{uuid4().hex}"
+    captured: list[tuple[str, str]] = []
+
+    class Handle:
+        async def signal(self, name: str, argument: str) -> None:
+            captured.append((name, argument))
+
+    class Client:
+        def get_workflow_handle(self, workflow_id: str):
+            assert workflow_id == "turn:old"
+            return Handle()
+
+    async def seed():
+        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
+            await conn.execute(
+                "insert into conversation_locks"
+                " (org_id, conversation_id, workflow_id, expires_at)"
+                " values ('local', %s, 'turn:old', now() + interval '1 hour')",
+                (conv,),
+            )
+
+    asyncio.run(seed())
+    envelope = Envelope(
+        event_id=f"e-{uuid4().hex}",
+        type=SEND_MESSAGE,
+        org_id="local",
+        subject={"conversation_id": conv},
+        payload={"text": "new message"},
+    )
+
+    asyncio.run(consumer_module._stop_active(Client(), envelope))
+
+    assert captured == [("stop", "superseded by a new user message")]
+
+
+def test_repeated_tool_calls_are_interrupted(monkeypatch):
+    conv = f"stuck-{uuid4().hex}"
+    _fake_model(
+        monkeypatch,
+        '{"tool": "echo", "argument": "same"}',
+        '{"tool": "echo", "argument": "same"}',
+        '{"tool": "echo", "argument": "same"}',
+        '{"final": "changed approach"}',
+    )
+
+    result = asyncio.run(_run(RunRequest(conv, "do not loop"), f"turn:{uuid4().hex}"))
+
+    assert result.reply == "changed approach"
+    assert result.steps == 4

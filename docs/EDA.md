@@ -190,8 +190,8 @@ harness. `retrieve` is the only door to organisational knowledge.
 
 Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
 needs the retrieval service. The service currently offers `read_file`,
-`read_skill`, `remember`, `note`, `recall`, `get_tool_schema`, `delegate`, and a
-simulated `send_email`. Computer-dependent work is deferred; see
+`read_skill`, `update_plan`, `remember`, `note`, `recall`, `get_tool_schema`,
+`delegate`, and a simulated `send_email`. Computer-dependent work is deferred; see
 [ADR 0008](adr/0008-harness-first.md) and
 [AGENT-COMPUTER.md](AGENT-COMPUTER.md). MCP is deferred; see
 [ADR 0009](adr/0009-mcp-and-skill-capture.md).
@@ -238,6 +238,22 @@ simulated `send_email`. Computer-dependent work is deferred; see
   tenant's chat. Measure queue wait p99 per class, not just average latency.
 - **Batching:** drain the signal queue for a quiet window of a few seconds before
   starting a turn. Three quick messages become one turn.
+
+### 6.1 Long runs
+
+A turn stops when the model finishes, not at a fixed step count. `plan.md` is the
+definition of done: the harness rejects a final while an item is open, unless
+the model marks it blocked. Budgets are ceilings, not the normal stop: 200
+steps, 400,000 tokens, 8 hours.
+
+Every 20 steps the workflow writes a progress event, summarises the middle of the
+turn into `working.json`, and calls `continue-as-new`. The next segment reloads
+the context from files. The lock is renewed each segment and during a long
+approval wait.
+
+`RunWorkflow.stop` preempts at the next step. A new user message signals the
+active run before it starts the new turn. See
+[ADR 0012](adr/0012-long-runs.md).
 
 ## 7. Waiting without polling
 
@@ -310,7 +326,8 @@ an instruction.
 - Per-stamp dashboards for dedicated deployments, plus one fleet view of version,
   lag, and error rate per stamp.
 - The four numbers that matter: run success rate, p99 turn latency, cache hit
-  ratio, consumer lag.
+  ratio, consumer lag. Long runs add `agent_tokens_total` and
+  `agent.run.progress` events with step, budget, tokens, and open plan items.
 
 ## 10. Versioning and evolution
 

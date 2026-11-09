@@ -183,6 +183,53 @@ def load_scratch(
     return notes
 
 
+def _plan_key(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}plan.md"
+
+
+def write_plan(org_id: str, conversation_id: str, text: str) -> None:
+    _write_text(_plan_key(org_id, conversation_id), text)
+
+
+def load_plan(org_id: str, conversation_id: str) -> str:
+    return _read_text(_plan_key(org_id, conversation_id))
+
+
+def reset_turn_state(org_id: str, conversation_id: str) -> None:
+    """A new turn starts with no plan and no working summary."""
+    storage.delete_keys(
+        [
+            _plan_key(org_id, conversation_id),
+            _working_key(org_id, conversation_id),
+        ]
+    )
+
+
+def _working_key(org_id: str, conversation_id: str) -> str:
+    return f"{_conv_prefix(org_id, conversation_id)}working.json"
+
+
+def write_working(
+    org_id: str, conversation_id: str, text: str, seq: int, step: int
+) -> None:
+    _write_text(
+        _working_key(org_id, conversation_id),
+        json.dumps({"text": text, "seq": seq, "step": step}, sort_keys=True),
+    )
+
+
+def load_working(org_id: str, conversation_id: str) -> tuple[str, int, int]:
+    try:
+        data = json.loads(
+            _read_text(_working_key(org_id, conversation_id)) or "{}"
+        )
+    except json.JSONDecodeError:
+        return "", -1, -1
+    return str(data.get("text", "")), int(data.get("seq", -1)), int(
+        data.get("step", -1)
+    )
+
+
 def _summary_key(org_id: str, conversation_id: str) -> str:
     return f"{_conv_prefix(org_id, conversation_id)}summary.json"
 

@@ -26,6 +26,8 @@ shell, browser, and screen belong on the computer. The harness only orchestrates
 | Tool facts | `facts-tool.md` in R2 | `memory/facts-tool.md`, tagged untrusted | Files exist; VM not built |
 | Scratch | `scratch/{sha}.md` in R2 | `memory/scratch/`, one hour, deleted by the VM | Files exist; VM not built |
 | Summary | `summary.json` in R2 | `memory/summary.json` | Files exist; VM not built |
+| Turn plan | `plan.md` in R2 | `memory/plan.md`, read and written by the model | Files exist; VM not built |
+| Working summary | `working.json` in R2 | `memory/working.json` for a long turn | Files exist; VM not built |
 | Recall | Python substring scan over R2 | `grep -R` over `memory/`, or an index | Scan only |
 | Search | Same scan | `rg`, `find`, `grep` on the VM | Not built |
 | Skills | Repo `skills/`, read-only, `read_skill` | `/home/agent/skills/<name>/SKILL.md`, writable | Repo only |

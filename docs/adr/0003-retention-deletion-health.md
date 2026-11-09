@@ -28,6 +28,7 @@ A purge in the consumer deletes rows older than their window.
 | reviews | 730 days |
 | deletions | 730 days |
 | profile, tool facts, summary | kept until deleted |
+| plan, working summary | cleared when the next turn starts |
 | scratch | 1 hour |
 
 The purge runs hourly on the consumer maintenance loop.

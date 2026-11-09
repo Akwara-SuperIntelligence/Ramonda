@@ -19,6 +19,8 @@ All memory lives under `memory/{org}/{conversation}/`:
 | `facts-tool.md` | Tool facts, one per line | Every turn, untrusted |
 | `scratch/{sha}.md` | One note per effect token | This hour |
 | `summary.json` | `{"text": ..., "seq": ...}` | Every turn |
+| `plan.md` | The current turn's checklist | Every turn |
+| `working.json` | Middle-of-turn summary | After a segment |
 | `log/{seq}.jsonl` | The transcript, one object per turn | Recent window |
 
 - **Two fact files, not one.** Provenance decides the prompt section. User facts

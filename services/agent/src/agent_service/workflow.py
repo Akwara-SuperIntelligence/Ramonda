@@ -25,6 +25,9 @@ from temporalio import workflow
 from temporalio.exceptions import ApplicationError
 
 HELPER_QUEUE = "agent-helper"
+SEGMENT_STEPS = 20
+MAX_TOKENS_DEFAULT = 400_000
+MAX_SECONDS_DEFAULT = 8 * 60 * 60
 
 # Workflow-site tools act on child handles, so they live here, not in activities.
 WORKFLOW_TOOL_NAMES = frozenset(
@@ -40,6 +43,7 @@ with workflow.unsafe.imports_passed_through():
         acquire_lock,
         call_model,
         compact,
+        compact_steps,
         expire_approval,
         load_history,
         next_turn,
@@ -48,9 +52,13 @@ with workflow.unsafe.imports_passed_through():
         report_task,
         list_tasks,
         pin_prompt,
+        plan_open,
+        record_progress,
         record_run,
         release_lock,
+        renew_lock,
         request_approval,
+        reset_turn_state,
         review_action,
         routine_active,
         run_tool,
@@ -62,16 +70,24 @@ with workflow.unsafe.imports_passed_through():
 
 @dataclass
 class RunRequest:
-    """What starts a turn."""
+    """What starts a turn, and what a continued segment carries."""
 
     conversation_id: str
     text: str
     org_id: str = "local"
-    max_steps: int = 12
+    max_steps: int = 200
     kind: str = "user"  # "user", "helper", or "routine"
     failed: bool = False
     traceparent: str = ""
     routine_id: str = ""
+    seq: int = -1
+    step: int = 0
+    tokens: int = 0
+    continued: bool = False
+    started_at: float = 0.0
+    max_tokens: int = MAX_TOKENS_DEFAULT
+    max_seconds: int = MAX_SECONDS_DEFAULT
+    approval_timeout_minutes: int = 10
 
 
 @dataclass
@@ -82,6 +98,8 @@ class RunResult:
     reply: str
     steps: int
     silent: bool = False
+    stopped: bool = False
+    budget_exhausted: bool = False
 
 
 @dataclass
@@ -96,7 +114,7 @@ class HelperTask:
     task: str
 
 
-HELPER_MAX_STEPS = 5
+HELPER_MAX_STEPS = 40
 
 
 @workflow.defn
@@ -174,14 +192,15 @@ class HelperWorkflow:
                 )
                 return reply.text
 
-            if NEEDS_APPROVAL.get(reply.tool):
-                # The approval gate belongs to the parent; helpers cannot act.
+            if NEEDS_APPROVAL.get(reply.tool) or reply.tool == "update_plan":
+                # The approval gate and the parent plan belong to the parent.
                 history.append(
                     {
                         "role": "user",
                         "content": (
                             f"tool result: {reply.tool} denied "
-                            "(helpers cannot run irreversible tools)"
+                            "(helpers cannot change the parent plan or run"
+                            " irreversible tools)"
                         ),
                     }
                 )
@@ -232,6 +251,14 @@ class RunWorkflow:
         self._decision: str | None = None
         self._argument: str | None = None
         self._pending: dict[str, Any] = {}
+        self._stopped = False
+        self._stop_reason = ""
+        self._continuing = False
+
+    @workflow.signal
+    def stop(self, reason: str = "") -> None:
+        self._stopped = True
+        self._stop_reason = reason or "stopped by user"
 
     @workflow.signal
     def resolve(
@@ -265,7 +292,7 @@ class RunWorkflow:
                 task_queue=HELPER_QUEUE,
                 # The helper outlives the turn and reports by event.
                 parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-                execution_timeout=timedelta(minutes=30),
+                execution_timeout=timedelta(hours=4),
             )
             self._pending[task_id] = handle
             return f"started {task_id}"
@@ -321,11 +348,65 @@ class RunWorkflow:
 
         raise ApplicationError(f"unhandled workflow tool: {reply.tool}", non_retryable=True)
 
+    async def _finish_budget(
+        self,
+        request: RunRequest,
+        run_id: str,
+        seq: int,
+        step: int,
+        reason: str,
+        stopped: bool = False,
+    ) -> RunResult:
+        text = (
+            "Stopped at your request."
+            if stopped
+            else f"I reached the {reason} before I was sure the task was done."
+        )
+        await workflow.execute_activity(
+            send_user,
+            args=[
+                request.org_id,
+                request.conversation_id,
+                seq,
+                step + 1,
+                request.text,
+                text,
+                f"{request.org_id}:{run_id}:{'stop' if stopped else 'budget'}",
+                [],
+                True,
+                request.kind == "routine",
+            ],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        await workflow.execute_activity(
+            record_run,
+            args=[
+                request.org_id,
+                request.conversation_id,
+                run_id,
+                "failed",
+                False,
+                reason,
+                request.traceparent,
+            ],
+            start_to_close_timeout=timedelta(seconds=10),
+        )
+        return RunResult(
+            conversation_id=request.conversation_id,
+            reply=text,
+            steps=step,
+            silent=False,
+            stopped=stopped,
+            budget_exhausted=not stopped,
+        )
+
     @workflow.run
     async def run(self, request: RunRequest) -> RunResult:
         run_id = workflow.info().workflow_id
+        first = request.seq < 0
+        started_at = request.started_at or workflow.now().timestamp()
 
-        if request.kind == "routine":
+        if request.kind == "routine" and first:
             active = await workflow.execute_activity(
                 routine_active,
                 args=[request.org_id, request.routine_id],
@@ -347,34 +428,44 @@ class RunWorkflow:
             await workflow.sleep(1)
 
         try:
-            await workflow.execute_activity(
-                record_run,
-                args=[
-                    request.org_id,
-                    request.conversation_id,
-                    run_id,
-                    "started",
-                    False,
-                    "",
-                    request.traceparent,
-                ],
-                start_to_close_timeout=timedelta(seconds=10),
-            )
+            if first:
+                await workflow.execute_activity(
+                    record_run,
+                    args=[
+                        request.org_id,
+                        request.conversation_id,
+                        run_id,
+                        "started",
+                        False,
+                        "",
+                        request.traceparent,
+                    ],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
             prompt_version: str = await workflow.execute_activity(
                 pin_prompt,
                 args=[request.org_id, request.conversation_id],
                 start_to_close_timeout=timedelta(seconds=10),
             )
-            seq: int = await workflow.execute_activity(
-                next_turn,
-                args=[request.org_id, request.conversation_id],
-                start_to_close_timeout=timedelta(seconds=10),
-            )
-            await workflow.execute_activity(
-                compact,
-                args=[request.org_id, request.conversation_id],
-                start_to_close_timeout=timedelta(seconds=120),
-            )
+            if first:
+                seq: int = await workflow.execute_activity(
+                    next_turn,
+                    args=[request.org_id, request.conversation_id],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                await workflow.execute_activity(
+                    reset_turn_state,
+                    args=[request.org_id, request.conversation_id],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )
+                await workflow.execute_activity(
+                    compact,
+                    args=[request.org_id, request.conversation_id],
+                    start_to_close_timeout=timedelta(seconds=120),
+                )
+            else:
+                seq = request.seq
+
             loaded = await workflow.execute_activity(
                 load_history,
                 args=[request.org_id, request.conversation_id],
@@ -383,8 +474,45 @@ class RunWorkflow:
             history: list[dict] = loaded.messages
             memory_hash: str = loaded.memory_hash
             history.append({"role": "user", "content": request.text})
+            step = request.step
+            tokens = request.tokens
+            last_signature: tuple[str, str] | None = None
+            repeats = 0
 
-            for step in range(request.max_steps):
+            while step < request.max_steps:
+                if self._stopped:
+                    return await self._finish_budget(
+                        request, run_id, seq, step, self._stop_reason, stopped=True
+                    )
+
+                elapsed = workflow.now().timestamp() - started_at
+                if elapsed >= request.max_seconds:
+                    return await self._finish_budget(
+                        request,
+                        run_id,
+                        seq,
+                        step,
+                        f"time budget ({request.max_seconds}s)",
+                    )
+                if tokens >= request.max_tokens:
+                    return await self._finish_budget(
+                        request,
+                        run_id,
+                        seq,
+                        step,
+                        f"token budget ({request.max_tokens})",
+                    )
+
+                if step % SEGMENT_STEPS == 0:
+                    if not await workflow.execute_activity(
+                        renew_lock,
+                        args=[request.org_id, request.conversation_id, run_id],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    ):
+                        raise ApplicationError(
+                            "conversation lock lost", non_retryable=True
+                        )
+
                 reply: ModelReply = await workflow.execute_activity(
                     call_model,
                     args=[
@@ -398,8 +526,50 @@ class RunWorkflow:
                     ],
                     start_to_close_timeout=timedelta(seconds=30),
                 )
+                tokens += reply.tokens
+
+                if reply.kind != "final":
+                    signature = (reply.tool, reply.argument)
+                    if signature == last_signature:
+                        repeats += 1
+                    else:
+                        last_signature = signature
+                        repeats = 1
+                    if repeats >= 3:
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "You repeated the same tool call three times."
+                                    " Change approach, or stop and explain the"
+                                    " blocker."
+                                ),
+                            }
+                        )
+                        step += 1
+                        repeats = 0
+                        last_signature = None
+                        continue
 
                 if reply.kind == "final":
+                    open_items: int = await workflow.execute_activity(
+                        plan_open,
+                        args=[request.org_id, request.conversation_id],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    if open_items and "blocked" not in reply.text.lower():
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Your plan has {open_items} open item(s)."
+                                    " Continue, or mark each item blocked with a"
+                                    " reason. Do not answer yet."
+                                ),
+                            }
+                        )
+                        step += 1
+                        continue
                     speak: bool = await workflow.execute_activity(
                         should_speak,
                         args=[
@@ -463,6 +633,7 @@ class RunWorkflow:
                     history.append(
                         {"role": "user", "content": f"tool result: {reply.tool} {denied}"}
                     )
+                    step += 1
                     continue
 
                 if NEEDS_APPROVAL.get(reply.tool):
@@ -498,6 +669,7 @@ class RunWorkflow:
                                 "content": f"tool result: {reply.tool} {denied}",
                             }
                         )
+                        step += 1
                         continue
 
                     approval_id = f"{request.org_id}:{run_id}:{step}:approval"
@@ -518,13 +690,46 @@ class RunWorkflow:
                         ],
                         start_to_close_timeout=timedelta(seconds=10),
                     )
-                    try:
-                        await workflow.wait_condition(
-                            lambda: self._decision is not None,
-                            timeout=timedelta(minutes=10),
+                    deadline = workflow.now() + timedelta(
+                        minutes=request.approval_timeout_minutes
+                    )
+                    while self._decision is None and not self._stopped:
+                        remaining = deadline - workflow.now()
+                        if remaining <= timedelta(0):
+                            break
+                        chunk = min(remaining, timedelta(minutes=30))
+                        try:
+                            await workflow.wait_condition(
+                                lambda: self._decision is not None or self._stopped,
+                                timeout=chunk,
+                            )
+                        except asyncio.TimeoutError:
+                            if workflow.now() >= deadline:
+                                break
+                            if not await workflow.execute_activity(
+                                renew_lock,
+                                args=[
+                                    request.org_id,
+                                    request.conversation_id,
+                                    run_id,
+                                ],
+                                start_to_close_timeout=timedelta(seconds=10),
+                            ):
+                                raise ApplicationError(
+                                    "conversation lock lost during approval",
+                                    non_retryable=True,
+                                )
+                    if self._stopped:
+                        return await self._finish_budget(
+                            request,
+                            run_id,
+                            seq,
+                            step,
+                            self._stop_reason,
+                            stopped=True,
                         )
-                        decision = self._decision
-                    except asyncio.TimeoutError:
+                    decision = self._decision
+                    if decision is None:
                         decision = "expired"
                         await workflow.execute_activity(
                             expire_approval,
@@ -550,6 +755,7 @@ class RunWorkflow:
                                 "content": f"tool result: {reply.tool} denied ({decision})",
                             }
                         )
+                        step += 1
                         continue
 
                 if reply.tool in WORKFLOW_TOOL_NAMES:
@@ -588,12 +794,65 @@ class RunWorkflow:
                         "content": f"tool result: {reply.tool} -> {tool_out}",
                     }
                 )
+                step += 1
 
-            raise ApplicationError(
-                f"step budget exhausted after {request.max_steps} steps",
-                non_retryable=True,
+                if step % SEGMENT_STEPS == 0 and step < request.max_steps:
+                    open_items: int = await workflow.execute_activity(
+                        plan_open,
+                        args=[request.org_id, request.conversation_id],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    await workflow.execute_activity(
+                        record_progress,
+                        args=[
+                            request.org_id,
+                            request.conversation_id,
+                            run_id,
+                            step,
+                            request.max_steps,
+                            tokens,
+                            open_items,
+                            request.traceparent,
+                        ],
+                        start_to_close_timeout=timedelta(seconds=10),
+                    )
+                    await workflow.execute_activity(
+                        compact_steps,
+                        args=[request.org_id, request.conversation_id, seq, step],
+                        start_to_close_timeout=timedelta(seconds=120),
+                    )
+                    self._continuing = True
+                    workflow.continue_as_new(
+                        RunRequest(
+                            conversation_id=request.conversation_id,
+                            text=request.text,
+                            org_id=request.org_id,
+                            max_steps=request.max_steps,
+                            kind=request.kind,
+                            failed=request.failed,
+                            traceparent=request.traceparent,
+                            routine_id=request.routine_id,
+                            seq=seq,
+                            step=step,
+                            tokens=tokens,
+                            continued=True,
+                            started_at=started_at,
+                            max_tokens=request.max_tokens,
+                            max_seconds=request.max_seconds,
+                            approval_timeout_minutes=request.approval_timeout_minutes,
+                        )
+                    )
+
+            return await self._finish_budget(
+                request,
+                run_id,
+                seq,
+                step,
+                f"step budget ({request.max_steps} steps)",
             )
         except Exception as exc:
+            if self._continuing:
+                raise
             await workflow.execute_activity(
                 record_run,
                 args=[
@@ -609,8 +868,9 @@ class RunWorkflow:
             )
             raise
         finally:
-            await workflow.execute_activity(
-                release_lock,
-                args=[request.org_id, request.conversation_id, run_id],
-                start_to_close_timeout=timedelta(seconds=10),
-            )
+            if not self._continuing:
+                await workflow.execute_activity(
+                    release_lock,
+                    args=[request.org_id, request.conversation_id, run_id],
+                    start_to_close_timeout=timedelta(seconds=10),
+                )

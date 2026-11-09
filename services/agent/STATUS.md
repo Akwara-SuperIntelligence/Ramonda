@@ -15,14 +15,14 @@ secrets, the LLM, and channels. Only the LLM exists, and it is called directly.
 
 ```
 make up                                  # Postgres, Temporal, UI, Redpanda
-make test                                # migrate + 73 tests
+make test                                # migrate + 79 tests
 ../../.venv/bin/python -m agent_service.worker      # both queues
 ../../.venv/bin/python -m agent_service.consumer
 ../../.venv/bin/python -m agent_service.relay
 ../../.venv/bin/python -m agent_service.delivery
 ```
 
-State: **73 tests**; migrations through `017`, prompt version **8**. CI runs the
+State: **79 tests**; migrations through `017`, prompt version **9**. CI runs the
 suite and the link check on every push. `make migrate` is safe to rerun.
 
 The 3 live-model evals in the suite require a valid model key (OpenRouter via
@@ -65,6 +65,7 @@ Oldest first. Each item is merged and tested.
 | Artifacts | long output and `read_file` use S3-compatible storage; opaque refs |
 | Transcript | messages are JSONL objects, one per turn; Postgres holds execution state |
 | Memory | `profile.md`, `facts-tool.md`, `scratch/`, `summary.json` are files |
+| Long runs | plan-checked, segmented, budgeted; stop and progress supported |
 
 ## 4. How it fits together
 
@@ -112,6 +113,7 @@ The current plan is **harden first**:
 | 15 | Object storage for artifacts | **done**: long output + `read_file`; opaque refs; local fallback in dev |
 | 16 | Transcript in files | **done**: JSONL per turn; `messages` table dropped |
 | 17 | Memory in files | **done**: profile, tool facts, scratch, summary; `memories` dropped |
+| 18 | Long runs | **done**: plan, budgets, segments, compaction, stop, progress |
 
 Permission approvals, the choice card itself, and custom rules are deferred.
 The taxonomy, their fields, and their blockers are in
@@ -156,8 +158,16 @@ The taxonomy, their fields, and their blockers are in
   the bus redelivers. A poison command goes to `agent.commands.dlq`; a transient
   error does not diverge poison from retry.
 - **`org_id` is a parameter, not a boundary.** No row-level security yet.
-- **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`8`; adding a
+- **Prompt versions are frozen in code.** `PROMPTS` holds `1`–`9`; adding a
   prompt means adding a version, never editing an old one.
+- **Long runs have ceilings.** 200 steps, 400,000 tokens, 8 hours by default. At
+  the ceiling the turn sends a final and records `failed`; it does not raise.
+- **A stop is cooperative.** It lands at the next step, or during an approval
+  wait. It cannot interrupt `collect` while it waits on a helper.
+- **The plan is per conversation.** A new user message clears `plan.md` and
+  `working.json`; a cross-conversation plan needs an actor identity.
+- **Helpers are shorter than the parent.** 40 steps, 4 hours; they do not use
+  `continue-as-new`.
 - **Untrusted tags are a prompt rule, not a boundary.** They mark text and tell
   the model to treat it as data. The human gate and the sandbox are separate guards.
 - **Memory provenance is a heuristic.** A fact is `user` only when it appears

@@ -104,6 +104,9 @@ async def _start(
                 kind=kind,
                 failed=failed,
                 traceparent=envelope.traceparent,
+                approval_timeout_minutes=int(
+                    os.environ.get("APPROVAL_TIMEOUT_MINUTES", "1440")
+                ),
             ),
             id=workflow_id,
             task_queue=TASK_QUEUE,
@@ -111,6 +114,28 @@ async def _start(
         )
     except WorkflowAlreadyStartedError:
         return client.get_workflow_handle(workflow_id)
+
+
+async def _stop_active(client: Client, envelope: Envelope) -> None:
+    """A new user message preempts a long run in the same conversation."""
+    conversation_id = envelope.subject["conversation_id"]
+    workflow_id = f"turn:{envelope.event_id}"
+    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        cursor = await conn.execute(
+            "select workflow_id from conversation_locks"
+            " where org_id = %s and conversation_id = %s and workflow_id <> %s",
+            (envelope.org_id, conversation_id, workflow_id),
+        )
+        row = await cursor.fetchone()
+    if row is None:
+        return
+    try:
+        await client.get_workflow_handle(row[0]).signal(
+            "stop", "superseded by a new user message"
+        )
+    except Exception:
+        # The run may have finished between the query and the signal.
+        return
 
 
 async def _resolve(client: Client, envelope: Envelope) -> WorkflowHandle | None:
@@ -206,6 +231,7 @@ async def handle(client: Client, envelope: Envelope) -> WorkflowHandle | None:
     else:
         if await _over_quota(envelope):
             return None
+        await _stop_active(client, envelope)
         handle = await _start(client, envelope, envelope.payload["text"])
     # The inbox is written after the effect. A crash here repeats the start,
     # which the workflow ID absorbs; it does not lose the command.
