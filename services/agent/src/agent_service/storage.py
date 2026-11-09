@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -24,8 +25,11 @@ ARTIFACT_DAYS = 180
 LOCAL_ROOT = Path(".agent")
 
 
-class ArtifactNotFound(Exception):
-    """The row or the object is missing."""
+class ObjectNotFound(Exception):
+    """The object is missing."""
+
+
+ArtifactNotFound = ObjectNotFound
 
 
 def _dsn() -> str:
@@ -60,7 +64,7 @@ def _s3_client():
     )
 
 
-def _write(key: str, data: bytes, content_type: str) -> None:
+def put_object(key: str, data: bytes, content_type: str) -> None:
     bucket = _bucket()
     if bucket:
         _s3_client().put_object(
@@ -72,7 +76,7 @@ def _write(key: str, data: bytes, content_type: str) -> None:
     path.write_bytes(data)
 
 
-def _read(key: str) -> bytes:
+def get_object(key: str) -> bytes:
     bucket = _bucket()
     if bucket:
         from botocore.exceptions import ClientError
@@ -82,15 +86,52 @@ def _read(key: str) -> bytes:
         except ClientError as exc:
             code = exc.response.get("Error", {}).get("Code")
             if code in ("NoSuchKey", "404", "NotFound"):
-                raise ArtifactNotFound(key) from exc
+                raise ObjectNotFound(key) from exc
             raise
     path = LOCAL_ROOT / key
     if not path.is_file():
-        raise ArtifactNotFound(key)
+        raise ObjectNotFound(key)
     return path.read_bytes()
 
 
-def _delete_many(keys: list[str]) -> None:
+def list_objects(prefix: str) -> list[dict]:
+    bucket = _bucket()
+    if bucket:
+        client = _s3_client()
+        out = []
+        for page in client.get_paginator("list_objects_v2").paginate(
+            Bucket=bucket, Prefix=prefix
+        ):
+            for item in page.get("Contents", []):
+                out.append(
+                    {
+                        "key": item["Key"],
+                        "last_modified": item["LastModified"],
+                        "size": item["Size"],
+                    }
+                )
+        return out
+    base = LOCAL_ROOT / prefix
+    if not base.exists():
+        return []
+    out = []
+    for path in base.rglob("*"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        out.append(
+            {
+                "key": str(path.relative_to(LOCAL_ROOT)),
+                "last_modified": datetime.fromtimestamp(
+                    stat.st_mtime, tz=timezone.utc
+                ),
+                "size": stat.st_size,
+            }
+        )
+    return out
+
+
+def delete_keys(keys: list[str]) -> None:
     if not keys:
         return
     bucket = _bucket()
@@ -107,6 +148,18 @@ def _delete_many(keys: list[str]) -> None:
         path = LOCAL_ROOT / key
         if path.is_file():
             path.unlink()
+
+
+def _write(key: str, data: bytes, content_type: str) -> None:
+    put_object(key, data, content_type)
+
+
+def _read(key: str) -> bytes:
+    return get_object(key)
+
+
+def _delete_many(keys: list[str]) -> None:
+    delete_keys(keys)
 
 
 def put(

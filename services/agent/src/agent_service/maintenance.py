@@ -19,6 +19,7 @@ import json
 import psycopg
 
 from agent_service import storage
+from agent_service import transcript
 from agent_service.activities import _dsn
 
 MESSAGE_DAYS = 60
@@ -34,7 +35,6 @@ DELETION_DAYS = 730
 ARTIFACT_DAYS = storage.ARTIFACT_DAYS
 
 RETENTION = [
-    ("messages", "created_at", MESSAGE_DAYS),
     ("model_calls", "created_at", MODEL_CALL_DAYS),
     ("effects", "created_at", EFFECT_DAYS),
     ("inbox", "received_at", INBOX_DAYS),
@@ -47,7 +47,6 @@ RETENTION = [
 ]
 
 SCOPED = [
-    "messages",
     "model_calls",
     "memories",
     "tasks",
@@ -84,6 +83,9 @@ async def purge() -> dict[str, int]:
     purged_artifacts = await asyncio.to_thread(storage.purge, ARTIFACT_DAYS)
     if purged_artifacts:
         counts["artifacts"] = purged_artifacts
+    purged_transcript = await asyncio.to_thread(transcript.purge, MESSAGE_DAYS)
+    if purged_transcript:
+        counts["transcript"] = purged_transcript
     return counts
 
 
@@ -111,6 +113,11 @@ async def delete_scope(org_id: str, conversation_id: str | None = None) -> dict[
                 raise RuntimeError("conversation is busy; stop the turn first")
 
             await asyncio.to_thread(storage.delete_objects, org_id, conversation_id)
+            deleted_transcript = await asyncio.to_thread(
+                transcript.delete_scope, org_id, conversation_id
+            )
+            if deleted_transcript:
+                counts["transcript"] = deleted_transcript
 
             for table in SCOPED:
                 if conversation_id is None:

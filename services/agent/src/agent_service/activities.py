@@ -27,6 +27,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from agent_service import storage
+from agent_service import transcript
 from agent_service.events import (
     APPROVAL_REQUESTED,
     APPROVAL_RESOLVED,
@@ -448,11 +449,26 @@ async def pin_prompt(org_id: str, conversation_id: str) -> str:
 @activity.defn
 async def next_turn(org_id: str, conversation_id: str) -> int:
     """The next turn number. Only read while the conversation lock is held."""
+    run_id = activity.info().workflow_id
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
+        await conn.execute(
+            "insert into conversations (org_id, conversation_id)"
+            " values (%s, %s) on conflict do nothing",
+            (org_id, conversation_id),
+        )
         cursor = await conn.execute(
-            "select coalesce(max(seq) + 1, 0) from messages"
+            "select last_seq, last_workflow_id from conversations"
             " where org_id = %s and conversation_id = %s",
             (org_id, conversation_id),
+        )
+        last_seq, last_workflow_id = await cursor.fetchone()
+        if last_workflow_id == run_id:
+            return last_seq
+        cursor = await conn.execute(
+            "update conversations set last_seq = last_seq + 1,"
+            " last_workflow_id = %s"
+            " where org_id = %s and conversation_id = %s returning last_seq",
+            (run_id, org_id, conversation_id),
         )
         return (await cursor.fetchone())[0]
 
@@ -760,23 +776,20 @@ async def compact(org_id: str, conversation_id: str) -> None:
         row = await cursor.fetchone()
         summary, summary_seq = row if row else ("", -1)
 
-        cursor = await conn.execute(
-            "select count(*), coalesce(max(seq), -1) from messages"
-            " where org_id = %s and conversation_id = %s and seq > %s",
-            (org_id, conversation_id, summary_seq),
+        entries = await asyncio.to_thread(
+            transcript.load, org_id, conversation_id, summary_seq
         )
-        count, max_seq = await cursor.fetchone()
+        count = len(entries)
+        max_seq = max((entry["seq"] for entry in entries), default=-1)
         cutoff = max_seq - KEEP_TURNS
         if count <= COMPACT_AFTER or cutoff <= summary_seq:
             return
 
-        cursor = await conn.execute(
-            "select role, content from messages"
-            " where org_id = %s and conversation_id = %s and seq > %s and seq <= %s"
-            " order by seq, step",
-            (org_id, conversation_id, summary_seq, cutoff),
-        )
-        lines = [f"{role}: {content}" async for role, content in cursor]
+        lines = [
+            f'{entry["role"]}: {entry["content"]}'
+            for entry in entries
+            if entry["seq"] <= cutoff
+        ]
         text = (f"Previous summary:\n{summary}\n\n" if summary else "") + "\n".join(lines)
         new_summary = _summarize(text)
         await conn.execute(
@@ -802,13 +815,9 @@ async def load_history(org_id: str, conversation_id: str) -> History:
         )
         row = await cursor.fetchone()
         summary, summary_seq = row if row else ("", -1)
-        cursor = await conn.execute(
-            "select role, content from messages"
-            " where org_id = %s and conversation_id = %s and seq > %s"
-            " order by seq, step",
-            (org_id, conversation_id, summary_seq),
+        entries = await asyncio.to_thread(
+            transcript.load, org_id, conversation_id, summary_seq
         )
-        message_rows = await cursor.fetchall()
         cursor = await conn.execute(
             "select kind, content, source from memories"
             " where org_id = %s and conversation_id = %s"
@@ -849,7 +858,8 @@ async def load_history(org_id: str, conversation_id: str) -> History:
             )
         if summary:
             history.append({"role": "assistant", "content": f"Earlier work: {summary}"})
-        for role, content in message_rows:
+        for entry in entries:
+            role, content = entry["role"], entry["content"]
             if role == "tool":
                 history.append({"role": "user", "content": f"tool result: {content}"})
             else:
@@ -876,12 +886,9 @@ async def save_tool_step(
 
     Sources: talk §05 (files and logs are memory), lesson 07.
     """
-    async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
-        await conn.execute(
-            "insert into messages (org_id, conversation_id, seq, step, role, content)"
-            " values (%s, %s, %s, %s, 'tool', %s) on conflict do nothing",
-            (org_id, conversation_id, seq, step, content),
-        )
+    await asyncio.to_thread(
+        transcript.write_entry, org_id, conversation_id, seq, step, "tool", content
+    )
 
 
 @activity.defn
@@ -917,19 +924,25 @@ async def send_user(
         saved += "\n" + "\n".join(
             f"{letter}. {option}" for letter, option in zip("ABCDE", options)
         )
+    # Files first: a crash before the DB claim repeats an idempotent write.
+    await asyncio.to_thread(
+        transcript.write_entry, org_id, conversation_id, seq, 0, "user", user_text
+    )
+    await asyncio.to_thread(
+        transcript.write_entry,
+        org_id,
+        conversation_id,
+        seq,
+        assistant_step,
+        "assistant",
+        saved,
+    )
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
             if not await _claim(
                 conn, effect_token, "turn", user_text, org_id, conversation_id
             ):
                 return
-            await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                " values (%s, %s, %s, 0, 'user', %s), (%s, %s, %s, %s, 'assistant', %s)"
-                " on conflict do nothing",
-                (org_id, conversation_id, seq, user_text,
-                 org_id, conversation_id, seq, assistant_step, saved),
-            )
             if notify:
                 await conn.execute(
                     "insert into outbox"
@@ -1303,13 +1316,15 @@ async def _recall(org_id: str, conversation_id: str, query: str) -> str:
             (org_id, conversation_id, f"%{query}%"),
         )
         lines = [f"{created:%Y-%m-%d} memory: {content}" async for content, created in cursor]
-        cursor = await conn.execute(
-            "select content, created_at from messages"
-            " where org_id = %s and conversation_id = %s and content ilike %s"
-            " order by seq desc limit 5",
-            (org_id, conversation_id, f"%{query}%"),
-        )
-        lines += [f"{created:%Y-%m-%d} message: {content}" async for content, created in cursor]
+    hits = await asyncio.to_thread(
+        transcript.search, org_id, conversation_id, query, 5
+    )
+    for hit in hits:
+        try:
+            day = datetime.fromisoformat(hit["created_at"]).strftime("%Y-%m-%d")
+        except (KeyError, ValueError):
+            day = "message"
+        lines.append(f'{day} message: {hit["content"]}')
     return "\n".join(lines) or f"nothing found for: {query}"
 
 

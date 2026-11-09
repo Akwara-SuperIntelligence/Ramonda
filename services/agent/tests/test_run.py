@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 from contextlib import AsyncExitStack
+from datetime import datetime, timedelta, timezone
 import re
 import os
 import urllib.request
@@ -35,6 +36,7 @@ from agent_service import consumer as consumer_module
 from agent_service import maintenance
 from agent_service import routines
 from agent_service import storage
+from agent_service import transcript
 from agent_service.activities import (
     acquire_lock,
     call_model,
@@ -188,9 +190,11 @@ def test_a_turn_is_saved_once(monkeypatch):
     result = asyncio.run(_run(RunRequest(conv, "hello"), f"run:{conv}:0"))
 
     assert result.reply == "done"
-    assert asyncio.run(
-        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
-    ) == ["user", "tool", "assistant"]
+    assert [entry["role"] for entry in transcript.load("local", conv)] == [
+        "user",
+        "tool",
+        "assistant",
+    ]
     token = f"local:run:{conv}:0:0"
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (token,))
@@ -239,9 +243,7 @@ def test_a_second_turn_sees_the_first(monkeypatch):
     asyncio.run(_run(RunRequest(conv, "second"), f"run:{conv}:1"))
 
     assert any("first" in m["content"] for m in seen[-1]["messages"])
-    assert asyncio.run(
-        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 5
+    assert len(transcript.load("local", conv)) == 5
 
 
 def test_step_budget_is_enforced(monkeypatch):
@@ -280,12 +282,7 @@ def test_an_event_starts_one_turn(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from inbox where event_id = %s", (envelope.event_id,))
     ) == 1
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id = %s and org_id = 'acme'",
-            (conv,),
-        )
-    ) == 3
+    assert len(transcript.load("acme", conv)) == 3
 
 
 def test_a_failed_inbox_write_does_not_lose_the_turn(monkeypatch):
@@ -328,12 +325,7 @@ def test_a_failed_inbox_write_does_not_lose_the_turn(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from inbox where event_id = %s", (envelope.event_id,))
     ) == 1
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id = %s and org_id = 'acme'",
-            (conv,),
-        )
-    ) == 2
+    assert len(transcript.load("acme", conv)) == 2
 
 
 def test_a_second_approval_decision_is_ignored():
@@ -622,11 +614,10 @@ def test_choice_options_are_stored_on_the_message(monkeypatch):
     )["payload"]
     assert payload["text"] == "Which one?"
     assert payload["options"] == ["A poem", "A song"]
-    stored = asyncio.run(
-        _scalar(
-            "select content from messages where conversation_id = %s and role = 'assistant'",
-            (conv,),
-        )
+    stored = next(
+        entry["content"]
+        for entry in transcript.load("local", conv)
+        if entry["role"] == "assistant"
     )
     assert "A. A poem" in stored
     assert "B. A song" in stored
@@ -730,17 +721,10 @@ def test_compaction_summarises_old_turns(monkeypatch):
     monkeypatch.setattr(activities, "COMPACT_AFTER", 2)
     monkeypatch.setattr(activities, "_summarize", lambda text: "summary of old turns")
 
-    async def seed():
-        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-            for seq in range(10):
-                await conn.execute(
-                    "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                    " values ('local', %s, %s, 0, 'user', 'u'),"
-                    " ('local', %s, %s, 1, 'assistant', 'a')",
-                    (conv, seq, conv, seq),
-                )
+    for seq in range(10):
+        transcript.write_entry("local", conv, seq, 0, "user", "u")
+        transcript.write_entry("local", conv, seq, 1, "assistant", "a")
 
-    asyncio.run(seed())
     asyncio.run(activities.compact("local", conv))
 
     assert asyncio.run(
@@ -781,18 +765,10 @@ def _has_api_key() -> bool:
 def test_compaction_uses_the_live_model():
     conv = f"t-{uuid4().hex}"
 
-    async def seed():
-        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-            for seq in range(12):
-                await conn.execute(
-                    "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                    " values ('local', %s, %s, 0, 'user', %s),"
-                    " ('local', %s, %s, 1, 'assistant', %s)",
-                    (conv, seq, f"question {seq} about invoices",
-                     conv, seq, f"answer {seq} with a decision"),
-                )
+    for seq in range(12):
+        transcript.write_entry("local", conv, seq, 0, "user", f"question {seq} about invoices")
+        transcript.write_entry("local", conv, seq, 1, "assistant", f"answer {seq} with a decision")
 
-    asyncio.run(seed())
     asyncio.run(activities.compact("local", conv))
 
     summary = asyncio.run(
@@ -832,9 +808,7 @@ def test_typing_prewarms_without_a_turn(monkeypatch):
 
     assert asyncio.run(handle(None, envelope)) is None
     assert seen and seen[0]["messages"][0]["role"] == "system"
-    assert asyncio.run(
-        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 0
+    assert transcript.load("acme", conv) == []
 
 
 def test_every_activity_is_registered():
@@ -891,16 +865,8 @@ def test_scratch_expires_but_facts_stay():
 
 def test_recall_finds_an_old_message():
     conv = f"t-{uuid4().hex}"
+    transcript.write_entry("local", conv, 0, 0, "user", "invoice 42 was paid")
 
-    async def seed():
-        async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-            await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                " values ('local', %s, 0, 0, 'user', 'invoice 42 was paid')",
-                (conv,),
-            )
-
-    asyncio.run(seed())
     result = asyncio.run(
         run_tool("local", conv, "recall", "invoice", f"recall-{uuid4().hex}")
     )
@@ -1038,14 +1004,15 @@ def test_a_delegate_starts_and_collect_returns_the_report(monkeypatch):
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
 
     assert result.reply == "both reports are in"
-    roles = asyncio.run(
-        _column("select role from messages where conversation_id = %s order by seq, step", (conv,))
-    )
-    assert roles == ["user", "tool", "tool", "tool", "assistant"]
-    rows = asyncio.run(
-        _column("select content from messages where conversation_id = %s", (conv,))
-    )
-    assert any("A report" in row for row in rows)
+    entries = transcript.load("local", conv)
+    assert [entry["role"] for entry in entries] == [
+        "user",
+        "tool",
+        "tool",
+        "tool",
+        "assistant",
+    ]
+    assert any("A report" in entry["content"] for entry in entries)
     assert asyncio.run(
         _scalar("select count(*) from model_calls where conversation_id = %s and seq < 0", (conv,))
     ) == 2
@@ -1143,9 +1110,9 @@ def test_a_stopped_helper_reports_stopped(monkeypatch):
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
 
     assert result.reply == "the helper was stopped"
-    assert any("stopped" in row for row in asyncio.run(
-        _column("select content from messages where conversation_id = %s", (conv,))
-    ))
+    assert any(
+        "stopped" in entry["content"] for entry in transcript.load("local", conv)
+    )
     assert asyncio.run(
         _scalar("select status from tasks where conversation_id = %s", (conv,))
     ) == "stopped"
@@ -1178,9 +1145,11 @@ def test_helpers_reports_task_status(monkeypatch):
     result = asyncio.run(_run_with_helpers(RunRequest(conv, "coordinate the work")))
 
     assert result.reply == "checked and collected"
-    rows = asyncio.run(
-        _column("select content from messages where conversation_id = %s and role = 'tool'", (conv,))
-    )
+    rows = [
+        entry["content"]
+        for entry in transcript.load("local", conv)
+        if entry["role"] == "tool"
+    ]
     assert any("t1 " in row and "do the A work" in row for row in rows)
     assert any("t1 done" in row for row in rows)
 
@@ -1320,11 +1289,10 @@ def test_a_helper_report_starts_a_new_turn(monkeypatch):
                 return await started.result()
 
     assert asyncio.run(scenario()).reply == "noted the report"
-    stored = asyncio.run(
-        _scalar(
-            "select content from messages where conversation_id = %s and role = 'user'",
-            (conv,),
-        )
+    stored = next(
+        entry["content"]
+        for entry in transcript.load("local", conv)
+        if entry["role"] == "user"
     )
     assert stored.startswith("helper t1 finished:")
     assert "<untrusted>" in stored
@@ -1381,12 +1349,7 @@ def test_routine_helper_report_speaks_once_a_day(monkeypatch):
     assert asyncio.run(
         _scalar("select count(*) from outbox where id = %s", (f"run:{first_id}:started",))
     ) == 1
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id = %s",
-            (conv,),
-        )
-    ) == 6
+    assert len(transcript.load("local", conv)) == 6
 
 
 def test_a_failed_helper_report_speaks(monkeypatch):
@@ -1522,18 +1485,6 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
     async def seed():
         async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
             await conn.execute(
-                "insert into messages"
-                " (org_id, conversation_id, seq, step, role, content, created_at)"
-                " values (%s, %s, 1, 0, 'user', 'old', now() - interval '61 days')",
-                (org, conv),
-            )
-            await conn.execute(
-                "insert into messages"
-                " (org_id, conversation_id, seq, step, role, content)"
-                " values (%s, %s, 2, 0, 'user', 'new')",
-                (org, conv),
-            )
-            await conn.execute(
                 "insert into effects"
                 " (token, kind, payload, org_id, conversation_id, created_at)"
                 " values (%s, 'echo', 'x', %s, %s, now() - interval '181 days')",
@@ -1596,9 +1547,14 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
             )
 
     asyncio.run(seed())
+    transcript.write_entry(org, conv, 1, 0, "user", "old")
+    old_path = storage.LOCAL_ROOT / transcript._key(org, conv, 1)
+    old_time = (datetime.now(timezone.utc) - timedelta(days=61)).timestamp()
+    os.utime(old_path, (old_time, old_time))
+    transcript.write_entry(org, conv, 2, 0, "user", "new")
     counts = asyncio.run(maintenance.purge())
 
-    assert counts.get("messages", 0) >= 1
+    assert counts.get("transcript", 0) >= 1
     assert counts.get("effects", 0) >= 1
     assert counts.get("approvals", 0) >= 1
     assert counts.get("reviews", 0) >= 1
@@ -1607,18 +1563,7 @@ def test_purge_deletes_old_rows_and_keeps_new_ones():
     assert counts.get("inbox", 0) >= 1
     assert counts.get("outbox", 0) >= 1
     assert counts.get("model_calls", 0) >= 1
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id = %s and content = 'old'",
-            (conv,),
-        )
-    ) == 0
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id = %s and content = 'new'",
-            (conv,),
-        )
-    ) == 1
+    assert [entry["content"] for entry in transcript.load(org, conv)] == ["new"]
     assert asyncio.run(
         _scalar("select count(*) from effects where token = %s", (old,))
     ) == 0
@@ -1659,11 +1604,6 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
             await conn.execute(
                 "insert into conversations (org_id, conversation_id) values (%s, %s)",
                 (org, conv),
-            )
-            await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                " values (%s, %s, 1, 0, 'user', 'x'), (%s, %s, 1, 0, 'user', 'y')",
-                (org, conv, org, other),
             )
             await conn.execute(
                 "insert into effects (token, kind, payload, org_id, conversation_id)"
@@ -1716,19 +1656,17 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
             )
 
     asyncio.run(seed())
+    transcript.write_entry(org, conv, 1, 0, "user", "x")
+    transcript.write_entry(org, other, 1, 0, "user", "y")
     counts = asyncio.run(maintenance.delete_scope(org, conv))
 
-    assert counts["messages"] == 1
+    assert counts["transcript"] == 1
     assert counts["effects"] == 1
     assert counts["outbox"] == 1
     assert counts["conversations"] == 1
     assert counts["routines"] == 1
-    assert asyncio.run(
-        _scalar(
-            "select count(*) from messages where conversation_id in (%s, %s)",
-            (conv, other),
-        )
-    ) == 1
+    assert transcript.load(org, conv) == []
+    assert [entry["content"] for entry in transcript.load(org, other)] == ["y"]
     assert asyncio.run(
         _scalar("select count(*) from deletions where org_id = %s and conversation_id = %s", (org, conv))
     ) == 1
@@ -1740,7 +1678,7 @@ def test_delete_conversation_scopes_rows_and_writes_audit():
             )
         )
     )
-    assert audit["messages"] == 1
+    assert audit["transcript"] == 1
     assert audit["memories"] == 1
 
 
@@ -1756,18 +1694,12 @@ def test_delete_refuses_a_busy_conversation():
                 " values (%s, %s, 'wf', now() + interval '1 hour')",
                 (org, conv),
             )
-            await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                " values (%s, %s, 1, 0, 'user', 'x')",
-                (org, conv),
-            )
 
     asyncio.run(seed())
+    transcript.write_entry(org, conv, 1, 0, "user", "x")
     with pytest.raises(RuntimeError):
         asyncio.run(maintenance.delete_scope(org, conv))
-    assert asyncio.run(
-        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 1
+    assert len(transcript.load(org, conv)) == 1
 
 
 def test_delete_org_removes_all_conversations():
@@ -1776,23 +1708,19 @@ def test_delete_org_removes_all_conversations():
     async def seed():
         async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
             await conn.execute(
-                "insert into messages (org_id, conversation_id, seq, step, role, content)"
-                " values (%s, 'a', 1, 0, 'user', 'x'), (%s, 'b', 1, 0, 'user', 'y')",
-                (org, org),
-            )
-            await conn.execute(
                 "insert into inbox (event_id, org_id) values (%s, %s)",
                 (f"evt-{uuid4().hex}", org),
             )
 
     asyncio.run(seed())
+    transcript.write_entry(org, "a", 1, 0, "user", "x")
+    transcript.write_entry(org, "b", 1, 0, "user", "y")
     counts = asyncio.run(maintenance.delete_scope(org, None))
 
-    assert counts["messages"] == 2
+    assert counts["transcript"] == 2
     assert counts["inbox"] == 1
-    assert asyncio.run(
-        _scalar("select count(*) from messages where org_id = %s", (org,))
-    ) == 0
+    assert transcript.load(org, "a") == []
+    assert transcript.load(org, "b") == []
     assert asyncio.run(
         _scalar("select conversation_id from deletions where org_id = %s", (org,))
     ) == ""
@@ -1997,13 +1925,15 @@ def test_a_routine_cannot_run_an_irreversible_tool(monkeypatch):
             (conv,),
         )
     ) == 0
-    step = asyncio.run(
-        _scalar(
-            "select content from messages where conversation_id = %s and role = 'tool'",
-            (conv,),
-        )
+    step = next(
+        (
+            entry["content"]
+            for entry in transcript.load(org, conv)
+            if entry["role"] == "tool"
+        ),
+        "",
     )
-    assert "routine turns cannot run irreversible tools" in (step or "")
+    assert "routine turns cannot run irreversible tools" in step
 
 
 def test_a_disabled_routine_does_not_run(monkeypatch):
@@ -2033,13 +1963,37 @@ def test_a_disabled_routine_does_not_run(monkeypatch):
     )
 
     assert result.silent is True
-    assert asyncio.run(
-        _scalar("select count(*) from messages where conversation_id = %s", (conv,))
-    ) == 0
+    assert transcript.load(org, conv) == []
 
 
 def test_a_routine_turn_always_speaks():
     assert asyncio.run(should_speak("local", "c", "routine", False, "no question")) is True
+
+
+def test_transcript_is_files_per_turn():
+    conv = f"file-{uuid4().hex}"
+    transcript.write_entry("local", conv, 0, 0, "user", "the code is 1234")
+    transcript.write_entry("local", conv, 0, 1, "assistant", "noted")
+    transcript.write_entry("local", conv, 1, 0, "user", "second turn")
+    transcript.write_entry("local", conv, 1, 2, "assistant", "noted")
+    transcript.write_entry("local", conv, 1, 2, "assistant", "different")
+
+    entries = transcript.load("local", conv)
+    assert [(e["seq"], e["step"], e["role"]) for e in entries] == [
+        (0, 0, "user"),
+        (0, 1, "assistant"),
+        (1, 0, "user"),
+        (1, 2, "assistant"),
+    ]
+    assert entries[-1]["content"] == "noted"
+    assert max(e["seq"] for e in entries) == 1
+    assert transcript.search("local", conv, "CODE")[0]["content"] == "the code is 1234"
+
+    folder = storage.LOCAL_ROOT / transcript._prefix("local", conv)
+    assert len(list(folder.glob("*.jsonl"))) == 2
+
+    transcript.delete_scope("local", conv)
+    assert transcript.load("local", conv) == []
 
 
 def test_local_artifact_roundtrip_and_scope(monkeypatch):

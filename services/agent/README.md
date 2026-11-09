@@ -93,8 +93,12 @@ Every increment names its sources. This table is the running index.
 | ADR 0004 — quotas | `consumer.py` (`_over_quota`) | Interactive never dropped; routine/backfill capped |
 | ADR 0005 — routines | `routines.py`, `routine.py`, `migrations/014_routines.sql` | A Temporal Schedule starts a turn; CLI-only; no irreversible tools |
 | ADR 0006 — artifacts | `storage.py`, `migrations/015_artifacts.sql` | S3-compatible store; opaque `artifact:{id}`; local fallback |
+| ADR 0010 — transcript | `transcript.py`, `migrations/016_drop_messages.sql` | Messages are JSONL objects, one per turn; Postgres holds execution state |
 
 ## Verified
+
+A live file transcript wrote one JSONL object per turn, read it back, enforced
+the turn order, and deleted the scope.
 
 A live S3-compatible roundtrip (LocalStack 3.8) stored bytes, read them back,
 enforced the org and conversation scope, and deleted both object and row.

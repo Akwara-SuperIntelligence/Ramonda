@@ -156,7 +156,7 @@ irreversible actions.
 through the outbox. gRPC to sandbox, retrieval, secret broker, LLM gateway, and
 channels.
 
-**Owns.** Conversations, messages, episodic memory, inbox and outbox, pending
+**Owns.** Conversations and their transcripts, episodic memory, inbox and outbox, pending
 approvals, the run index.
 
 **Depends on.** Temporal, Postgres, object storage, Kafka, retrieval, sandbox,

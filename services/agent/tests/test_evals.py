@@ -22,6 +22,7 @@ import psycopg
 import pytest
 
 from agent_service import activities
+from agent_service import transcript
 from agent_service.activities import call_model, load_history, run_tool
 
 pytestmark = [
@@ -54,12 +55,7 @@ async def _seed_fact(conv: str, content: str) -> None:
 
 
 async def _seed_tool_step(conv: str, content: str) -> None:
-    async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
-        await conn.execute(
-            "insert into messages (org_id, conversation_id, seq, step, role, content)"
-            " values ('local', %s, 0, 1, 'tool', %s)",
-            (conv, content),
-        )
+    transcript.write_entry("local", conv, 0, 1, "tool", content)
 
 
 def test_the_repeat_rule_holds_after_a_succeeded_tool():
