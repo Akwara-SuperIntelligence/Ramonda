@@ -125,7 +125,9 @@ The taxonomy, their fields, and their blockers are in
   use need the sandbox (item 9). "Learn by watching" needs the sandbox and a
   skill-writing path; it is deferred in
   [ADR 0008](../../docs/adr/0008-harness-first.md) and
-  [ADR 0009](../../docs/adr/0009-mcp-and-skill-capture.md).
+  [ADR 0009](../../docs/adr/0009-mcp-and-skill-capture.md). The inventory of
+  computer-bound capabilities is in
+  [AGENT-COMPUTER.md](../../docs/AGENT-COMPUTER.md).
 - **All memory is files.** Profile, tool facts, scratch, summary, and transcript
   live under `memory/{org}/{conversation}/`. Postgres holds execution state only.
   See [ADR 0011](../../docs/adr/0011-memory-files.md).

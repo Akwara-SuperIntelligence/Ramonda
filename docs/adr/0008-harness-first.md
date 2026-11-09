@@ -39,7 +39,7 @@ not need a computer, but it is a new tool-discovery contract.
 
 - The service can be completed and tested without the sandbox.
 - The computer capabilities have an owner: the sandbox platform, BUILD §6.3.
-- EDA §8 still promises file memory. The code uses Postgres. That mismatch must
-  be resolved before this ADR is closed.
+- EDA §8 and the code now agree: memory is files. Their intended placement on
+  the VM is in [AGENT-COMPUTER.md](../AGENT-COMPUTER.md).
 - "Learn by watching" has no owner until the sandbox exists and skill writing is
   decided.

@@ -193,6 +193,9 @@ The first version covers create, exec, file operations, snapshot, restore, and
 destroy. Browser and desktop control come after egress and the secret broker.
 Recording a session to learn a skill is not in the first version.
 
+The inventory of what lives on the VM, and the current harness fallback, is in
+[AGENT-COMPUTER.md](AGENT-COMPUTER.md).
+
 **Interface.** gRPC control API for create, exec, file operations, snapshot,
 restore, and destroy. vsock to the in-guest agent. WebSocket screen stream.
 

@@ -47,6 +47,8 @@ All memory lives under `memory/{org}/{conversation}/`:
 
 - Postgres holds only execution state: inbox, outbox, effects, approvals, locks,
   tasks, metrics, and the turn counter.
+- These files are the sandbox workspace. The intended placement, sync, and
+  lifecycle are in [AGENT-COMPUTER.md](../AGENT-COMPUTER.md).
 - `recall` reads the profile, the tool facts, the scratch files, and the
   transcript. It is a scan. At scale it needs an index or the sandbox.
 - The profile is per conversation. A cross-conversation user profile needs an

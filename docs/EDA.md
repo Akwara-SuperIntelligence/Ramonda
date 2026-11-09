@@ -192,7 +192,8 @@ Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
 needs the retrieval service. The service currently offers `read_file`,
 `read_skill`, `remember`, `note`, `recall`, `get_tool_schema`, `delegate`, and a
 simulated `send_email`. Computer-dependent work is deferred; see
-[ADR 0008](adr/0008-harness-first.md). MCP is deferred; see
+[ADR 0008](adr/0008-harness-first.md) and
+[AGENT-COMPUTER.md](AGENT-COMPUTER.md). MCP is deferred; see
 [ADR 0009](adr/0009-mcp-and-skill-capture.md).
 
 ## 5. Exactly-once is a lie; here are the dedupe layers
@@ -271,7 +272,8 @@ provenance survives. Scratch is one object per effect token. The summary is
 JSON with its cutoff. A write replaces the entry with the same `(step, role)`,
 so a retry is a no-op. Temporal still runs the turn; activities do the I/O.
 Postgres holds execution state only. See [ADR 0010](adr/0010-file-transcript.md)
-and [ADR 0011](adr/0011-memory-files.md).
+and [ADR 0011](adr/0011-memory-files.md). The intended placement of these files
+on the agent's computer is in [AGENT-COMPUTER.md](AGENT-COMPUTER.md).
 
 Facts carry provenance. A fact from the user is trusted. A fact learned from a
 tool is injected as untrusted data. See [ADR 0002](adr/0002-trust-and-silence.md).
