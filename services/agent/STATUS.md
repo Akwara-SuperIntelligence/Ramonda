@@ -36,16 +36,16 @@ Oldest first. Each item is merged and tested.
 |---|---|
 | Durable turn | A turn resumes after `SIGKILL`; proved with 108 turns in flight |
 | Real model | DeepSeek via OpenRouter behind an activity; the workflow never calls the network |
-| Postgres state | `messages`, `effects` (idempotent per token), `inbox`, `outbox` |
+| Postgres state | execution state: effects, inbox, outbox, approvals, locks, tasks, metrics |
 | Event ingress | Kafka protocol via Redpanda; dedupe before the workflow |
 | Reply as event | Outbox plus relay; `delivery.py` prints |
 | Approval gate | `send_email` waits for a human; deadline; single-use resolution |
-| Context engineering | cache measurement, compaction, long output to files, schema on demand, prompt pinning, pre-warm |
-| Memory | facts and scratch, `recall`, folder skills with `SKILL.md` |
+| Context engineering | cache measurement, compaction, long output to files, schema on demand, prompt pinning, pre-warm, long-run segments |
+| Memory | profile, tool facts, scratch, summary as files; `recall`; folder skills |
 | Delegation | helper workflow, `delegate`/`collect`/`helpers`/`message_helper`/`stop_helper` |
 | To-do list | `tasks` table, short ids (`t1`), status, report |
 | Async helpers | the turn can end; the report arrives as `agent.helper.completed` |
-| Reconciler | stale tasks fail after 35 minutes and report |
+| Reconciler | stale tasks fail after 4 hours 5 minutes and report |
 | Tool registry | one `ToolSpec` per tool; one handler each; agreement test |
 | Auto-review | a second model checks an irreversible action; deny is a tool result |
 | Typed approvals | structured card, edit-then-approve, `agent.approval.resolved` |
@@ -162,12 +162,21 @@ The taxonomy, their fields, and their blockers are in
   prompt means adding a version, never editing an old one.
 - **Long runs have ceilings.** 200 steps, 400,000 tokens, 8 hours by default. At
   the ceiling the turn sends a final and records `failed`; it does not raise.
+- **The token budget is not a dollar budget.** `agent_tokens_total` is the spend
+  signal for the last 7 days. Per-org dollar quotas are not built.
+- **Context is rebuilt per segment**, every 20 steps. It is not assembled inside
+  the model activity on every call.
 - **A stop is cooperative.** It lands at the next step, or during an approval
   wait. It cannot interrupt `collect` while it waits on a helper.
 - **The plan is per conversation.** A new user message clears `plan.md` and
   `working.json`; a cross-conversation plan needs an actor identity.
 - **Helpers are shorter than the parent.** 40 steps, 4 hours; they do not use
-  `continue-as-new`.
+  `continue-as-new`. The reaper fails a silent helper after 4 hours 5 minutes.
+- **Approval waits default to 24 hours** in the consumer. The lock is renewed in
+  30-minute chunks; a lost lock fails the run.
+- **Prompt v9 is the long-run prompt.** A conversation pinned to v8 has no
+  `update_plan` and no plan gate; it keeps the higher budgets.
+- **Progress is per segment**, not per step.
 - **Untrusted tags are a prompt rule, not a boundary.** They mark text and tell
   the model to treat it as data. The human gate and the sandbox are separate guards.
 - **Memory provenance is a heuristic.** A fact is `user` only when it appears
@@ -186,8 +195,8 @@ The taxonomy, their fields, and their blockers are in
   and a policy store. See [ADR 0001](../../docs/adr/0001-interaction-kinds.md).
 - **The prompt cache is size-gated** on DeepSeek. Below roughly 250 tokens there
   are no hits. Measurements are in [docs/CACHING.md](../../docs/CACHING.md).
-- **Helpers are bounded** at 30 minutes and 5 steps; a task with no report after
-  35 minutes is failed by the reaper and reported.
+- **Helpers are bounded** at 4 hours and 40 steps. A task with no report after
+  4 hours 5 minutes is failed by the reaper and reported.
 - **Memory is per conversation.** No cross-conversation profile yet.
 - **Live evals are not in CI.** The unit suite and link check are gated. The
   live model tests skip when no valid model key is present.

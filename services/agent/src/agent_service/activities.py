@@ -801,14 +801,14 @@ async def report_task(
 async def reap_tasks() -> int:
     """Fail tasks whose helper never reported. The projection needs a reconciler.
 
-    The 35-minute mark sits just past the child's 30-minute execution timeout.
+    The 4-hour-5-minute mark sits just past the child's 4-hour execution timeout.
     """
     async with await psycopg.AsyncConnection.connect(_dsn()) as conn:
         async with conn.transaction():
             cursor = await conn.execute(
                 "select org_id, conversation_id, id from tasks"
                 " where status = 'running'"
-                " and updated_at < now() - interval '35 minutes'"
+                " and updated_at < now() - interval '4 hours 5 minutes'"
             )
             rows = await cursor.fetchall()
             for org_id, conversation_id, task_id in rows:

@@ -1439,7 +1439,7 @@ def test_a_failing_helper_leaves_a_task_for_the_reaper(monkeypatch):
     async def age():
         async with await psycopg.AsyncConnection.connect(activities._dsn()) as conn:
             await conn.execute(
-                "update tasks set updated_at = now() - interval '2 hours'"
+                "update tasks set updated_at = now() - interval '5 hours'"
                 " where conversation_id = %s",
                 (conv,),
             )

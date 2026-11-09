@@ -73,7 +73,7 @@ Every increment names its sources. This table is the running index.
 | talk §04 — the main agent manages helpers | `workflow.py` (`helpers`, `collect`, `message_helper`, `stop_helper`) | Start without blocking, check, message, stop, collect |
 | talk §04 — a to-do list tracks every request | `migrations/010_tasks.sql`, `activities.py` (`create_task`, `list_tasks`) | Short ids (`t1`), status, report per task |
 | talk §04 — the main agent keeps talking while helpers work | `workflow.py` (`ABANDON`), `activities.py` (`report_task`), `consumer.py` | The turn ends; the report arrives as `agent.helper.completed` |
-| EDA §5 — a projection needs a reconciler | `activities.py` (`reap_tasks`), `consumer.py` | Tasks with no report after 35 minutes become failed and report |
+| EDA §5 — a projection needs a reconciler | `activities.py` (`reap_tasks`), `consumer.py` | Tasks with no report after 4 hours 5 minutes become failed and report |
 | lesson 06 — a second loop | `workflow.py`, `worker.py` | The helper shares the pinned prompt; its calls record under a negative seq |
 | talk §06, lesson 10 — evals from real failures | `tests/test_evals.py` | Repeat rule and memory recall, asserted on the live model |
 | talk §02, §05 — memory layers | `transcript.py` (`load_facts`, `add_note`), ADR 0011 | Facts always in the prompt; scratch for one hour |
@@ -194,8 +194,8 @@ recorded here so a later change does not assume more than the code provides.
   that wrote it. A cross-conversation profile needs an actor identity we do not
   pass yet.
 - **Scratch is one hour.** The interval is fixed in the query, not configurable.
-- **A task is failed after 35 minutes without a report.** That is just past the
-  child's 30-minute execution timeout. A helper that is alive but slower than
+- **A task is failed after 4 hours 5 minutes without a report.** That is just past
+  the child's 4-hour execution timeout. A helper that is alive but slower than
   its timeout is failed while it still runs; the late report then overwrites the
   row and emits its own event.
 - **Task ids are short but still copied.** `t1` is easier than a workflow id,

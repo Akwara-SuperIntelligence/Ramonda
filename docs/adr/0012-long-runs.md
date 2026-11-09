@@ -68,13 +68,25 @@ clears `plan.md` and `working.json`.
 
 Version 9 adds `update_plan` and the long-run rules. Versions 1–8 stay frozen.
 
-## Consequences
+## Limits
 
-- A turn can run for hours, across many Temporal runs, without a history blowup.
-- The plan is the definition of done. It is a file, so a restart keeps it.
-- A stop is cooperative: it lands at the next step, not mid-tool.
-- Budget ceilings still stop a runaway model. They are visible, not silent.
-- The stop signal cannot interrupt `collect` while it waits on a child.
+- **A stop is cooperative.** It lands at the next step, not mid-tool. It cannot
+  interrupt `collect` while it waits on a child.
+- **Context is rebuilt per segment**, every 20 steps. It is not assembled inside
+  the model activity on every call.
+- **Budgets are ceilings.** 200 steps, 400,000 tokens, 8 hours. At the ceiling the
+  turn sends a final and records `failed`; it does not raise.
+- **The token budget is not a dollar budget.** `agent_tokens_total` is the spend
+  signal for the last 7 days. Per-org dollar quotas are not built.
+- **The plan and working summary are per conversation.** A new turn clears both.
+  A cross-conversation plan needs an actor identity.
+- **Helpers are shorter.** 40 steps, 4 hours, no `continue-as-new`. The task
+  reaper fails a silent helper after 4 hours 5 minutes.
+- **Prompt v9 is the long-run prompt.** A conversation pinned to v8 has no
+  `update_plan` and no plan gate; it still has the higher budgets.
+- **Approval waits default to 24 hours** in the consumer. The lock is renewed in
+  30-minute chunks. If the lock is lost, the run fails.
+- **Progress is per segment**, not per step.
 
 ## Open
 
