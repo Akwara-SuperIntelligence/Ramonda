@@ -1,6 +1,6 @@
 # Always-on agents — glossary
 
-The canonical vocabulary for this course. Terms are added only once they have been used correctly in a lesson or a build step.
+The canonical vocabulary for this repository. Terms are added only once they have been used correctly in a lesson, a build step, or the design.
 
 ## The loop
 
@@ -37,3 +37,29 @@ _Avoid_: checkpointing (a weaker, related idea), retries
 **Always-on agent**:
 An agent whose process, state, and wake-up path live outside your terminal, so it can act while you are gone and resume after a restart.
 _Avoid_: autonomous agent, background agent
+
+## Tenancy and deployment
+
+**Organisation**:
+One customer: their people, their billing, their brand. In Rakazo it groups Spaces.
+_Avoid_: tenant (say Organisation for the customer, tenant only when naming a column)
+
+**Space**:
+A team or project inside an Organisation, and this product's isolation unit: row-level security, memory, and approval settings are keyed to it.
+_Avoid_: workspace (Rakazo uses the word loosely; say Space)
+
+**Stamp**:
+One running deployment and everything it owns: Postgres, bucket, keys, host, image tag.
+_Avoid_: instance (say stamp), environment
+
+**Shared cell**:
+One stamp that serves many Organisations, separated by Space-scoped row-level security.
+_Avoid_: pool, cluster
+
+**Dedicated stamp**:
+One stamp that serves one Organisation, with its own database, bucket, and keys.
+_Avoid_: private cloud, single tenant
+
+**BYOC**:
+Bring your own cloud. The customer runs their own stamp in their own account; we ship the files and a version pin.
+_Avoid_: on-prem (unless the customer's own hardware is meant)

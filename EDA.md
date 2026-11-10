@@ -1,439 +1,253 @@
-# EDA: the agent service in an event-driven system
+# EDA: always-on agents for organisations
 
-Scope: **one service** — the always-on agent — as a participant in a larger
-microservice, event-driven system. Not the organisation ingestion pipeline, not
-the graph-vector store, not the channels. The argument is in
-[ACHITECTURE.md](ACHITECTURE.md), the product on one page is in
-[reference/architecture-map.html](reference/architecture-map.html), and vocabulary
-follows [GLOSSARY.md](GLOSSARY.md).
+Scope: how we run [Rakazo](https://github.com/elie222/rakazo) for many
+organisations. We do not build the agent loop, the harness, memory, approvals,
+computers, channels, identity, or billing. Rakazo has all of them. We build the
+tenancy, provisioning, knowledge, and upgrade layers around an **unmodified**
+Rakazo, and we run one stack per customer tier.
 
-The service keeps the shape from the talk: thin client, thick server, one
-`send_user` boundary, one durable run per turn, a disposable computer, memory as
-files, and an approval gate on irreversible actions. What changes is **who owns
-what**, **how the outside world reaches the loop**, and **how one codebase is
-deployed for customers with different isolation requirements**.
+This document replaces an earlier one that specified a service we wrote and then
+deleted. The argument is in [ACHITECTURE.md](ACHITECTURE.md); vocabulary follows
+[GLOSSARY.md](GLOSSARY.md).
 
 ## 0. Decisions at a glance
 
 | # | Decision | Choice | Why |
 |---|---|---|---|
-| 1 | Transport between services | Kafka protocol (Redpanda or managed) | Replayable log, partition ordering, consumer groups |
-| 2 | Orchestration inside this service | Temporal, private | Long runs resume at the failed step |
-| 3 | External contract | Events out, commands in | No workflow IDs outside the service |
-| 4 | Dedupe | Three layers: inbox, workflow ID, effect token | Every hop is at-least-once |
-| 5 | Writes plus publish | Transactional outbox | No dual-write inconsistency |
-| 6 | Waiting on other services | Subscription table plus signal | Never poll |
-| 7 | Organisation knowledge | HelixDB, behind a retrieval service | Ingestion owns the write path |
-| 8 | Identity | OIDC provider (Zitadel or Keycloak) | One login path, no per-client code |
-| 9 | Deployment | Shared cell, dedicated stamp, or BYOC | One codebase, three topologies |
-| 10 | Ordering | Partition by `org_id` | Per-conversation order is the requirement |
+| 1 | Relationship to Rakazo | Consume released images; never vendor the source | Least maintenance; their CI builds six clients we would otherwise own |
+| 2 | Packaging per stamp | Docker Compose, same images everywhere | Rakazo ships Compose; BYOC becomes one file |
+| 3 | Organisation knowledge | Ours, exposed as an MCP server | Rakazo has bot memory, not organisation knowledge with provenance |
+| 4 | Branding | Configure first (`RAKAZO_THEME`); patch later, few files | Brand is a customer requirement, not a starting one |
+| 5 | Tenant to deployment | Customer is an Organisation; the isolation unit is a Space | Rakazo's row-level security and memory are Space-scoped |
+| 6 | Model spend | The customer's own provider keys by default | No credit ledger of ours to reconcile |
+| 7 | Control plane | Internal CLI and database, no UI | One customer does not justify a console |
+| 8 | Moving an organisation between stamps | Not offered | Unverified by Rakazo, and expensive to build |
 
-## 1. Where this service ends
+## 1. The boundary
 
-| This service owns | This service calls |
+| Ours | Rakazo's |
 |---|---|
-| Conversation and message state | Retrieval service (reads HelixDB) |
-| Episodic memory: profile, dated logs, scratchpad, skills | Sandbox control plane (Rust) |
-| Run orchestration and harness policy | Secret broker and egress proxy |
-| Approval policy and pending approvals | LLM gateway (limits, cost attribution) |
-| Tool surface offered to the model | Identity provider (token validation) |
-| Evals over its own traces | Channels and delivery |
+| Stamp inventory, provisioning, version pins | The agent loop and turn execution |
+| Organisation-to-stamp routing | Durable execution: lease, fence, recovery scan |
+| Knowledge: ingestion, HelixDB, the MCP server | Memory: `MEMORY.md`, shared memory, memory providers |
+| Egress allowlist (later) | Approvals, auto-review, spending limits |
+| Per-stamp upgrade orchestration | Computers and sandbox providers |
+| Fleet view and per-stamp health | Channels: Slack, email, messaging |
+| Theme, domain, and signup policy per stamp | Identity: Better Auth, SCIM, passkeys |
+| | Audit log, billing, evals |
 
-Three rules follow, and they are load-bearing:
+One rule holds the line: **if a requirement can be met by configuration or by an
+MCP tool, it is not our code.** Every line of ours is a line we maintain against
+their releases.
 
-- **The agent never writes the graph-vector store.** Ingestion owns that write
-  path. The agent reads through retrieval and emits observations as events if
-  anyone wants them.
-- **The agent never links the HelixDB SDK.** It calls the retrieval service over
-  HTTP. A database client inside the harness couples the agent to another team's
-  schema and forces a redeploy when their model changes.
-- **No other service knows about Temporal.** No workflow IDs in payloads, no
-  signalling our runs from outside, no querying our workflows for status. Status
-  is a domain event or a read model.
+Rakazo's own isolation unit is a **Space**. Their configuration guide states that
+"each signed-in request sees only its Space's rows", and their memory guide that
+"memory never crosses spaces". Our tenancy model therefore builds on Space, not
+on the Organisation row.
 
 ## 2. Deployment profiles
 
-One codebase, one artifact set, three topologies. This is the answer to "can a
-bank have its own deployment without a fork".
+One set of images, one Compose file, three topologies. Only `.env` changes.
 
-| Profile | Customer | Isolation | Operational cost |
+| Profile | Customer | Isolation | Upgrade |
 |---|---|---|---|
-| **Shared cell** | Self-serve, SMB | `org_id` plus row-level security plus Helix `tenant_id` | One upgrade serves every tenant |
-| **Dedicated stamp** | Mid-market, regulated | Own database, bucket, keys, Temporal namespace | One deployment per customer, one upgrade path |
-| **BYOC / on-prem** | Tier-1 banks, government | Customer's cloud account and network | Customer operates; we ship images and a chart |
+| **Shared cell** | Self-serve, SMB | Space-scoped RLS in one Postgres | One upgrade serves every customer |
+| **Dedicated stamp** | Mid-market, regulated | Own Postgres, bucket, keys, host | One deployment, one window |
+| **BYOC** | Banks, government | Customer's cloud and network | Customer applies a pinned release |
 
 Rules:
 
-- Every service must run in all three profiles. A service that only runs shared
-  couples the product to one business model.
-- A tenant is a row in a cell and the whole deployment in a stamp. Same binary,
-  same migrations.
-- Customisation is configuration, policy, and adapters. Never a fork, never a
-  per-client branch.
-- Dedicated is a premium SKU. Price it to fund fleet operations: many
-  deployments mean many upgrades.
-- The test: deploy the whole system into a fresh cloud account with one command
-  and one config file. If that fails, neither multi-tenancy nor a fork will save
-  the deal.
-- The worker and consumer are long-running; idle stop is a deployment property,
-  not workflow code.
+- Every feature must work in all three profiles. A feature that only works in a
+  cell couples the product to one business model.
+- Shared cell is the default. A dedicated stamp is a paid tier, priced to fund
+  fleet operations: many deployments mean many upgrades.
+- Customisation is environment, theme, and the knowledge credential. Never a
+  per-customer image.
+- The test: deploy a whole stamp into a fresh account with one command and one
+  config file. If that fails, isolation will not save the deal.
 
-## 3. Two layers, one owner per process
+## 3. Stamps and the control plane
+
+A **stamp** is one running Rakazo deployment. Its artifacts are small and fixed:
 
 ```
- other services ──events──▶ bus ──▶ consumer ──▶ Temporal ──▶ harness worker
-        ▲                  │  dedupe, order,    (private)         │
-        │                  │  quota, priority                     │
-        └── domain events ─┴──────── outbox ◀──────── Postgres ◀──┘
-
- platform, shared:  sandbox (Rust) · secrets (Rust) · LLM gateway · channels
- external:          identity provider · retrieval API → HelixDB ← ingestion
+stamp/
+  docker-compose.yml          pinned image tag, from upstream
+  .env                        generated: secrets, domain, theme path, providers
+  theme/theme.json            colours, fonts, radius
+  knowledge.env               this stamp's knowledge endpoint and credential
 ```
 
-- The **bus** carries facts between services. It is a log, not a task queue.
-- **Temporal** carries control flow inside this service.
-- **One owner per long-running process.** If a process spans services, exactly
-  one workflow owns it and calls the other services' idempotent commands. Never
-  encode "and then, and then" as a chain of events — that is a saga nobody can
-  trace, cancel, or replay.
-- **Events for facts, workflows for processes.** The bus says what happened. It
-  never says what to do next.
+The control plane is a CLI over a small database. It holds: stamp inventory,
+organisation-to-stamp mapping, image tag per stamp, and the verified email
+domains each organisation owns. It never holds customer content, model keys, or
+conversation data. Creating a stamp writes the four files above, runs Compose and
+the migration container, waits for health, and records the version.
 
-Backpressure is a feature of this split: when the service is saturated, the bus
-buffers and you observe **consumer lag**, not request errors. Alert on lag, not
-on 5xx.
+## 4. Tenancy
 
-## 4. Contracts
+Three words, three scopes:
 
-### 4.1 Event envelope
+- **Organisation** — one customer. Their people, their billing, their brand.
+- **Space** — a team or project inside that customer. The isolation unit:
+  row-level security, memory, and approval settings are keyed to it.
+- **Stamp** — the deployment. Hard isolation between customers.
 
-Stable, additive-only, versioned per type. Keep it small; put bulk data in object
-storage and pass a URI.
+Rules:
 
-```jsonc
-{
-  "event_id":       "01J...",          // ULID, unique per emission
-  "type":           "agent.run.completed",
-  "version":        1,                  // per type, additive changes only
-  "occurred_at":    "2026-11-02T10:00:00Z",
-  "producer":       "agent-service",
-  "org_id":         "org_123",          // tenant; also the partition key
-  "actor_id":       "user_456",         // who or what caused it
-  "subject":        { "conversation_id": "conv_789", "run_id": "run_abc" },
-  "correlation_id": "01J...",           // the causal chain
-  "causation_id":   "01J...",           // the command/event that caused this
-  "priority":       "interactive",      // interactive | routine | backfill
-  "traceparent":    "00-...-...-01",
-  "payload":        { }
-}
+- One Organisation per customer. Spaces for their teams. Memory never crosses a
+  Space, so a customer who wants two separated bodies of knowledge gets two
+  Spaces, not two Organisations.
+- Rakazo derives identity from the session. We never pass a tenant ID into a
+  request and never accept one from a client.
+- Inside a cell, cross-customer separation is RLS plus one Space per customer
+  team plus the knowledge credential. Our knowledge server accepts a credential,
+  reads the tenant from it, and ignores any tenant named in the request.
+- A dedicated stamp is required when a customer demands their own database, a
+  named data-residency region, or a security review that will not accept shared
+  tables.
+- **Unverified:** whether Rakazo's Team Computer is scoped to a Space or to the
+  whole Organisation. `computer-runtime.md` says "each workspace gets one Team
+  Computer" and uses "workspace" loosely. Confirm before promising computer
+  isolation between two Spaces on one stamp.
+
+## 5. Knowledge
+
+Rakazo has per-bot notes and per-space shared memory. It has no organisation
+document store, no citations, and no tenant-partitioned vectors. That is ours.
+
+```
+documents ──▶ ingestion ──▶ HelixDB ──▶ retrieval ──▶ MCP server ──▶ agents
+             (parse, chunk,   graph +    tenant filter   one tool,
+              embed, dedupe)  vectors    and ranking     per-org credential
 ```
 
-Rules: `event_id` is never reused; `type` is namespaced `agent.<noun>.<verb>`;
-`payload` is schema-validated in CI; consumers ignore unknown fields and tolerate
-unknown types.
+**The contract.** One MCP server, one tool, roughly `retrieve(query)`. It returns
+compact results, each with a source and a score, capped in size. A document is
+referenced, not inlined. A degraded answer carries a reason and a timeout; it
+never hangs.
 
-### 4.2 Events published
+**Why MCP.** It is the one extension point in Rakazo that needs no patch: their
+integrations screen accepts any HTTPS MCP server per Space, and connector
+credentials are encrypted on the server and never returned by the API. One
+connection per organisation, one credential per organisation.
 
-| Event | When | Consumed by |
-|---|---|---|
-| `agent.message.composed` | The agent wants to say something; carries text plus presentation hints | Channels and delivery |
-| `agent.run.started` | A run begins | Analytics, UI read models |
-| `agent.run.completed` | Final answer or deliberate silence | Evals, analytics |
-| `agent.run.failed` | Terminal failure, with reason class | On-call, evals |
-| `agent.approval.requested` | A gate needs a human | Approvals UI, notifications |
-| `agent.approval.resolved` | Approved or denied | Audit |
-| `agent.observation.recorded` | A durable fact worth sharing | Ingestion (optional) |
+**The limit, stated plainly.** The model decides when to call `retrieve`. There
+is no harness-level rule that forces a retrieval before an answer. Citations
+arrive as tool output, not as interface affordances. That is the price of not
+forking, and it is acceptable until a customer pays for something better.
 
-Do **not** emit an event per tool call or per model call. That is trace data, not
-domain data; it belongs in spans. The bus is for facts other services act on.
+Ingestion owns the write path. Retrieval is read-only over HelixDB and is the
+only reader. Deletion and forget remove nodes, edges, and vectors.
 
-The kinds of human interaction behind `agent.approval.requested` — typed
-fields, edit-then-approve, choice options — are a taxonomy this service owns; the
-client renders by `kind` and `fields`. Trust tags and the silence policy are in
-§8. Retention, deletion, health endpoints, dead letters, routines, artifacts, the
-transcript, and memory files are specified in this document.
+## 6. Identity and provisioning
 
-### 4.3 Commands accepted
+Rakazo authenticates. We provision.
 
-| Command | Caller | Effect |
-|---|---|---|
-| `SendMessage` | Channels | Signal an active run, or start one |
-| `CancelRun` | UI, policy | Graceful yield, then cancel |
-| `ResolveApproval` | Approvals service | Unblocks a waiting gate |
-| `UpdateRoutine` | UI, admin | Create or change a Temporal Schedule |
-| `Typing` | Clients | Warm the pinned prompt prefix; no turn starts |
+- `SIGNUPS_ENABLED`, `SIGNUP_ALLOWLIST`, and `SCIM_BEARER_TOKEN` are per stamp,
+  set by the control plane: a customer's domain is allowlisted, or their
+  identity provider provisions accounts over SCIM.
+- Rakazo deliberately has no application admin role. `RAKAZO_ADMIN_EMAILS`
+  covers plugin review, stdio MCP servers, and credit grants, and nothing else.
+  A deployment-wide operator must therefore work outside their app, which is
+  what the control plane is for.
+- Our mapping is keyed on a verified email domain. Onboarding verifies the
+  domain, then writes the allowlist entry into the right stamp.
 
-Commands are idempotent on `command_id`, carry a reply event, and are the only
-write path from outside. Everything else is read-only.
+## 7. Secrets, data, and egress
 
-`UpdateRoutine` is specified but not on the bus yet. Until commands are
-authenticated, the operator writes the row and the Temporal Schedule directly.
+Rakazo already does more than we would have built:
 
-`ResolveApproval` carries `approval_id`, `decision`, and an optional `argument`.
-The argument replaces the reviewed string before the effect runs. The approval
-row still changes only from `pending`, so a replay cannot release a second send.
+- Connector, model, voice, memory, vault, and bot credentials are encrypted on
+  the server and never returned by the API.
+- Computers run restricted by default under Compose:
+  `restrict-computer-egress.sh` blocks private ranges, the host, LAN, and cloud
+  metadata endpoints.
 
-### 4.4 Tool surface
+What we must add or watch:
 
-The model's tools are the narrow waist: `run_shell`, `send_user`, `remember`,
-`recall`, `delegate`, `retrieve`, `browser`. `send_user` is the only tool that
-crosses the product boundary, which is why channel changes never touch the
-harness. `retrieve` is the only door to organisational knowledge.
+- **Disk encryption per stamp.** Rakazo stores transcripts and workspaces
+  unencrypted under `DATA_DIR`, and its own documentation says that is
+  unsuitable for a multi-tenant hosted install. A shared cell needs encrypted
+  volumes; a dedicated stamp needs encrypted volumes and a documented key.
+- **`PI_SESSION_RECORDING` stays off** in any cell.
+- **No per-domain egress allowlist exists.** Restricted egress blocks internal
+  targets; it does not restrict which public sites a computer reaches. Add a
+  proxy only if a customer requires it.
+- **Audit retention** defaults to 365 days (`AUDIT_EVENT_RETENTION_DAYS`) and the
+  log forwards to a SIEM as JSON Lines. Per-customer retention is a stamp value.
+- The control plane holds pointers only: no transcripts, no model keys, no
+  secrets.
 
-Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
-needs the retrieval service. The service currently offers `read_file`,
-`read_skill`, `update_plan`, `remember`, `note`, `recall`, `get_tool_schema`,
-`delegate`, and a simulated `send_email`. Computer-dependent work is deferred
-until the sandbox exists. MCP is not in the tool registry: a third-party tool is
-new code.
+## 8. Versioning and upgrades
 
-## 5. Exactly-once is a lie; here are the dedupe layers
+- **Pin an image tag per stamp.** Never `edge`. Rakazo's released tags are the
+  supported window.
+- **Canary one stamp first.** A cell upgrade affects every tenant at once; a
+  stamp upgrade affects one customer. Order them accordingly.
+- **Migrations** run in Rakazo's own migrate container as the owner role, before
+  the API starts. They are expand-and-contract because old and new processes run
+  at once during a rollout.
+- **Rollback** is the previous image tag plus a database restore. Test the
+  restore drill once per stamp type, not once per customer.
+- **Never patch the source.** If a customer requirement cannot be met by
+  configuration or by an MCP tool, record it as a patch series of a few commits
+  with a monthly rebase, and try to upstream it first. Their licence and
+  contribution process allow it.
 
-| Layer | Mechanism | Catches |
-|---|---|---|
-| Inbox | `inbox(event_id)` unique constraint, written after the idempotent effect | A second handling after a crash |
-| Workflow | Workflow ID `turn:{event_id}`; an already-started reply is success | Duplicate starts |
-| Conversation | `conversation_locks` row held for the whole turn | Two turns at once on one conversation |
-| Effect | Effect token `sha256(run_id, step_index, tool_name)` on every side effect | Activity retry |
-| Approval | `update ... where status = 'pending'` plus the stored decision; a repeat signal is safe | Replayed approval |
-
-- **Outbox.** Write product state and the outgoing event in one Postgres
-  transaction; a relay or CDC publishes. Never publish from the workflow body,
-  and never write the database and publish as two separate steps.
-- **Order the inbox after the effect.** A workflow start cannot share the
-  database transaction. Start with the deterministic workflow ID, treat
-  "already started" as success, then record the inbox. A crash before the inbox
-  write repeats an idempotent effect; it does not lose the command.
-- **Effect tokens** go into sandbox calls, egress writes, payments, and message
-  sends. The receiving side dedupes on the token, not on our retries.
-- **Kafka offsets** commit only after the effect or the inbox row commits. An
-  unhandled error stops the consumer before it commits, so the bus redelivers.
-  Duplicates are safe; lost events are not.
-- **Approvals are single-use** with an expiry; a replayed approval event must not
-  release a second send. The approval row is the claim: it changes only from
-  `pending`, and a repeat of the stored decision may signal again.
-
-## 6. Ordering, priority, fairness
-
-- **Partition by `org_id`** and require order only within a conversation.
-  Cross-conversation ordering is explicitly not guaranteed.
-- **Priority classes** live in the envelope so the sender decides, not the
-  consumer: `interactive` outranks `routine` outranks `backfill`. Kafka has no
-  message priority, so use one topic per class or filter in the consumer.
-- **Preemption:** an interactive message to a busy conversation does not queue
-  behind the run. Signal the active run to yield at its next step; if it does not
-  yield within a grace window, cancel it and start the interactive run. Bounded
-  cancellation, not a hard kill.
-- **Fairness:** per-org concurrency quotas on the harness task queue, plus a cap
-  on active runs per org. One tenant's backfill must never starve another
-  tenant's chat. Measure queue wait p99 per class, not just average latency.
-- **Batching:** drain the signal queue for a quiet window of a few seconds before
-  starting a turn. Three quick messages become one turn.
-
-### 6.1 Long runs
-
-A turn stops when the model finishes, not at a fixed step count. `plan.md` is the
-definition of done: the harness rejects a final while an item is open, unless
-the model marks it blocked. Budgets are ceilings, not the normal stop: 200
-steps, 400,000 tokens, 8 hours.
-
-Every 20 steps the workflow writes a progress event, summarises the middle of the
-turn into `working.json`, and calls `continue-as-new`. The next segment reloads
-the context from files. The lock is renewed each segment and during a long
-approval wait.
-
-`RunWorkflow.stop` preempts at the next step. A new user message signals the
-active run before it starts the new turn.
-
-## 7. Waiting without polling
-
-Runs wait on other services (document indexed, backfill complete, retrieval
-ready). Temporal has no index of "who is waiting for X", so maintain one:
-
-1. The workflow registers a waiter row: `(subject, run_id, workflow_id, deadline)`.
-2. The consumer, on the awaited event, looks up waiters by subject and signals
-   each workflow.
-3. **Race:** the event may arrive before the waiter registers. The consumer
-   records the event in a per-subject `pending` table; the workflow, after
-   registering, re-checks `pending` inside a `wait_condition`. Register then
-   re-check closes the gap.
-4. Always set a deadline. A wait without a timeout is an outage waiting to
-   happen; on expiry, mark the dependency degraded and let the run finish with a
-   caveat.
-
-## 8. Memory: episodic owned, organisational called
-
-| Layer | Lives in | Owner | Read when |
-|---|---|---|---|
-| Core facts | `profile.md` and `facts-tool.md` | This service | Every turn |
-| Summary | `summary.json` | This service | Every turn |
-| Dated logs | JSONL objects, one per turn | This service | Loaded for the recent window |
-| Scratchpad | `scratch/`, one object per note | This service | This hour, then discarded |
-| Skills | Markdown files | This service | On demand |
-| Org knowledge | HelixDB graph and vectors | Ingestion | Via `retrieve`, lazily |
-
-All memory is files under `memory/{org}/{conversation}/`. The transcript is
-JSONL, one object per turn. User facts and tool facts are separate files so
-provenance survives. Scratch is one object per effect token. The summary is
-JSON with its cutoff. A write replaces the entry with the same `(step, role)`,
-so a retry is a no-op. Temporal still runs the turn; activities do the I/O.
-Postgres holds execution state only. A production deployment places these files
-on the agent's computer, not on the worker's disk.
-
-Facts carry provenance. A fact from the user is trusted. A fact learned from a
-tool is injected as untrusted data.
-
-Skill capture, where the agent watches a session and writes a new skill, is
-deferred until the sandbox exists.
-
-HelixDB specifics:
-
-- Isolation is either a `tenant_id` property on every node and edge, or a
-  separate database per tenant. Both are supported; the first is the default,
-  the second is the regulated tier.
-- Every query must include the tenant filter. Build the filter in one helper and
-  do not let callers write it. Isolation that depends on every author remembering
-  is not isolation.
-- Enable tenant-partitioned vector and text indexes so one tenant's search does
-  not warm the caches of another.
-- Tenants share compute. Rate-limit the retrieval service per tenant.
-
-Retrieval results are written to a file and the **path** is returned to context,
-not the document body. Retrieved text is untrusted input and is never treated as
-an instruction.
-
-## 9. Observability
-
-- Propagate `traceparent` from the envelope into Temporal via interceptors and
-  activity headers, so one trace spans channel, bus, workflow, tool, and sandbox.
-- Span attributes: `org_id`, `conversation_id`, `run_id`, `step_index`,
-  `tool_name`, `model`, `cache_hit`, `tokens_in` and `tokens_out`.
-- Cost attribution happens at the LLM gateway, keyed by `org_id`; do not
-  reconstruct billing from logs.
-- Log JSON with IDs, not prose. Log prompt hashes and object-store references by
-  default; full prompts only behind a flag, with retention limits and no secrets.
-- Per-stamp dashboards for dedicated deployments, plus one fleet view of version,
-  lag, and error rate per stamp.
-- The four numbers that matter: run success rate, p99 turn latency, cache hit
-  ratio, consumer lag. Long runs add `agent_tokens_total` and
-  `agent.run.progress` events with step, budget, tokens, and open plan items.
-
-## 10. Versioning and evolution
-
-The talk's "delete the product" applies to the harness, not to the contracts.
-
-- **Event schemas:** version per type, additive-only, registry checked in CI,
-  contract tests on both producer and consumer. Removing or retyping a field is a
-  new event type.
-- **Workflows:** keep them thin and version them. Enable Temporal worker
-  versioning (build IDs) where the SDK supports it; otherwise pin workers, drain,
-  and deploy. `continue-as-new` before the history limit (about 51k events or
-  50 MB by default) for multi-day runs.
-- **Activities:** freely editable; they are not replayed. This is where the
-  harness lives, precisely so it can churn monthly.
-- **Fleet:** define a supported-version window. A dedicated stamp may lag by one
-  minor version, never two. Migrations must be expand and contract, because old
-  and new versions run at the same time during a rollout.
-- **Migrations:** the same rule for the product database and for event payloads.
-  Both are read by services you do not deploy.
-
-## 11. Tenancy and isolation
-
-`org_id` is the only tenant key. It is in the token, the envelope, every row,
-every log line, every workflow ID, and every HelixDB record.
-
-- **Derive it at the edge** from the identity token. Never accept a tenant ID
-  from a request header or payload.
-- **Identity:** an OIDC provider (Zitadel or Keycloak) issues the token. Services
-  validate the signature through JWKS and read `sub`, `org_id`, `roles`, and
-  `scopes`. No service stores passwords.
-- **Propagation:** the edge signs the tenant context and passes it in gRPC
-  metadata. Services trust only the edge, never the client.
-- **Postgres:** shared schema with `org_id` and row-level security, or schema per
-  tenant, or database per tenant. The profile decides; the code does not.
-- **HelixDB:** `tenant_id` property with an equality index, or a database per
-  tenant for the regulated tier.
-- **Temporal:** in a shared cell, one namespace per bounded context (or per
-  residency tier), never per tenant. In a dedicated stamp, namespaces may be
-  scoped to the stamp. Put `org_id` in the workflow ID and in search attributes.
-- **Kafka:** partition by `org_id`; apply per-tenant consumer quotas.
-- **Test:** a tenant that forges another `org_id` must get a 403 or an empty
-  result, never another tenant's data. Run a cross-tenant leak test in CI.
-
-## 12. Failure modes
+## 9. Failure modes
 
 | Failure | Behaviour | Mitigation |
 |---|---|---|
-| Consumer crashes mid-effect | Event redelivered | Inbox uniqueness, effect token |
-| Workflow waits on approval forever | Run parked | Deadline, then deny and notify |
-| Identity provider unavailable | New logins fail, tokens expire | Cache JWKS, long token lifetime, status page |
-| Kafka unavailable | Events queue at producers, turns delay | Producer buffer, alert on lag, no data loss at the DB |
-| Retrieval or HelixDB down | Tool returns degraded result | Run proceeds, or waits with a deadline |
-| Sandbox dies mid-run | Activity fails | Re-provision from snapshot, retry with token |
-| LLM gateway 429 or 5xx | Activity retries | Retry policy plus concurrency cap |
-| Poison event | Retries exhaust | Dead-letter topic, alert, run marked failed |
-| Workflow fails terminally | Temporal has no dead-letter queue | `agent.run.failed` is the dead letter: alert, keep history |
-| Stamp upgrade fails | One customer degraded | Canary per stamp, rollback image, version pin |
-| Clock skew on deadlines | Early or late expiry | Server time only, generous jitter |
+| Stamp upgrade fails | One customer degraded, others fine | Canary, previous tag, restore drill |
+| Stamp lost | Its organisations lose service | Rebuild from Compose plus the last backup |
+| Knowledge service down | `retrieve` returns degraded with a reason | Bounded timeout, run continues |
+| Knowledge credential leaks | One tenant's documents exposed | Per-tenant credential, rotation, tenant from credential only |
+| Postgres down on a cell | Every tenant on that cell stops | Health checks, restore drill, alert on lag |
+| Model provider outage | A run fails and retries | Customer keys stay the customer's problem |
+| Control plane down | No provisioning; running stamps unaffected | It is not on the request path |
+| Customer needs their data out | Export or delete | Rakazo account export; verify scope first |
 
-## 13. Anti-patterns
+The control plane is deliberately off the serving path. If it stops, every
+running stamp keeps working and only new provisioning waits.
 
-- A cross-service saga built from events.
-- A second orchestrator: bus-driven retries alongside Temporal.
-- Workflow IDs, signals, or queries leaking into an external API.
-- Other services querying Temporal for status.
-- Polling instead of a signal plus a subscription table.
-- Eagerly stuffing retrieved org knowledge into the prompt prefix.
-- An event per tool call.
-- Claiming exactly-once instead of making effects idempotent.
-- Unbounded retries with no dead-letter and no owner.
-- A fork or a branch per customer.
-- One Temporal namespace per tenant.
-- Trusting a tenant ID that arrived from a client.
-- Linking a database SDK into the harness.
+## 10. Observability
 
-## 14. Dependencies
+Rakazo already emits run timings, structured logs, audit events, and queue
+delays. We add the fleet view they do not have:
 
-No sequence and no schedule; these are the things that must exist for each
-service to function.
+- Per stamp: image tag, health, organisation count, last backup, upgrade status.
+- Across stamps: version spread, which stamp is behind, failed upgrades.
+- Knowledge: p99 retrieval latency, citation rate, ingest backlog per tenant.
 
-- **Platform prerequisites for everything:** Temporal, Postgres, object storage,
-  Kafka, schema registry, identity provider, observability pipeline.
-- **Agent service:** Temporal, Postgres, object store, Kafka, retrieval, sandbox,
-  secret broker, LLM gateway.
-- **Sandbox:** KVM hosts, object store for snapshots, secret broker.
-- **Retrieval:** HelixDB, identity provider.
-- **Ingestion:** HelixDB, object store, Kafka, a scheduler.
-- **Channels:** identity provider, Kafka, provider APIs.
-- **Approvals:** Postgres, Kafka, identity provider, channels.
-- **Evals:** event archive, harness activities, object store.
+Alert on: two consecutive failed health checks, a stamp more than one minor
+version behind, a backup older than its window, and knowledge latency above its
+SLO.
 
-## 15. Open questions
+## 11. Open questions
 
-- Who owns message rendering and delivery — this service or channels?
-- Who owns the retrieval service — this team or the ingestion team?
-- Per-tenant namespaces versus shared namespaces, now that dedicated stamps
-  exist: cost against blast radius.
-- Data residency for org knowledge and for agent memory: same region or not.
-- BYOC packaging: Helm chart only, or an operator that the customer runs?
-- Approval SLA per action class, and what "expired" means for money movement.
-- Whether `agent.observation.recorded` should feed ingestion, and under whose
-  schema.
-- Memory storage: the database, or the files EDA §8 describes.
-- Skill capture: deferred until the sandbox exists.
-- MCP: deferred; the tool registry is fixed for now.
-- Long-run turns: raise the step budget, or use `continue-as-new`?
+- Is the Team Computer scoped to a Space or to the Organisation? Confirm before
+  promising computer isolation inside a cell.
+- Can a whole Organisation move from a cell to a dedicated stamp? Account-level
+  export and import exist; organisation-level migration is unverified. Until it
+  is tested, sell the profile a customer starts on.
+- Rakazo documents no per-organisation concurrency limit, and run admission does
+  not set one. Enforce fair use by stamp sizing and provider quota, or build it.
+- Should the egress allowlist be ours, or upstreamed as a Rakazo feature?
+- Mobile branding: ship their store listings, or build our own Expo clients?
+- When does a patch series beat a feature request upstream?
 
-## References
+## 12. Dependencies
 
-- [ACHITECTURE.md](ACHITECTURE.md) — the source talk, sections 01–06.
-- [reference/architecture-map.html](reference/architecture-map.html) — the
-  one-page map of the product.
-- [RESOURCES.md](course/RESOURCES.md) — Temporal, 12-Factor Agents, Firecracker,
-  context engineering.
-- [HelixDB multi-tenancy](https://docs.helix-db.com/database/helix-cloud/operate/multi-tenancy)
-  and [deployment options](https://docs.helix-db.com/database/helix-db/start-here/run-modes).
-- [Kafka documentation](https://kafka.apache.org/documentation/) and
-  [Redpanda](https://docs.redpanda.com/) for the Kafka-compatible broker.
-- [Zitadel](https://zitadel.com/docs) and [Keycloak](https://www.keycloak.org/documentation)
-  for the identity provider.
+- **Every stamp:** Postgres, a container host or a sandbox provider, object
+  storage, SMTP for account mail, a model provider, DNS and TLS.
+- **Knowledge:** HelixDB, object storage for raw documents, an embedding model.
+- **Control plane:** Postgres, DNS, the container host API.
+- **Optional, per stamp:** Stripe if that customer buys credits, Axiom for logs,
+  a memory provider.
+
+## 13. Deliberately not built
+
+The agent loop, the harness, tools, memory, approvals and auto-review, sandboxes,
+channels, identity, audit, evals, billing, and the client applications. Rakazo
+has them, their tests cover them, and their releases carry the security fixes.
