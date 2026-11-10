@@ -9,15 +9,12 @@ MARKDOWN = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 HTML = re.compile(r'href="([^"]+)"')
 TARGETS = sorted(ROOT.glob("*.md"))
 TARGETS += sorted((ROOT / "reference").glob("*.html"))
-TARGETS += sorted((ROOT / "course").rglob("*.md"))
-TARGETS += sorted((ROOT / "course").rglob("*.html"))
 
 
 def check_sections(bad: list[str]) -> None:
     """A section reference must name a heading that exists.
 
-    shortcut: in the root documents a section number always means EDA.md. Course
-    files cite the source talk, not this repository, so they are not checked.
+    shortcut: in the root documents a section number always means EDA.md.
     """
     numbers = set(re.findall(r"^## (\d+)\.", (ROOT / "EDA.md").read_text(), re.M))
     for path in sorted(ROOT.glob("*.md")):

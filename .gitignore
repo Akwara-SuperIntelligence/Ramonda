@@ -9,13 +9,3 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
-
-# teaching workspace build artifacts
-course/build/*/state/
-course/build/*/workspace/
-.preview/
-
-# agent memory and lesson 08 machine state
-course/build/*/memory/
-course/build/lesson-08/box/
-course/build/lesson-08/snapshot/

@@ -1,7 +1,7 @@
 # Working in this repository
 
-Design and course material. The design is `EDA.md` at the root. `course/` is
-frozen reference. There is no implementation here yet.
+Design material. The design is `EDA.md` at the root. There is no implementation
+here yet.
 
 ## Rules
 
@@ -13,7 +13,6 @@ frozen reference. There is no implementation here yet.
   belong in the repo. Delete rather than branch into options.
 - **Configure, then patch, then build.** Before adding a service, check whether a
   Rakazo environment variable or an MCP tool already does the job.
-- `course/` is read-only reference. Do not edit, import, build, or deploy it.
 - Use the vocabulary in `GLOSSARY.md`. Organisation, Space, and stamp have
   specific meanings; do not use them loosely.
 - Never fork per customer. Shared cell, dedicated stamp, BYOC — one artifact set.
@@ -30,7 +29,6 @@ frozen reference. There is no implementation here yet.
 | What is ours and what is Rakazo's? | `EDA.md` §1 |
 | What does a term mean? | `GLOSSARY.md` |
 | How does Rakazo itself work? | Its own docs at `github.com/elie222/rakazo/tree/main/docs` |
-| How was a mechanism demonstrated? | `course/lessons/` |
 
 ## Before you finish
 
