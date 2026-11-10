@@ -4,13 +4,7 @@ Always-on agents for organisations. We run [Rakazo](https://github.com/elie222/r
 unmodified, one deployment per customer tier, and build the layers Rakazo does
 not have: tenancy, provisioning, organisation knowledge, and upgrades.
 
-Two things live here:
-
-- **The design** — `EDA.md` is the deployment and tenancy contract.
-- **The course** — `course/` builds the primitives one at a time, with toy but
-  behaviourally accurate code. It is frozen reference, not shipped code.
-
-There is no implementation in this repository yet.
+The design is `EDA.md`. There is no implementation in this repository yet.
 
 ## The shape
 
@@ -43,7 +37,6 @@ it. See [EDA.md](EDA.md) §1.
 | [EDA.md](EDA.md) | How we deploy and isolate Rakazo for organisations |
 | [GLOSSARY.md](GLOSSARY.md) | What a term means |
 | [reference/architecture-map.html](reference/architecture-map.html) | The product on one page |
-| [course/RESOURCES.md](course/RESOURCES.md) | Primary sources behind the claims |
 
 Reading path: this page → [GLOSSARY.md](GLOSSARY.md) → [EDA.md](EDA.md).
 
@@ -53,12 +46,11 @@ Reading path: this page → [GLOSSARY.md](GLOSSARY.md) → [EDA.md](EDA.md).
 README.md        this page
 AGENTS.md        rules for AI agents working here
 EDA.md           the deployment and tenancy contract
-GLOSSARY.md      vocabulary, shared by both tracks
+GLOSSARY.md      vocabulary
 compose.yaml     Postgres for development
 Makefile         up, down, reset, check
 scripts/         link check
 reference/       one-page maps and the glossary as HTML
-course/          frozen course material
 ```
 
 Run `git config core.hooksPath .githooks` once, and every commit runs `make check`
@@ -75,9 +67,6 @@ it with the volume, and `make up` recreates it.
 service was deleted rather than fixed; Rakazo replaces it, and the layers in
 `EDA.md` §3 and §5 are the work that remains.
 
-`course/build/` is course code: standard library only, one file per lesson, and
-deliberately incomplete. Do not ship it.
-
 ## Conventions
 
 - **Consume Rakazo. Do not vendor it.** Their releases carry the fixes and build
@@ -89,4 +78,3 @@ deliberately incomplete. Do not ship it.
   Never a fork per customer.
 - **Design lives in `EDA.md`.** If a decision changes, the document changes in
   the same commit.
-- **`course/` is read-only.** Never import course code.
