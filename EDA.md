@@ -22,6 +22,7 @@ deleted. The argument is in [ACHITECTURE.md](ACHITECTURE.md); vocabulary follows
 | 6 | Model spend | The customer's own provider keys by default | No credit ledger of ours to reconcile |
 | 7 | Control plane | Internal CLI and database, no UI | One customer does not justify a console |
 | 8 | Moving an organisation between stamps | Not offered | Unverified by Rakazo, and expensive to build |
+| 9 | Event streaming | None: Postgres, polling, and Rakazo's outbox | Two independent consumers is the threshold, and there are none |
 
 ## 1. The boundary
 
@@ -179,7 +180,39 @@ What we must add or watch:
 - The control plane holds pointers only: no transcripts, no model keys, no
   secrets.
 
-## 8. Versioning and upgrades
+## 8. Event streaming
+
+There is no bus. Rakazo is Postgres-only: a run is claimed by an atomic lease
+and fence, scheduling is Graphile, delivery is its own outbox, and observability
+is OpenTelemetry plus an append-only audit journal. We run no Kafka, no
+Redpanda, and no Temporal, and no service of ours produces or consumes an event
+log.
+
+A bus is a strong answer to a question we do not have. Write the threshold down
+so the next person does not rediscover it:
+
+> **Add a bus when two independent consumers need the same event, at a volume
+> Postgres polling cannot sustain. Until then, use what exists.**
+
+The three cases that would reopen it, in the order they are likely to arrive:
+
+| Case | What to do first | When a bus is justified |
+|---|---|---|
+| A customer wants facts in their warehouse near real time | Audit log export as JSON Lines, or `AUDIT_LOG_WEBHOOK_URL` to their SIEM. Both already exist. | Sub-minute, high-volume, replayable delivery to several consumers |
+| Knowledge ingestion at volume | A queue table and a poller inside the knowledge service | One ingestion worker cannot keep up, and the backlog is measured |
+| Fleet telemetry across many stamps | Push metrics to a time series store | Never for this case. A metrics pipeline is the correct tool |
+
+Rules that follow:
+
+- Ingestion state, retries, and dead letters live in Postgres. A broker is not
+  how you get retries; a status column is.
+- If a bus does arrive, it is one service with one contract, and it enters this
+  document before any code exists.
+- Reversal is expensive. A broker is an operational dependency on every stamp,
+  BYOC included, and the customer has to run it. That cost is why the threshold
+  is high.
+
+## 9. Versioning and upgrades
 
 - **Pin an image tag per stamp.** Never `edge`. Rakazo's released tags are the
   supported window.
@@ -195,7 +228,7 @@ What we must add or watch:
   with a monthly rebase, and try to upstream it first. Their licence and
   contribution process allow it.
 
-## 9. Failure modes
+## 10. Failure modes
 
 | Failure | Behaviour | Mitigation |
 |---|---|---|
@@ -211,7 +244,7 @@ What we must add or watch:
 The control plane is deliberately off the serving path. If it stops, every
 running stamp keeps working and only new provisioning waits.
 
-## 10. Observability
+## 11. Observability
 
 Rakazo already emits run timings, structured logs, audit events, and queue
 delays. We add the fleet view they do not have:
@@ -224,7 +257,7 @@ Alert on: two consecutive failed health checks, a stamp more than one minor
 version behind, a backup older than its window, and knowledge latency above its
 SLO.
 
-## 11. Open questions
+## 12. Open questions
 
 - Is the Team Computer scoped to a Space or to the Organisation? Confirm before
   promising computer isolation inside a cell.
@@ -237,7 +270,7 @@ SLO.
 - Mobile branding: ship their store listings, or build our own Expo clients?
 - When does a patch series beat a feature request upstream?
 
-## 12. Dependencies
+## 13. Dependencies
 
 - **Every stamp:** Postgres, a container host or a sandbox provider, object
   storage, SMTP for account mail, a model provider, DNS and TLS.
@@ -246,7 +279,7 @@ SLO.
 - **Optional, per stamp:** Stripe if that customer buys credits, Axiom for logs,
   a memory provider.
 
-## 13. Deliberately not built
+## 14. Deliberately not built
 
 The agent loop, the harness, tools, memory, approvals and auto-review, sandboxes,
 channels, identity, audit, evals, billing, and the client applications. Rakazo
