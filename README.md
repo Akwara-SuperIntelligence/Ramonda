@@ -36,7 +36,7 @@ it. See [EDA.md](EDA.md) §1.
 |---|---|
 | [EDA.md](EDA.md) | How we deploy and isolate Rakazo for organisations |
 | [GLOSSARY.md](GLOSSARY.md) | What a term means |
-| [reference/architecture-map.html](reference/architecture-map.html) | The product on one page |
+| [reference/glossary.html](reference/glossary.html) | The glossary as a page |
 
 Reading path: this page → [GLOSSARY.md](GLOSSARY.md) → [EDA.md](EDA.md).
 
@@ -50,7 +50,7 @@ GLOSSARY.md      vocabulary
 compose.yaml     Postgres for development
 Makefile         up, down, reset, check
 scripts/         link check
-reference/       one-page maps and the glossary as HTML
+reference/       the glossary as HTML
 ```
 
 Run `git config core.hooksPath .githooks` once, and every commit runs `make check`
