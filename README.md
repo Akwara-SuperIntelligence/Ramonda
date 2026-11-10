@@ -66,7 +66,8 @@ before it is written.
 
 `compose.yaml` is a local Postgres for developing our own services. It is not a
 stamp. A stamp is generated from upstream Rakazo's Compose files, per
-[EDA.md](EDA.md) §3.
+[EDA.md](EDA.md) §3. The development database is `ramonda`; `make reset` drops
+it with the volume, and `make up` recreates it.
 
 ## Status
 
