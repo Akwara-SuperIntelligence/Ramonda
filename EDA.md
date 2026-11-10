@@ -7,8 +7,7 @@ tenancy, provisioning, knowledge, and upgrade layers around an **unmodified**
 Rakazo, and we run one stack per customer tier.
 
 This document replaces an earlier one that specified a service we wrote and then
-deleted. The argument is in [ACHITECTURE.md](ACHITECTURE.md); vocabulary follows
-[GLOSSARY.md](GLOSSARY.md).
+deleted. Vocabulary follows [GLOSSARY.md](GLOSSARY.md).
 
 ## 0. Decisions at a glance
 

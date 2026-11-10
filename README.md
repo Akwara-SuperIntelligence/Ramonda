@@ -6,8 +6,7 @@ not have: tenancy, provisioning, organisation knowledge, and upgrades.
 
 Two things live here:
 
-- **The design** — `EDA.md` is the deployment and tenancy contract,
-  `ACHITECTURE.md` is the argument behind the product.
+- **The design** — `EDA.md` is the deployment and tenancy contract.
 - **The course** — `course/` builds the primitives one at a time, with toy but
   behaviourally accurate code. It is frozen reference, not shipped code.
 
@@ -42,7 +41,6 @@ it. See [EDA.md](EDA.md) §1.
 | Document | Answers |
 |---|---|
 | [EDA.md](EDA.md) | How we deploy and isolate Rakazo for organisations |
-| [ACHITECTURE.md](ACHITECTURE.md) | Why the product works this way: the source talk, sections 01–06 |
 | [GLOSSARY.md](GLOSSARY.md) | What a term means |
 | [reference/architecture-map.html](reference/architecture-map.html) | The product on one page |
 | [course/RESOURCES.md](course/RESOURCES.md) | Primary sources behind the claims |
@@ -55,7 +53,6 @@ Reading path: this page → [GLOSSARY.md](GLOSSARY.md) → [EDA.md](EDA.md).
 README.md        this page
 AGENTS.md        rules for AI agents working here
 EDA.md           the deployment and tenancy contract
-ACHITECTURE.md   the source talk: why the product works this way
 GLOSSARY.md      vocabulary, shared by both tracks
 compose.yaml     Postgres for development
 Makefile         up, down, reset, check

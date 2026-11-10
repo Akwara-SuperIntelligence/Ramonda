@@ -46,4 +46,4 @@ or a durable run by hand, our product gets that behaviour from Rakazo instead.
 
 ## Where to go next
 
-The service contract is `EDA.md`. The argument is `ACHITECTURE.md`.
+The service contract is `EDA.md`.

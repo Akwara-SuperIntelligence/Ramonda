@@ -1,7 +1,7 @@
 # Mission: Build an always-on agent
 
 ## Why
-I want my own agent that keeps working after I close the laptop — a colleague I can text, that remembers our work, wakes up on events, and survives restarts. The architecture talk in `ACHITECTURE.md` is the blueprint; I want to be able to build each piece, not just describe it.
+I want my own agent that keeps working after I close the laptop — a colleague I can text, that remembers our work, wakes up on events, and survives restarts. The architecture talk is the blueprint; I want to be able to build each piece, not just describe it.
 
 ## Success looks like
 - A Python agent loop that calls tools and finishes a multi-step task on its own.

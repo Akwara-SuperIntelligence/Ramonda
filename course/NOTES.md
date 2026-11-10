@@ -16,4 +16,4 @@
 - `.venv` was moved from `Ramonda-African-Union/`; the `pip` shim and `activate` script both hardcode the old path. `source .venv/bin/activate` puts a nonexistent directory on PATH, so bare `python` fails even though the prompt shows `(.venv)`. Use `.venv/bin/python` explicitly, or repair `activate` with a path substitution.
 - `.env` has `DEEPSEEK_API_KEY` and `OPENROUTER_API_KEY`. A `deepseek-chat` call was verified working on 2026-10-30.
 - `openai` 2.54.0 is installed in the venv.
-- Source talk: `ACHITECTURE.md` (sections 01–06; Q&A not transcribed). Treat it as the primary source for the course's architecture claims.
+- Source talk, sections 01–06 (Q&A not transcribed). Treat it as the primary source for the course's architecture claims.
