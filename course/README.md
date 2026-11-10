@@ -7,6 +7,9 @@ It exists because the mechanism is easier to see in 200 lines of standard
 library Python than in a production service. Read it to understand a behaviour,
 then find the corresponding contract in `EDA.md`.
 
+The lessons teach the mechanism, not our stack. Where a lesson builds a journal
+or a durable run by hand, our product gets that behaviour from Rakazo instead.
+
 ## Contents
 
 | Path | What it is |
