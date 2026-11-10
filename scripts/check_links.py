@@ -7,10 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MARKDOWN = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 HTML = re.compile(r'href="([^"]+)"')
-TARGETS = [ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "GLOSSARY.md"]
-TARGETS += sorted((ROOT / "docs").rglob("*.md"))
-TARGETS += sorted((ROOT / "services").rglob("*.md"))
+TARGETS = sorted(ROOT.glob("*.md"))
 TARGETS += sorted((ROOT / "reference").glob("*.html"))
+TARGETS += sorted((ROOT / "course").rglob("*.md"))
+TARGETS += sorted((ROOT / "course").rglob("*.html"))
 
 
 def main() -> int:

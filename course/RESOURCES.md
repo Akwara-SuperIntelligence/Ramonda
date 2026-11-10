@@ -4,7 +4,7 @@ Curated sources for building a persistent, proactive agent. Knowledge sources gr
 
 ## Knowledge
 
-- [Talk transcript: "How always-on agents work" (`ACHITECTURE.md`)](../docs/ACHITECTURE.md)
+- [Talk transcript: "How always-on agents work" (`ACHITECTURE.md`)](../ACHITECTURE.md)
   The course's primary source. Covers the four eras, the thin-client/thick-server harness, the `send_user` boundary, context engineering, sub-agents, durable workflows, and the training flywheel. Use for: the architecture this course builds and every claim about "how Grokbot does it".
 
 - [Anthropic: "Building effective agents"](https://www.anthropic.com/engineering/building-effective-agents)

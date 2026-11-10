@@ -4,28 +4,28 @@ Design and course material for an **always-on agent**: a colleague you can text
 that keeps working after you close the laptop, survives restarts, remembers your
 work, has its own computer, and asks before it does something irreversible.
 
-This repository holds two tracks that share one vocabulary:
+Two things live here:
 
-- **The product** — `docs/` specifies it, `services/` implements it. One
-  service lives here: the agent service.
 - **The course** — `course/` builds the primitives one at a time, with toy but
   behaviourally accurate code. It is frozen reference, not shipped code.
+- **The design** — `ACHITECTURE.md` is the argument, `EDA.md` is the service
+  contract.
 
-The course teaches the mechanism. `docs/` is the source of truth.
+There is no implementation in this repository yet.
 
-## The system
+## The target system
 
 ```
         clients: web, mobile, terminal, Slack, email
                             │
-                       edge gateway (Rust)
+                       edge gateway
                             │
       ┌─────────────────────┼──────────────────────┐
       │                     │                      │
   agent service        approvals service      admin console
       │  (Temporal)
       ├── retrieval ──▶ HelixDB ◀── ingestion ◀── connectors
-      ├── sandbox platform (Rust)
+      ├── sandbox platform
       ├── secret broker and egress proxy
       └── LLM gateway
                             │
@@ -34,59 +34,37 @@ The course teaches the mechanism. `docs/` is the source of truth.
 
 The agent service owns the loop: it consumes a command or an event, runs one
 durable workflow per turn, calls the model and the tools, and emits a message
-intent. Everything else is a separate service with its own contract.
+intent. Everything else is a separate service with its own contract
+([EDA.md](EDA.md) §1).
 
 ## Documents
 
-| Document | Answers | Read it when |
-|---|---|---|
-| [docs/ACHITECTURE.md](docs/ACHITECTURE.md) | Why the product works this way: the source talk, sections 01–06 | You want the reasoning, not the specification |
-| [docs/EDA.md](docs/EDA.md) | Where the agent service ends, its contracts, dedupe, memory, tenancy, deployment profiles | You are designing or reviewing the agent service |
-| [docs/BUILD.md](docs/BUILD.md) | Every service in the full system, with interfaces and definitions of done | You are building, staffing, or scoping a service |
-| [docs/LANGUAGE.md](docs/LANGUAGE.md) | What is Rust, what is Python, and why | You are choosing a language or adding a service |
-| [docs/CACHING.md](docs/CACHING.md) | Provider cache windows, minimums, and our measurements | You are tuning context or cost |
-| [GLOSSARY.md](GLOSSARY.md) | The working vocabulary | You are unsure what a word means here |
-| [reference/architecture-map.html](reference/architecture-map.html) | The product on one page | You are orienting, or printing something for a wall |
-| [course/RESOURCES.md](course/RESOURCES.md) | Primary sources behind the claims | You want to check or go deeper |
-| [course/MISSION.md](course/MISSION.md) | The course goal and its constraints | You are teaching or taking the course |
-| [course/NOTES.md](course/NOTES.md) | Teaching notes and environment facts | You are running the course |
+| Document | Answers |
+|---|---|
+| [ACHITECTURE.md](ACHITECTURE.md) | Why the product works this way: the source talk, sections 01–06 |
+| [EDA.md](EDA.md) | Where the agent service ends, its contracts, dedupe, memory, tenancy, deployment profiles |
+| [GLOSSARY.md](GLOSSARY.md) | What a term means |
+| [reference/architecture-map.html](reference/architecture-map.html) | The product on one page |
+| [course/RESOURCES.md](course/RESOURCES.md) | Primary sources behind the claims |
+| [course/MISSION.md](course/MISSION.md) | The course goal and its constraints |
+| [course/NOTES.md](course/NOTES.md) | Teaching notes and environment facts |
 
-## Reading paths
-
-**New to the project.** This page → [GLOSSARY.md](GLOSSARY.md) →
+Reading path: this page → [GLOSSARY.md](GLOSSARY.md) →
 [reference/architecture-map.html](reference/architecture-map.html) →
-[docs/ACHITECTURE.md](docs/ACHITECTURE.md) sections 01–04.
-
-**Building the agent service.** [docs/EDA.md](docs/EDA.md) sections 1–5 and 7 →
-[docs/LANGUAGE.md](docs/LANGUAGE.md) → course lessons 01–04 →
-`course/build/lesson-03/server.py`.
-
-**Building the sandbox.** [docs/EDA.md](docs/EDA.md) sections 1, 2, and 12 →
-course lesson 08 → `course/build/lesson-08/computer.py` →
-[docs/BUILD.md](docs/BUILD.md) section 6.3.
-
-**Operating it.** [docs/BUILD.md](docs/BUILD.md) sections 3, 5, 8 →
-[docs/EDA.md](docs/EDA.md) sections 9, 12.
-
-**Reviewing the architecture.** [docs/ACHITECTURE.md](docs/ACHITECTURE.md) →
-[docs/EDA.md](docs/EDA.md) → [docs/BUILD.md](docs/BUILD.md) →
-[docs/LANGUAGE.md](docs/LANGUAGE.md).
-
-**Data and knowledge work.** [docs/EDA.md](docs/EDA.md) sections 8 and 11 →
-[docs/BUILD.md](docs/BUILD.md) sections 6.4, 6.5.
+[ACHITECTURE.md](ACHITECTURE.md) §01–04 → [EDA.md](EDA.md).
 
 ## Repository layout
 
 ```
 README.md        this page
-GLOSSARY.md      vocabulary, shared by both tracks
 AGENTS.md        rules for AI agents working here
+ACHITECTURE.md   the source talk: why the product works this way
+EDA.md           the agent service contract
+GLOSSARY.md      vocabulary, shared by both tracks
 compose.yaml     Postgres, Temporal, UI, and Redpanda for development
-Makefile         up, down, reset, test
-docs/            the design: ACHITECTURE, EDA, BUILD, LANGUAGE, and adr/
+Makefile         up, down, reset, check
+scripts/         link check
 reference/       one-page maps and the glossary as HTML
-services/        the product. One directory per service
-  agent/         the agent service, with its migrations
 course/          frozen course material
   lessons/       ten lessons
   build/         worked code, one directory per lesson
@@ -94,22 +72,12 @@ course/          frozen course material
   assets/        styles and quiz script
 ```
 
-## Vocabulary
-
-Use the words in [GLOSSARY.md](GLOSSARY.md) precisely. The load-bearing ones:
-**agent**, **harness**, **agent loop**, **turn**, **tool call**, **execution
-state**, **durable execution**, **always-on agent**.
-
-Terms that belong to the real design rather than the course — tenant, deployment
-profile, shared cell, dedicated stamp, effect token, inbox and outbox — are
-defined where they are first used in [docs/EDA.md](docs/EDA.md) and
-[docs/BUILD.md](docs/BUILD.md).
-
 ## Status
 
-`docs/` describes the target system. `services/agent/` holds the first working
-slice: a durable turn, a real model call, and Postgres-backed conversation state.
-It is not production yet. The rest of the system is specified but not built.
+`ACHITECTURE.md` and `EDA.md` describe the target system. Nothing here
+implements it. An earlier first slice — a durable turn, a real model call, and
+Postgres-backed conversation state — has been removed; the replacement is being
+chosen and will be an open-source base rather than code written from scratch.
 
 `course/build/` is course code: standard library only, one file per lesson, and
 deliberately incomplete. Do not ship it. It exists to make the behaviour
@@ -117,20 +85,14 @@ concrete: the loop that dies, the journal, the server boundary, the router, the
 cache meter, the sub-agent, the memory layers, the machine service, the review
 gate, and the eval suite.
 
-The lessons are the worked examples. [docs/EDA.md](docs/EDA.md) and
-[docs/BUILD.md](docs/BUILD.md) are the specification.
-[docs/ACHITECTURE.md](docs/ACHITECTURE.md) is the argument.
-
 ## Conventions
 
 - **One codebase, three deployment profiles.** Shared cell, dedicated stamp,
   BYOC. Never a fork per customer.
 - **Document contracts and reasons, not internals.** The harness changes monthly;
   the envelope does not.
-- **Python decides, Rust delivers.** Details in [docs/LANGUAGE.md](docs/LANGUAGE.md).
 - **Events for facts, workflows for processes.** Details in
-  [docs/EDA.md](docs/EDA.md) section 3.
-- **`course/` is read-only.** Promote any detail you rely on into `docs/`, then
-  cite the lesson. Never import course code.
-- **Decisions get a one-page record** in `docs/adr/` when they are expensive to
-  reverse. The four design documents stay the source of truth.
+  [EDA.md](EDA.md) §3.
+- **`course/` is read-only.** Promote any detail you rely on into the design
+  documents, then cite the lesson. Never import course code.
+- **Prefer deleting a document to adding a fourth one.**

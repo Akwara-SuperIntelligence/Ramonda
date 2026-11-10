@@ -2,11 +2,10 @@
 
 Scope: **one service** — the always-on agent — as a participant in a larger
 microservice, event-driven system. Not the organisation ingestion pipeline, not
-the graph-vector store, not the channels. The agent's internals are in
-[ACHITECTURE.md](ACHITECTURE.md) and
-[reference/architecture-map.html](../reference/architecture-map.html); the
-Rust/Python split is in [LANGUAGE.md](LANGUAGE.md); the full service inventory is
-in [BUILD.md](BUILD.md). Vocabulary follows [GLOSSARY.md](../GLOSSARY.md).
+the graph-vector store, not the channels. The argument is in
+[ACHITECTURE.md](ACHITECTURE.md), the product on one page is in
+[reference/architecture-map.html](reference/architecture-map.html), and vocabulary
+follows [GLOSSARY.md](GLOSSARY.md).
 
 The service keeps the shape from the talk: thin client, thick server, one
 `send_user` boundary, one durable run per turn, a disposable computer, memory as
@@ -77,7 +76,7 @@ Rules:
   and one config file. If that fails, neither multi-tenancy nor a fork will save
   the deal.
 - The worker and consumer are long-running; idle stop is a deployment property,
-  not workflow code. See [BUILD §8](BUILD.md#8-deployment-profiles).
+  not workflow code.
 
 ## 3. Two layers, one owner per process
 
@@ -148,17 +147,11 @@ unknown types.
 Do **not** emit an event per tool call or per model call. That is trace data, not
 domain data; it belongs in spans. The bus is for facts other services act on.
 
-The kinds of human interaction behind `agent.approval.requested` and the
-`options` field on `agent.message.composed` are in
-[ADR 0001](adr/0001-interaction-kinds.md). Trust tags and the silence policy are
-in [ADR 0002](adr/0002-trust-and-silence.md). Retention windows, deletion, health
-endpoints, and the dead-letter policy are in [ADR 0003](adr/0003-retention-deletion-health.md).
-The four metrics, traceparent propagation, and the quota guard are in
-[ADR 0004](adr/0004-metrics-quotas.md). Routines are in
-[ADR 0005](adr/0005-routines.md). Artifacts are in
-[ADR 0006](adr/0006-object-storage.md). The transcript is in
-[ADR 0010](adr/0010-file-transcript.md). Memory files are in
-[ADR 0011](adr/0011-memory-files.md).
+The kinds of human interaction behind `agent.approval.requested` — typed
+fields, edit-then-approve, choice options — are a taxonomy this service owns; the
+client renders by `kind` and `fields`. Trust tags and the silence policy are in
+§8. Retention, deletion, health endpoints, dead letters, routines, artifacts, the
+transcript, and memory files are specified in this document.
 
 ### 4.3 Commands accepted
 
@@ -174,8 +167,7 @@ Commands are idempotent on `command_id`, carry a reply event, and are the only
 write path from outside. Everything else is read-only.
 
 `UpdateRoutine` is specified but not on the bus yet. Until commands are
-authenticated, `routine.py` writes the row and the Temporal Schedule directly.
-See [ADR 0005](adr/0005-routines.md).
+authenticated, the operator writes the row and the Temporal Schedule directly.
 
 `ResolveApproval` carries `approval_id`, `decision`, and an optional `argument`.
 The argument replaces the reviewed string before the effect runs. The approval
@@ -191,10 +183,9 @@ harness. `retrieve` is the only door to organisational knowledge.
 Not built yet: `run_shell` and `browser` need the sandbox platform; `retrieve`
 needs the retrieval service. The service currently offers `read_file`,
 `read_skill`, `update_plan`, `remember`, `note`, `recall`, `get_tool_schema`,
-`delegate`, and a simulated `send_email`. Computer-dependent work is deferred; see
-[ADR 0008](adr/0008-harness-first.md) and
-[AGENT-COMPUTER.md](AGENT-COMPUTER.md). MCP is deferred; see
-[ADR 0009](adr/0009-mcp-and-skill-capture.md).
+`delegate`, and a simulated `send_email`. Computer-dependent work is deferred
+until the sandbox exists. MCP is not in the tool registry: a third-party tool is
+new code.
 
 ## 5. Exactly-once is a lie; here are the dedupe layers
 
@@ -252,8 +243,7 @@ the context from files. The lock is renewed each segment and during a long
 approval wait.
 
 `RunWorkflow.stop` preempts at the next step. A new user message signals the
-active run before it starts the new turn. See
-[ADR 0012](adr/0012-long-runs.md).
+active run before it starts the new turn.
 
 ## 7. Waiting without polling
 
@@ -287,15 +277,14 @@ JSONL, one object per turn. User facts and tool facts are separate files so
 provenance survives. Scratch is one object per effect token. The summary is
 JSON with its cutoff. A write replaces the entry with the same `(step, role)`,
 so a retry is a no-op. Temporal still runs the turn; activities do the I/O.
-Postgres holds execution state only. See [ADR 0010](adr/0010-file-transcript.md)
-and [ADR 0011](adr/0011-memory-files.md). The intended placement of these files
-on the agent's computer is in [AGENT-COMPUTER.md](AGENT-COMPUTER.md).
+Postgres holds execution state only. A production deployment places these files
+on the agent's computer, not on the worker's disk.
 
 Facts carry provenance. A fact from the user is trusted. A fact learned from a
-tool is injected as untrusted data. See [ADR 0002](adr/0002-trust-and-silence.md).
+tool is injected as untrusted data.
 
 Skill capture, where the agent watches a session and writes a new skill, is
-deferred. See [ADR 0009](adr/0009-mcp-and-skill-capture.md).
+deferred until the sandbox exists.
 
 HelixDB specifics:
 
@@ -431,18 +420,16 @@ service to function.
 - Whether `agent.observation.recorded` should feed ingestion, and under whose
   schema.
 - Memory storage: the database, or the files EDA §8 describes.
-- Skill capture: deferred; see [ADR 0009](adr/0009-mcp-and-skill-capture.md).
-- MCP: deferred; see [ADR 0009](adr/0009-mcp-and-skill-capture.md).
+- Skill capture: deferred until the sandbox exists.
+- MCP: deferred; the tool registry is fixed for now.
 - Long-run turns: raise the step budget, or use `continue-as-new`?
 
 ## References
 
 - [ACHITECTURE.md](ACHITECTURE.md) — the source talk, sections 01–06.
-- [BUILD.md](BUILD.md) — the full service inventory and definitions of done.
-- [reference/architecture-map.html](../reference/architecture-map.html) — the
+- [reference/architecture-map.html](reference/architecture-map.html) — the
   one-page map of the product.
-- [LANGUAGE.md](LANGUAGE.md) — what is Rust and what is Python, and why.
-- [RESOURCES.md](../course/RESOURCES.md) — Temporal, 12-Factor Agents, Firecracker,
+- [RESOURCES.md](course/RESOURCES.md) — Temporal, 12-Factor Agents, Firecracker,
   context engineering.
 - [HelixDB multi-tenancy](https://docs.helix-db.com/database/helix-cloud/operate/multi-tenancy)
   and [deployment options](https://docs.helix-db.com/database/helix-db/start-here/run-modes).

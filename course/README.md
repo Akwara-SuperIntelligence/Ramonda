@@ -1,11 +1,11 @@
 # Course material
 
-Frozen reference. This tree is not built, not deployed, and not imported by
-`services/`.
+Frozen reference. This tree is not built, not deployed, and not imported by the
+design documents.
 
 It exists because the mechanism is easier to see in 200 lines of standard
 library Python than in a production service. Read it to understand a behaviour,
-then implement that behaviour in `services/agent`.
+then find the corresponding contract in `EDA.md`.
 
 ## Contents
 
@@ -39,9 +39,8 @@ then implement that behaviour in `services/agent`.
 - Standard library only. No new dependencies.
 - One file per lesson, small enough to read in one sitting.
 - Deliberately incomplete. The gaps are the lesson.
-- No production imports. Nothing here may be imported by `services/`.
+- No production imports. Nothing here may be imported by an implementation.
 
 ## Where to go next
 
-The specification is in `docs/EDA.md` and `docs/BUILD.md`. The argument is
-`docs/ACHITECTURE.md`.
+The service contract is `EDA.md`. The argument is `ACHITECTURE.md`.
