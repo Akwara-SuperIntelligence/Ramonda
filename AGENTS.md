@@ -17,6 +17,8 @@ frozen reference. There is no implementation here yet.
 - Use the vocabulary in `GLOSSARY.md`. Organisation, Space, and stamp have
   specific meanings; do not use them loosely.
 - Never fork per customer. Shared cell, dedicated stamp, BYOC — one artifact set.
+- **`main` is protected.** Work on a branch and open a pull request; a direct
+  push is rejected. The `links` check must pass before merge.
 - **No LICENSE file.** This is a company repository, not an open-source project.
   Do not add a licence, and do not invite contributions.
 
