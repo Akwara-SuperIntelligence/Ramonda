@@ -13,8 +13,21 @@ TARGETS += sorted((ROOT / "course").rglob("*.md"))
 TARGETS += sorted((ROOT / "course").rglob("*.html"))
 
 
+def check_sections(bad: list[str]) -> None:
+    """A section reference must name a heading that exists.
+
+    shortcut: in the root documents a section number always means EDA.md. Course
+    files cite the source talk, not this repository, so they are not checked.
+    """
+    numbers = set(re.findall(r"^## (\d+)\.", (ROOT / "EDA.md").read_text(), re.M))
+    for path in sorted(ROOT.glob("*.md")):
+        for number in re.findall(r"§ ?(\d+)", path.read_text()):
+            if number not in numbers:
+                bad.append(f"{path.name}: section {number} has no heading in EDA.md")
+
+
 def main() -> int:
-    bad = []
+    bad: list[str] = []
     for path in TARGETS:
         if any(part.startswith(".") for part in path.relative_to(ROOT).parts):
             continue
@@ -25,7 +38,8 @@ def main() -> int:
                 continue
             if not (path.parent / target).resolve().exists():
                 bad.append(f"{path.relative_to(ROOT)}: {target}")
-    print("\n".join(bad) if bad else "all local links resolve")
+    check_sections(bad)
+    print("\n".join(bad) if bad else "all local links resolve, all sections exist")
     return 1 if bad else 0
 
 
