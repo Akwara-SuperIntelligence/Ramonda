@@ -64,6 +64,9 @@ reference/       one-page maps and the glossary as HTML
 course/          frozen course material
 ```
 
+Run `git config core.hooksPath .githooks` once, and every commit runs `make check`
+before it is written.
+
 `compose.yaml` is a local Postgres for developing our own services. It is not a
 stamp. A stamp is generated from upstream Rakazo's Compose files, per
 [EDA.md](EDA.md) §3.
