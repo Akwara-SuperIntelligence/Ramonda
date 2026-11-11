@@ -18,10 +18,11 @@ Enterprises cannot safely deploy agents across roles. A generic agent does not r
 2. An action goes to the right approver before it is written back into the client's existing system, with an immutable audit record.
 3. Always-on agents watch events and flag problems before anyone asks.
 4. Departments collaborate without seeing each other's restricted data.
+5. Agents produce company work from the client's own data, such as reports, decks, spreadsheets, SOPs, policy drafts, forecasts, and small internal tools.
 
 ## Systems and interfaces
 
-No new dashboard, and no custom dashboard per client. Agents read and write the client's existing systems (point of sale, inventory, HR, accounting, M-Pesa, email, and others) via MCP servers, API wrappers exposed as MCP, and change events. Headless browser automation is the last resort. All access goes through Ramonda's MCP gateway, acting as the specific person who asked. Agents never hold credentials.
+No new dashboard, and no custom dashboard per client. Agents read and write the client's existing systems (point of sale, inventory, HR, accounting, M-Pesa, email, and others) via MCP servers, API wrappers exposed as MCP, and change events. Headless browser automation is the last resort. All access goes through Ramonda's MCP gateway, acting as the specific person who asked. Agents never hold credentials. Artifacts are saved where staff already work (the client's Drive, SharePoint or email), never in a new Ramonda dashboard.
 
 Staff use a Ramonda web and mobile app to chat, approve or decline, and receive push alerts. The app is Ramonda's own, so it does not depend on WhatsApp. Email carries a readable copy of approved actions and summaries; the audit log is the source of truth. A thin admin console covers roles, connected systems, approval rules, the audit log, and evals.
 

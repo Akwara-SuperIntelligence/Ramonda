@@ -7,7 +7,7 @@ These requirements turn the [product brief](01-product-brief.md) into checks an 
 Five kinds of people use the product.
 
 - **Staff** use the web and mobile app to ask questions, propose actions, and receive push alerts.
-- **Approvers** are staff named by an approval rule. They approve or decline in the app before a change is written back.
+- **Approvers** are staff named by an approval rule. They approve or decline in the app before a change is written back, and before an artifact is marked official or sent outside.
 - **Client admins** use the thin admin console for roles, connected systems, approval rules, the audit log, and evals.
 - **Akwara operators** onboard a client. They apply an industry pack and that client's config in the same console, inside that client's tenant.
 - **Auditors and security reviewers** read the audit log to check a sign-off. They do not change the log.
@@ -54,9 +54,17 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 
 1. Two roles work on the same situation, each under their own sign-in. In the example, waste.
 2. The finance analyst's view includes margins. The barista's view is only their shifts.
-3. A field restricted to one role is not copied into another role's answer, alert, or email.
+3. A field restricted to one role is not copied into another role's answer, alert, email, or artifact.
 
-### 5. Onboard a client from a pack and config
+### 5. Produce an artifact
+
+1. An agent drafts company work from the client's own data. In the example, the regional ops lead's Monday branch pack, built from point-of-sale sales and bakery deliveries.
+2. The draft is shared only with people allowed to see every source it used.
+3. It is not marked official, and not sent outside the company, until the approver named by the rule approves it.
+4. The approved version is saved through a connector to where staff already work: the client's Drive, SharePoint, or email. It is not put in a new Ramonda dashboard.
+5. The audit log records the version, the owner, and the source data. Regenerating the pack writes a new version and leaves the earlier version in place.
+
+### 6. Onboard a client from a pack and config
 
 1. The operator starts the client from an industry pack. For this café, the pack is hospitality.
 2. The pack provides a ready-made map (branches, menus, suppliers, shifts), standard roles, standard approval rules, and ready-made agents and evals.
@@ -64,7 +72,7 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 4. Systems are attached with a connector that already exists. No code is added for this client.
 5. Staff sign in as themselves. A second café chain starts from the same pack and different config, on the same core version.
 
-### 6. An auditor reviews the log
+### 7. An auditor reviews the log
 
 1. The reviewer opens the audit log in the admin console and finds the approved write from flow 2.
 2. The record shows the action, who asked, the approver's decision, and the system written. They cannot edit or delete it.
@@ -95,7 +103,7 @@ Done when: the branch manager, the finance analyst, and the barista each ask why
 
 **R5.** People can work on one situation without seeing another role's restricted data.
 
-Done when: a field restricted to one role is absent from another role's answer, push alert, and email about that situation.
+Done when: a field restricted to one role is absent from another role's answer, push alert, email, and artifact about that situation.
 
 **R6.** A person signs in as themselves: Keycloak, or the client's Entra or Okta, via OIDC.
 
@@ -171,45 +179,71 @@ Done when: flow 3's waste event alerts the branch manager and does not send the 
 
 Done when: the approved order change produces an email a person can read, a summary of it can be produced from the log, and the log wins if the email is missing or wrong.
 
+### Artifacts
+
+**R22.** An artifact is company work built from the client's own data, such as a report, deck, spreadsheet, SOP, policy draft, forecast, or small internal tool. It is an object in the map, with an owner, its sources, and a version.
+
+Done when: the Monday branch pack is on the map with an owner, its point-of-sale and bakery sources, and a version.
+
+**R23.** An artifact is visible only to people who may see every source it used. Its audience is never wider than the most restricted of those sources.
+
+Done when: the barista cannot open the Monday branch pack, because they cannot see its sales and delivery sources.
+
+**R24.** An artifact is approved before it is sent outside the company or marked official.
+
+Done when: the Monday branch pack is not marked official, and is not sent outside, until the named approver approves it.
+
+**R25.** An approved artifact is saved through a connector to the client's existing storage, such as Drive, SharePoint, or email. It is not kept in a new Ramonda dashboard.
+
+Done when: the approved Monday pack is a file in that storage, written by a connector, and the café has no artifact screen of its own.
+
+**R26.** Every create or edit of an artifact is audited, with lineage to the source data.
+
+Done when: the log for the Monday pack records the owner, the version, and the point-of-sale and bakery sources.
+
+**R27.** Regenerating an artifact creates a new version. It does not overwrite the previous one.
+
+Done when: a second run of the Monday pack leaves the first version intact and records a second version.
+
 ### Admin console
 
-**R22.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
+**R28.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
 
 Done when: an admin manages those five items for the demo café in the shared console, and the café has no screen of its own.
 
 ### Reuse
 
-**R23.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
+**R29.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
 
 Done when: the café and a second client run one core build, with no fork or patch of Rakazo.
 
-**R24.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
+**R30.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
 
 Done when: the demo café is a hospitality pack plus config, and removing that config leaves no café-only code.
 
-**R25.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
+**R31.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
 
 Done when: a request useful to only one café is met in core, a shared connector, a pack, or config, and no module is added for that client alone.
 
 ### Security
 
-**R26.** Tenants are isolated.
+**R32.** Tenants are isolated.
 
 Done when: a demo-café user cannot read another client's map, records, prompts, or audit log.
 
-**R27.** Everything an agent reads is untrusted, including prompt injection in business data.
+**R33.** Everything an agent reads is untrusted, including prompt injection in business data.
 
 Done when: an instruction planted in a sales or delivery record does not change an order, a permission, or a secret, unless a rule or a human approval under R14 allows it and that allowance was not part of the planted instruction.
 
-**R28.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification claim. Detail is in `05-security-model.md`.
+**R34.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification claim. Detail is in `05-security-model.md`.
 
-Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R26, and R27.
+Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R32, and R33.
 
 ## Non-functional requirements
 
 ### Security
 
-R6, R8, R11, R14, R17, R18, R26, R27, and R28 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream. The aim is SOC 2 and ISO 27001 readiness.
+R6, R8, R11, R14, R17, R18, R32, R33, and R34 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream. The aim is SOC 2 and ISO 27001 readiness.
 
 ### Reliability
 
@@ -239,7 +273,7 @@ Carried from the brief.
 
 Run this on the fake café chain. It is the brief's test of whether the product works. Every other requirement keeps its own Done when.
 
-The company has about five branches, a central bakery, three suppliers, about forty staff, and the six roles above. Four systems are connected. Name them in `03-demo-company.md`. This scenario reads point-of-sale sales and bakery deliveries, and writes the ordering system.
+The company has about five branches, a central bakery, three suppliers, about forty staff, and the six roles above. Four systems are connected. Name them in `03-demo-company.md`. This scenario reads point-of-sale sales and bakery deliveries, writes the ordering system, and produces the Monday branch pack.
 
 1. The branch manager asks why croissant waste is up. The answer uses point-of-sale sales and bakery deliveries.
 2. The finance analyst asks the same question and also sees margins.
@@ -249,6 +283,7 @@ The company has about five branches, a central bakery, three suppliers, about fo
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
+9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data. Someone who cannot see those sources cannot open it. It is not marked official until it is approved. The approved pack is saved to the client's existing storage, and the audit log records the version and the sources. Running it again keeps the first version and writes a second.
 
 ## Open questions
 
