@@ -62,7 +62,7 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 2. The draft is shared only with people allowed to see every source it used.
 3. It is not marked official, and not sent outside the company, until the approver named by the rule approves that version. Approval of an earlier version does not cover a later one.
 4. The approved version is saved through a connector to where staff already work: the client's Drive, SharePoint, or email. It is not put in a new Ramonda dashboard.
-5. The audit log records who made the change, whether it was a create or an edit, the version, the owner, and the source data. Regenerating the pack writes a new version and leaves the earlier version in place.
+5. The audit log records who made the change, whether it was a create or an edit, the version, the owner, and the source data. An edit or a regeneration writes a new version and leaves the earlier version in place. The new version needs its own approval before it is official or sent outside.
 
 ### 6. Onboard a client from a pack and config
 
@@ -197,13 +197,13 @@ Done when: version 2 of the Monday branch pack is not marked official, and is no
 
 Done when: the approved Monday pack is a file in that storage, written by a connector, and the café has no artifact screen of its own.
 
-**R26.** Every create or edit of an artifact is audited with the actor, the operation, and lineage to the source data.
+**R26.** Every create or edit of an artifact is audited with the actor, the operation, and lineage to the source data. An edit is recorded against the new version, not by changing an older one.
 
-Done when: the log for the Monday pack records who initiated the change, whether it was a create or an edit, the owner, the version, and the point-of-sale and bakery sources.
+Done when: the log for an edit of the Monday pack records who initiated it, that it was an edit, the owner, the new version, and the point-of-sale and bakery sources.
 
-**R27.** Regenerating an artifact creates a new version. It does not overwrite the previous one.
+**R27.** Every edit, including a regeneration, creates a new immutable version. It does not change the previous version. That new version is not official, and is not sent outside, until it is approved under R24.
 
-Done when: a second run of the Monday pack leaves the first version intact and records a second version.
+Done when: an edit of the Monday pack leaves version 1 intact, writes version 2, and version 2 is not official until it is approved.
 
 **R28.** Brand assets, templates, and past artifacts are taken from the client's existing storage and used as the style source. Permissions still apply. A restricted past artifact must not leak its content through that style source.
 
@@ -299,7 +299,7 @@ The company has about five branches, a central bakery, three suppliers, about fo
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
-9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using the café's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. Running it again keeps the first version and writes a second, which needs its own approval before it is official.
+9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using the café's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. An edit, or running it again, keeps the first version and writes a new one, which needs its own approval before it is official.
 
 ## Open questions
 
