@@ -41,9 +41,9 @@ Email is the readable copy the company keeps. The audit log is the source of tru
 
 **Role.** Staff chat, approve or decline, and receive push alerts in one web app and one mobile app (R19, R20). Client admins manage roles, connected systems, approval rules, the audit log, evals, and template marks in one console (R32). There is no per-client screen and no new business dashboard (R25, R32).
 
-**Chosen tech.** The staff app is Rakazo's own web and mobile clients, pinned to a release and themed. We do not write a second chat app and we do not fork those clients. The admin console is a small web UI in our codebase. It edits configuration and shows the log. It does not chart sales.
+**Chosen tech.** The staff app is Rakazo's own web and mobile clients, pinned to v0.9.0 and themed. We do not write a second chat app and we do not fork those clients. The admin console is a small web UI in our codebase. It edits configuration, shows the log, and can pause an agent. It does not chart sales. A human uses that pause. The watcher cannot.
 
-**Why.** Rakazo already ships the clients, the chat, and the approval screen. A fork would be ours to rebase. The console exists because Rakazo has no place for our roles, connectors, audit, or template marks.
+**Why.** Rakazo already ships the clients and the chat. A fork would be ours to rebase. Its approval cards are a convenience, not our record. The console exists because Rakazo has no place for our roles, connectors, audit, template marks, or the pause.
 
 **Requirements.** R19, R20, R32.
 
@@ -59,6 +59,12 @@ Email is the readable copy the company keeps. The audit log is the source of tru
 
 Spaces are a Rakazo feature. They are not the permission boundary. OpenFGA is (R5, R7). Two departments on one client do not get isolation by being placed in two Spaces.
 
+Agents are not scripted per scenario. Noticing and authority are separate. These two decisions will be recorded in `07-decisions.md`.
+
+**What it notices.** An always-on agent is woken by events on Redpanda and decides for itself what matters. Nothing in our code says "if croissant waste crosses a line, raise it." Who would care is read from the map: ownership and responsibility links, such as Amina owning Westlands, and waste cost mattering to her and to Grace. The agent may also use what it has already learned about this company. That memory does not grant authority.
+
+**Whose authority it uses.** Each standing agent is one identity, the way a new hire is one identity, not one identity per scenario. The Akwara ops agent is a named non-human principal in OpenFGA. It has a role, explicit limits, and a named human manager who is accountable for it. When no person asked, the gateway acts as that agent. It never uses a shared credential (R8). The agent may read within its role. It may take a small reversible step that does not change a client system, such as drafting a note. It asks a human when it is unsure, when the step is irreversible, or when the step is outside its role. A write that changes a client system still follows the approval rules (R12, R14). The audit row names the agent and the accountable human. When a person asked, the gateway still acts as that person.
+
 ### The map
 
 **Role.** The live model of one client: things, links between them, actions people can take, and who can see and do what (R1). For Akwara Cafe that includes the five branches, the bakery, products, staff, suppliers, orders, and artifacts.
@@ -73,7 +79,7 @@ Approved map changes are config. They are not a code release (R34).
 
 ### MCP gateway
 
-**Role.** The only door from an agent to a client system. For a call a person asked for, it acts as that person (R8). It checks OpenFGA (R7), enforces approval on a write (R12, R14), writes the audit log (R17), takes a secret from OpenBao or Infisical only for the duration of the call (R11), and calls the connector. When the call returns, the secret is dropped.
+**Role.** The only door from an agent to a client system. For a call a person asked for, it acts as that person (R8). For a call no person asked for, it acts as the standing agent's own principal. It checks OpenFGA (R7), enforces approval on a write to a client system (R12, R14), writes the audit log (R17), takes a secret from OpenBao or Infisical only for the duration of the call (R11), and calls the connector. When the call returns, the secret is dropped.
 
 **Chosen tech.** A service we build. Agents are configured with this URL and no other MCP server for client data.
 
@@ -96,9 +102,9 @@ flowchart LR
   relay --> rp[Redpanda]
 ```
 
-The gateway refuses the connector call when OpenFGA says no, or when a write has neither a configured rule nor a human approval stored for that action. The refusal is an audit row. It is not a write to Odoo.
+The gateway refuses the connector call when OpenFGA says no, or when a write to a client system has neither a configured rule nor a human approval stored for that action. The refusal is an audit row. It is not a write to Odoo. A write that needs approval returns as pending. Grace, or whoever the rule names, approves or declines in Ramonda's approval flow. That decision is the one in our log (R13). Rakazo may also show its own approval card. Rakazo does not send that card's decision to MCP servers, so the card is not the audit record.
 
-Which identity the gateway uses when no person has asked is not decided. See Open questions. The gateway still must not give the agent a credential in that case (R8).
+The gateway is a remote MCP server. Its OAuth authorization server is Keycloak, or the client's identity provider. A staff member who is already signed in through SSO consents once. The gateway then receives a token for that person, and that is how it acts as them without forking Rakazo. The standing agent has its own client and its own token. Rakazo login and MCP login are separate. Rakazo does not forward the signed-in user's session or ID token to the gateway.
 
 ### Connectors
 
@@ -126,7 +132,7 @@ The connector does not choose the user and does not store the secret. The gatewa
 
 **Role.** Decide whether this person may read this record or perform this action. The model does not decide (R7). The same question returns a different answer by role (R4, R5).
 
-**Chosen tech.** OpenFGA. The relationship model is derived from the approved map: people, roles, branches, and the actions on each type. Tuples are written when a map change is approved, not when a prompt asks for them.
+**Chosen tech.** OpenFGA. The relationship model is derived from the approved map: people, roles, branches, standing agents, and the actions on each type. Tuples are written when a map change is approved, not when a prompt asks for them. Each standing agent is a principal with a role, limits, and an accountable human.
 
 **Why.** Relationship checks are what OpenFGA is for. Keeping them out of HelixDB queries means a retrieval bug cannot widen access. The Akwara Cafe rules (Amina sees Westlands only, David also sees margins, Brian sees his shifts) are tuples, not code.
 
@@ -142,7 +148,7 @@ The connector does not choose the user and does not store the secret. The gatewa
 
 **Requirements.** R6, R8.
 
-Rakazo must accept that provider. See Open questions. We do not fork Rakazo to add login.
+Rakazo v0.9.0 signs users in with generic OIDC. The documented settings are environment variables: `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and the related OIDC variables. SSO-only is possible. SCIM is documented. The account document does not name Keycloak, Entra ID, or Okta. Source: [self-host accounts](https://github.com/elie222/rakazo/blob/main/docs/self-host-accounts.md). We point those variables at Keycloak for Akwara Cafe. We do not fork Rakazo to add a provider. Confirming that Keycloak also completes the gateway's MCP OAuth flow is the remaining open question.
 
 ### Events
 
@@ -154,7 +160,7 @@ If the gateway stops after the connector has applied the write and before that c
 
 **Chosen tech.** Postgres. A small relay we run, reading the outbox with `SKIP LOCKED`. Redpanda from the first deploy, including the Akwara Cafe demo (R15). The outbox table is the contract. Debezium can replace the relay later without a change to writers. We do not run Debezium in the demo. A Connect cluster is more process than one café needs, and the relay still meets R16.
 
-**Why.** Two writes, one to Postgres and one to Redpanda, can lose one of them. One transaction plus a relay cannot commit the action and drop the event. Redpanda is fixed because more than one consumer needs the same facts: triggers, the audit stream, the watcher, and artifact lineage.
+**Why.** Two writes, one to Postgres and one to Redpanda, can lose one of them. One transaction plus a relay cannot commit the action and drop the event. Redpanda is fixed because more than one consumer needs the same facts: standing agents, schedules and outside webhooks, the audit stream, the watcher, and artifact lineage.
 
 **Requirements.** R15, R16, R18, R20, R26.
 
@@ -162,12 +168,12 @@ Topics, prefixed by the tenant. For the demo the prefix is `akwara-cafe`.
 
 | Topic | Who writes | Who reads |
 | --- | --- | --- |
-| `{tenant}.changes` | Gateway, from connector events | The trigger rule |
-| `{tenant}.triggers` | Gateway, when a configured rule matches a change | The Rakazo run that wakes an agent |
+| `{tenant}.changes` | Gateway, from connector events | Standing agents. They decide what matters. |
+| `{tenant}.triggers` | Schedules and outside webhooks only | The run those schedules and webhooks wake |
 | `{tenant}.audit` | Relay, from committed audit rows | The watcher, and any export |
 | `{tenant}.artifacts` | Relay, from committed artifact rows | Lineage readers, the watcher |
 
-A waste threshold is a configured rule on `{tenant}.changes`, not a prompt. Crossing it writes `{tenant}.triggers`. That is what wakes the agent (R20).
+`{tenant}.triggers` is not a place for a scenario rule. Rakazo v0.9.0 routines can start from a schedule, a webhook, GitHub, email, or Slack, as well as from a change watch ([routines](https://rakazo.com/docs/routines/)). A Monday pack on a schedule, or a webhook from outside, uses `{tenant}.triggers`. A sale or a delivery does not. That event is `{tenant}.changes`. A consumer delivers each of those changes to the standing agent's run. The consumer does not classify them. The agent does (R20).
 
 ### Artifacts
 
@@ -185,9 +191,9 @@ Visibility is the narrowest source. Before the model sees a past pack or a templ
 
 **Role.** Append-only record of actions, approval decisions, refusals, and artifact versions (R17). It is the source of truth when an email disagrees (R21).
 
-**Chosen tech.** A Postgres table the application role cannot update or delete. Each row stores the previous row's hash and the SHA-256 of that hash plus the payload as UTF-8 JSON with sorted keys. The relay copies the same bytes to `{tenant}.audit`. A watcher agent, running in Rakazo, reads that topic through a read-only gateway tool. It is not given write tools (R18).
+**Chosen tech.** A Postgres table the application role cannot update or delete. Each row stores the previous row's hash and the SHA-256 of that hash plus the payload as UTF-8 JSON with sorted keys. The row names the acting identity. When that identity is a standing agent, the row also names the accountable human. The relay copies the same bytes to `{tenant}.audit`. The watcher, a Rakazo agent, reads that topic through a read-only gateway tool (R18).
 
-**Why.** A hash chain makes a silent edit visible. Redpanda gives the watcher a stream without a second query path into the table. What the watcher may do when it sees a problem is not decided.
+**Why.** A hash chain makes a silent edit visible. Redpanda gives the watcher a stream without a second query path into the table. The watcher may record a finding and alert the client admin. For Akwara Cafe that person is Nelly. It cannot stop a run, pause an agent, or change a record. Pausing an agent is a control on the admin console, and a human makes that call. This decision will be recorded in `07-decisions.md`.
 
 **Requirements.** R16, R17, R18, R21, R26.
 
@@ -210,7 +216,7 @@ Amina asks why croissant waste is up, then the agent proposes the weekday cut. G
 1. Amina is signed in. The subject is hers (R6).
 2. The agent calls the gateway for Westlands sales and deliveries. The gateway checks OpenFGA, calls the Odoo connector as Amina, and returns only her branch (R4, R8).
 3. The agent proposes the cut. The gateway finds the approval rule: Grace. It stores a pending action. It does not call Odoo (R12).
-4. Grace approves in the app. The gateway stores her decision on that action (R13).
+4. The gateway has returned the write as pending. Grace approves or declines in Ramonda's approval flow. The gateway stores her decision. That row is what an auditor reads. A Rakazo approval card may appear as well. Rakazo does not forward that card to the gateway, so the card is not the record (R13).
 5. The gateway loads the Odoo secret, calls the connector with the action's idempotency key, and, once Odoo has accepted it, commits the action and the outbox row in one Postgres transaction (R16). The secret is then dropped. A crash before that commit is finished by the pending-action recovery above, not by a second approval.
 6. The relay publishes `{tenant}.audit`. The row names the action, Amina, Grace's decision, and Odoo (R17).
 7. Mailpit receives the readable copy. The log still wins if the mail is wrong (R21).
@@ -219,14 +225,12 @@ A decline at step 4 writes nothing to Odoo and still writes an audit row (R13).
 
 ### A waste event wakes an agent
 
-1. A Westlands sale closes in Odoo. Odoo notifies the gateway. The gateway writes a change and an outbox row.
-2. The relay publishes `{tenant}.changes`.
-3. The waste rule matches. The gateway writes `{tenant}.triggers`.
-4. Rakazo starts a run. The agent may call the gateway to read what it is allowed to read, and to raise a push alert.
-5. OpenFGA allows the alert to Amina. It does not allow the waste figures to be sent to Brian (R20).
-6. The run does not write an order unless a rule or a later human approval exists (R14).
-
-Step 4 needs an identity for the read. That identity is the open question below. The build does not fill it in with a shared password.
+1. A Westlands sale or waste sheet lands in Odoo. Odoo notifies the gateway. The gateway writes a change and an outbox row.
+2. The relay publishes `{tenant}.changes`. No waste rule inspects it.
+3. The Akwara ops agent is woken by that stream. It reads the change and decides it is worth raising. The map says Amina owns Westlands, and that waste cost matters to her and to Grace. The agent may also remember that this company treats weekday waste as something those two act on.
+4. The gateway acts as the ops agent, not as a shared login. OpenFGA allows that agent to read Westlands operations within its role. The alert goes to Amina and to Grace. It does not send the waste figures to Brian (R8, R20).
+5. The audit row names the ops agent and its accountable human.
+6. The run does not write the replenishment order on its own. That write changes a client system, so it waits for the approval rule (R12, R14). A small reversible step that does not change Odoo, such as keeping a draft note, does not.
 
 ### The Monday branch pack
 
@@ -255,7 +259,7 @@ Akwara Cafe is one stamp. A second client is a second stamp, built from the same
 
 Inside the stamp, people are separated by OpenFGA, not by a second deployment. Amina does not get her own Postgres.
 
-Rakazo's session supplies the person. The gateway ignores any tenant or user id written in a tool argument.
+The MCP OAuth token supplies the person, or the standing agent. The gateway ignores any tenant or user id written in a tool argument. Rakazo does not forward the user's ID token on that call.
 
 ## Reuse
 
@@ -291,7 +295,7 @@ The file runs:
 
 Rakazo's database is not our database. We do not put the outbox in Rakazo's schema.
 
-Images are pinned by tag. Rakazo's tag is a release, never a floating edge tag. The demo does not patch that image.
+Images are pinned by tag. Rakazo is pinned to v0.9.0, released 2026-11-10, under Apache-2.0. Not a floating tag. The demo does not patch that image. Remote MCP is Streamable HTTP or SSE. Each MCP server has its own auth, OAuth or a configured token, separate from Rakazo login ([MCP](https://rakazo.com/integration-platforms/mcp/)). Approvals inside Rakazo are Ask, Auto, or Never-ask, and the person may Allow once, Always, or Deny. Auto asks when the step looks off-task or irreversible. A run started by a webhook is stricter ([approvals](https://rakazo.com/docs/approvals/)). None of that is forwarded to the gateway.
 
 Nothing here is a speed target. The compose file is for correctness of the nine checks in `03-demo-company.md`.
 
@@ -309,8 +313,6 @@ Nothing here is a speed target. The compose file is for correctness of the nine 
 
 ## Open questions
 
-These are not decided. Do not close them in code. Record the decision in `07-decisions.md`. Security consequences belong in `05-security-model.md`.
+Noticing, agent identity, and the watcher's limits are decided above. They will be recorded in `07-decisions.md`. Security consequences belong in `05-security-model.md`. One check is still open. Do not close it by assuming the demo already passed.
 
-1. **Identity when nobody has asked.** The gateway acts as the person who asked. A waste-triggered read, and a write allowed only by a rule, have no such person. The brief names no identity and no permission scope. Do not substitute a shared credential.
-2. **What the watcher may do.** It reads `{tenant}.audit` and it has no write tools. The brief does not say whether it may only record a finding, alert a person, or stop a later action.
-3. **Rakazo's release and our doors.** The pinned release must sign users in through Keycloak, or through Entra ID or Okta, over OIDC (R6). It must also be able to show approve and decline and to tell the gateway the decision, without a fork (R13, R19). If a release cannot do one of those, stop. Do not patch Rakazo. Record the gap in `07-decisions.md`.
+**Keycloak as the gateway's OAuth server.** Rakazo documents generic OIDC for its own login, and separate OAuth for each remote MCP server. It does not name Keycloak. We still have to confirm, in the Akwara Cafe demo, that a staff member who signed in through Keycloak can consent once to the gateway and that the gateway then receives a token for that person. The same check applies to the ops agent's own client. Until that run works, do not fork Rakazo to bridge the gap.
