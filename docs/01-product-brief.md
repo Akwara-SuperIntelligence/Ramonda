@@ -27,7 +27,7 @@ Staff use a Ramonda web and mobile app to chat, approve or decline, and receive 
 
 ## How it is built
 
-Build only what is different (the map and its rules, the MCP gateway that enforces them, and the connectors) and assemble the rest from mature open source. Rakazo, an open-source always-on agent harness, is consumed unmodified for agents, chat, Spaces, and the app. HelixDB (graph and vector) stores the map; Helix Foundry drafts it. OpenFGA holds permissions. Identity is Keycloak, or the client's Entra or Okta, via OIDC. Secrets sit in OpenBao or Infisical. Events and audit start as a Postgres outbox and move to Kafka-API streaming. Traces use OpenTelemetry. Layout is in `04-architecture.md`.
+Build only what is different (the map and its rules, the MCP gateway that enforces them, and the connectors) and assemble the rest from mature open source. Rakazo, an open-source always-on agent harness, is consumed unmodified for agents, chat, Spaces, and the app. HelixDB (graph and vector) stores the map; Helix Foundry drafts it. OpenFGA holds permissions. Identity is Keycloak, or the client's Entra or Okta, via OIDC. Secrets sit in OpenBao or Infisical. Events and audit run on Redpanda from the start; actions and their events are committed together in Postgres and relayed to Redpanda so nothing is lost between the two. Traces use OpenTelemetry. Layout is in `04-architecture.md`.
 
 ## How it is reused
 
