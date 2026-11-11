@@ -282,7 +282,7 @@ Carried from the brief.
 - Not a business-intelligence dashboard, and not a replacement for a data warehouse.
 - Not a replacement for the client's systems of record.
 - Not a fork of Rakazo.
-- Not a custom user interface per client.
+- No one-off interface for a single client; new interfaces are built once and reused across clients.
 - Not dependent on WhatsApp.
 
 ## Acceptance
