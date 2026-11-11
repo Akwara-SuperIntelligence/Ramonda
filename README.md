@@ -9,7 +9,7 @@ Ramonda is a governed AI workforce for organisations: always-on agents that work
 | [01-product-brief.md](docs/01-product-brief.md) | written |
 | [02-prd.md](docs/02-prd.md) | written |
 | [03-demo-company.md](docs/03-demo-company.md) | written |
-| 04-architecture.md | planned |
+| [04-architecture.md](docs/04-architecture.md) | written |
 | 05-security-model.md | planned |
 | 06-ontology.md | planned |
 | 07-decisions.md | planned |
