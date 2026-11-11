@@ -47,7 +47,7 @@ Enterprises will audit this, so security is a first-class requirement. Agents ne
 
 ## Out of scope
 
-Not a BI dashboard or a data-warehouse replacement. Not a replacement for the client's systems of record. Not a fork of Rakazo. Not a custom UI per client. Not dependent on WhatsApp.
+Not a BI dashboard or a data-warehouse replacement. Not a replacement for the client's systems of record. Not a fork of Rakazo. No one-off interface for a single client; new interfaces are built once and reused across clients. Not dependent on WhatsApp.
 
 ## Example
 
