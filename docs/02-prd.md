@@ -60,9 +60,9 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 
 1. An agent drafts company work from the client's own data. In the example, the regional ops lead's Monday branch pack, built from point-of-sale sales and bakery deliveries.
 2. The draft is shared only with people allowed to see every source it used.
-3. It is not marked official, and not sent outside the company, until the approver named by the rule approves it.
+3. It is not marked official, and not sent outside the company, until the approver named by the rule approves that version. Approval of an earlier version does not cover a later one.
 4. The approved version is saved through a connector to where staff already work: the client's Drive, SharePoint, or email. It is not put in a new Ramonda dashboard.
-5. The audit log records the version, the owner, and the source data. Regenerating the pack writes a new version and leaves the earlier version in place.
+5. The audit log records who made the change, whether it was a create or an edit, the version, the owner, and the source data. Regenerating the pack writes a new version and leaves the earlier version in place.
 
 ### 6. Onboard a client from a pack and config
 
@@ -189,17 +189,17 @@ Done when: the Monday branch pack is on the map with an owner, its point-of-sale
 
 Done when: the barista cannot open the Monday branch pack, because they cannot see its sales and delivery sources.
 
-**R24.** An artifact is approved before it is sent outside the company or marked official.
+**R24.** A specific artifact version is approved before that version is sent outside the company or marked official. Approval of an earlier version does not cover a later one.
 
-Done when: the Monday branch pack is not marked official, and is not sent outside, until the named approver approves it.
+Done when: version 2 of the Monday branch pack is not marked official, and is not sent outside, until version 2 itself is approved.
 
 **R25.** An approved artifact is saved through a connector to the client's existing storage, such as Drive, SharePoint, or email. It is not kept in a new Ramonda dashboard.
 
 Done when: the approved Monday pack is a file in that storage, written by a connector, and the café has no artifact screen of its own.
 
-**R26.** Every create or edit of an artifact is audited, with lineage to the source data.
+**R26.** Every create or edit of an artifact is audited with the actor, the operation, and lineage to the source data.
 
-Done when: the log for the Monday pack records the owner, the version, and the point-of-sale and bakery sources.
+Done when: the log for the Monday pack records who initiated the change, whether it was a create or an edit, the owner, the version, and the point-of-sale and bakery sources.
 
 **R27.** Regenerating an artifact creates a new version. It does not overwrite the previous one.
 
@@ -283,7 +283,7 @@ The company has about five branches, a central bakery, three suppliers, about fo
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
-9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data. Someone who cannot see those sources cannot open it. It is not marked official until it is approved. The approved pack is saved to the client's existing storage, and the audit log records the version and the sources. Running it again keeps the first version and writes a second.
+9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data. Someone who cannot see those sources cannot open it. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, and the sources. Running it again keeps the first version and writes a second, which needs its own approval before it is official.
 
 ## Open questions
 
