@@ -18,7 +18,7 @@ Enterprises cannot safely deploy agents across roles. A generic agent does not r
 2. An action goes to the right approver before it is written back into the client's existing system, with an immutable audit record.
 3. Always-on agents watch events and flag problems before anyone asks.
 4. Departments collaborate without seeing each other's restricted data.
-5. Agents produce company work from the client's own data, such as reports, decks, spreadsheets, SOPs, policy drafts, forecasts, and small internal tools.
+5. Agents produce company work from the client's own data, in the client's own branding, templates and formats, learned from the artifacts the company has made before: reports, decks, spreadsheets, SOPs, policy drafts, forecasts, and small internal tools.
 
 ## Systems and interfaces
 

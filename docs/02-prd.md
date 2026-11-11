@@ -58,7 +58,7 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 
 ### 5. Produce an artifact
 
-1. An agent drafts company work from the client's own data. In the example, the regional ops lead's Monday branch pack, built from point-of-sale sales and bakery deliveries.
+1. The agent starts from the client's existing templates and past examples, such as previous Monday packs or board decks, and matches their branding, layout, and tone. It drafts the regional ops lead's Monday branch pack from point-of-sale sales and bakery deliveries.
 2. The draft is shared only with people allowed to see every source it used.
 3. It is not marked official, and not sent outside the company, until the approver named by the rule approves that version. Approval of an earlier version does not cover a later one.
 4. The approved version is saved through a connector to where staff already work: the client's Drive, SharePoint, or email. It is not put in a new Ramonda dashboard.
@@ -205,45 +205,61 @@ Done when: the log for the Monday pack records who initiated the change, whether
 
 Done when: a second run of the Monday pack leaves the first version intact and records a second version.
 
+**R28.** Brand assets, templates, and past artifacts are taken from the client's existing storage and used as the style source. Permissions still apply. A restricted past artifact must not leak its content through that style source.
+
+Done when: the Monday pack's style comes only from templates and past artifacts the drafter may see, and a past artifact they may not see does not appear in the pack or become readable through it.
+
+**R29.** A new artifact uses the client's templates and branding by default.
+
+Done when: the Monday branch pack uses the café's existing template and branding, with no one-off design.
+
+**R30.** The record names the template or past examples an artifact was based on.
+
+Done when: the Monday pack's record names the template and the past examples it followed.
+
+**R31.** An admin can mark templates as approved, and can exclude a document from being used as an example.
+
+Done when: the café's Monday-pack template is marked approved, and a document the admin excludes is not used as an example for the next pack.
+
 ### Admin console
 
-**R28.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
+**R32.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
 
 Done when: an admin manages those five items for the demo café in the shared console, and the café has no screen of its own.
 
 ### Reuse
 
-**R29.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
+**R33.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
 
 Done when: the café and a second client run one core build, with no fork or patch of Rakazo.
 
-**R30.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
+**R34.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
 
 Done when: the demo café is a hospitality pack plus config, and removing that config leaves no café-only code.
 
-**R31.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
+**R35.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
 
 Done when: a request useful to only one café is met in core, a shared connector, a pack, or config, and no module is added for that client alone.
 
 ### Security
 
-**R32.** Tenants are isolated.
+**R36.** Tenants are isolated.
 
 Done when: a demo-café user cannot read another client's map, records, prompts, or audit log.
 
-**R33.** Everything an agent reads is untrusted, including prompt injection in business data.
+**R37.** Everything an agent reads is untrusted, including prompt injection in business data.
 
 Done when: an instruction planted in a sales or delivery record does not change an order, a permission, or a secret, unless a rule or a human approval under R14 allows it and that allowance was not part of the planted instruction.
 
-**R34.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification claim. Detail is in `05-security-model.md`.
+**R38.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification claim. Detail is in `05-security-model.md`.
 
-Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R32, and R33.
+Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R36, and R37.
 
 ## Non-functional requirements
 
 ### Security
 
-R6, R8, R11, R14, R17, R18, R32, R33, and R34 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream. The aim is SOC 2 and ISO 27001 readiness.
+R6, R8, R11, R14, R17, R18, R36, R37, and R38 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream. The aim is SOC 2 and ISO 27001 readiness.
 
 ### Reliability
 
@@ -283,7 +299,7 @@ The company has about five branches, a central bakery, three suppliers, about fo
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
-9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data. Someone who cannot see those sources cannot open it. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, and the sources. Running it again keeps the first version and writes a second, which needs its own approval before it is official.
+9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using the café's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. Running it again keeps the first version and writes a second, which needs its own approval before it is official.
 
 ## Open questions
 
