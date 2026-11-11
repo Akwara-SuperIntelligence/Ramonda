@@ -12,7 +12,7 @@ Five kinds of people use the product.
 - **Akwara operators** onboard a client. They apply an industry pack and that client's config in the same console, inside that client's tenant.
 - **Auditors and security reviewers** read the audit log to check a sign-off. They do not change the log.
 
-The worked example is the fake café chain in the brief. It is illustrative. The six roles are below. Permissions the brief does not fix are config. The company shape is under Acceptance.
+The worked example is Akwara Cafe, the fictional company in [03-demo-company.md](03-demo-company.md). The six roles are below. Permissions the brief does not fix are config. The company shape is under Acceptance.
 
 1. **Branch manager.** Asks about waste, sales, and deliveries at their branch. Proposes a change such as cutting weekday orders.
 2. **Barista.** Sees only their own shifts.
@@ -66,7 +66,7 @@ The worked example is the fake café chain in the brief. It is illustrative. The
 
 ### 6. Onboard a client from a pack and config
 
-1. The operator starts the client from an industry pack. For this café, the pack is hospitality.
+1. The operator starts the client from an industry pack. For Akwara Cafe, the pack is hospitality.
 2. The pack provides a ready-made map (branches, menus, suppliers, shifts), standard roles, standard approval rules, and ready-made agents and evals.
 3. The operator applies client config: names, the real org chart, which systems, extra rules, and the client's data.
 4. Systems are attached with a connector that already exists. No code is added for this client.
@@ -89,7 +89,7 @@ Done when: the demo map includes branches, products, staff, suppliers, and order
 
 **R2.** A client map starts from an industry pack and is then changed with client config. Pack versus client map is in `06-ontology.md`.
 
-Done when: the demo café is the hospitality pack plus config, and a name or org-chart entry changes without a code change.
+Done when: Akwara Cafe is the hospitality pack plus config, and a name or org-chart entry changes without a code change.
 
 **R3.** HelixDB stores the map. Helix Foundry can draft it, and the draft is then config. Layout is in `04-architecture.md`.
 
@@ -195,7 +195,7 @@ Done when: version 2 of the Monday branch pack is not marked official, and is no
 
 **R25.** An approved artifact is saved through a connector to the client's existing storage, such as Drive, SharePoint, or email. It is not kept in a new Ramonda dashboard.
 
-Done when: the approved Monday pack is a file in that storage, written by a connector, and the café has no artifact screen of its own.
+Done when: the approved Monday pack is a file in that storage, written by a connector, and Akwara Cafe has no artifact screen of its own.
 
 **R26.** Every create or edit of an artifact is audited with the actor, the operation, and lineage to the source data. An edit is recorded against the new version, not by changing an older one.
 
@@ -211,7 +211,7 @@ Done when: the Monday pack's style comes only from templates and past artifacts 
 
 **R29.** A new artifact uses the client's templates and branding by default.
 
-Done when: the Monday branch pack uses the café's existing template and branding, with no one-off design.
+Done when: the Monday branch pack uses Akwara Cafe's existing template and branding, with no one-off design.
 
 **R30.** The record names the template or past examples an artifact was based on.
 
@@ -219,23 +219,23 @@ Done when: the Monday pack's record names the template and the past examples it 
 
 **R31.** An admin can mark templates as approved, and can exclude a document from being used as an example.
 
-Done when: the café's Monday-pack template is marked approved, and a document the admin excludes is not used as an example for the next pack.
+Done when: Akwara Cafe's Monday-pack template is marked approved, and a document the admin excludes is not used as an example for the next pack.
 
 ### Admin console
 
 **R32.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
 
-Done when: an admin manages those five items for the demo café in the shared console, and the café has no screen of its own.
+Done when: an admin manages those five items for Akwara Cafe in the shared console, and Akwara Cafe has no screen of its own.
 
 ### Reuse
 
 **R33.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
 
-Done when: the café and a second client run one core build, with no fork or patch of Rakazo.
+Done when: Akwara Cafe and a second client run one core build, with no fork or patch of Rakazo.
 
 **R34.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
 
-Done when: the demo café is a hospitality pack plus config, and removing that config leaves no café-only code.
+Done when: Akwara Cafe is a hospitality pack plus config, and removing that config leaves no café-only code.
 
 **R35.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
 
@@ -245,7 +245,7 @@ Done when: a request useful to only one café is met in core, a shared connector
 
 **R36.** Tenants are isolated.
 
-Done when: a demo-café user cannot read another client's map, records, prompts, or audit log.
+Done when: an Akwara Cafe user cannot read another client's map, records, prompts, or audit log.
 
 **R37.** Everything an agent reads is untrusted, including prompt injection in business data.
 
@@ -287,9 +287,9 @@ Carried from the brief.
 
 ## Acceptance
 
-Run this on the fake café chain. It is the brief's test of whether the product works. Every other requirement keeps its own Done when.
+Run this on Akwara Cafe. It is the brief's test of whether the product works. Every other requirement keeps its own Done when.
 
-The company has about five branches, a central bakery, three suppliers, about forty staff, and the six roles above. Four systems are connected. Name them in `03-demo-company.md`. This scenario reads point-of-sale sales and bakery deliveries, writes the ordering system, and produces the Monday branch pack.
+Akwara Cafe has about five branches, a central bakery, three suppliers, about forty staff, and the six roles above. The branches, people, four systems of record, and the extra M-Pesa, file, and mail connections are in [03-demo-company.md](03-demo-company.md). This scenario reads point-of-sale sales and bakery deliveries, writes the ordering system, and produces the Monday branch pack.
 
 1. The branch manager asks why croissant waste is up. The answer uses point-of-sale sales and bakery deliveries.
 2. The finance analyst asks the same question and also sees margins.
@@ -299,7 +299,7 @@ The company has about five branches, a central bakery, three suppliers, about fo
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
-9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using the café's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. An edit, or running it again, keeps the first version and writes a new one, which needs its own approval before it is official.
+9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using Akwara Cafe's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. An edit, or running it again, keeps the first version and writes a new one, which needs its own approval before it is official.
 
 ## Open questions
 

@@ -51,8 +51,8 @@ Not a BI dashboard or a data-warehouse replacement. Not a replacement for the cl
 
 ## Example
 
-For example, a café chain like Artcaffe in Kenya (illustrative). A branch manager asks why croissant waste is up. The agent reads POS sales and bakery deliveries, suggests cutting weekday orders, and routes that to the regional operations lead. On approval, the change is written into the ordering system with an audit record. A finance analyst who asks the same question also sees margins. A barista sees only their shifts.
+The worked example is Akwara Cafe, a fictional Nairobi café chain, the kind of company Artcaffe is. Artcaffe is not a customer. A branch manager asks why croissant waste is up. The agent reads POS sales and bakery deliveries, suggests cutting weekday orders, and routes that to the regional operations lead. On approval, the change is written into the ordering system with an audit record. A finance analyst who asks the same question also sees margins. A barista sees only their shifts.
 
 ## How we will know it works
 
-Against a realistic fake café chain (about five branches, a central bakery, three suppliers, about forty staff in six roles, four connected systems), two people ask the same question and get differently permissioned answers, and one action is approved and written back to an existing system with an audit record.
+Against Akwara Cafe (about five branches, a central bakery, three suppliers, about forty staff in six roles, four connected systems), two people ask the same question and get differently permissioned answers, and one action is approved and written back to an existing system with an audit record. The company is set out in [03-demo-company.md](03-demo-company.md).
