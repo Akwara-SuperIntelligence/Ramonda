@@ -1,3 +1,0 @@
-#!/bin/sh
-# Same check CI runs, before the commit instead of after the push.
-exec make check
