@@ -148,7 +148,9 @@ Rakazo must accept that provider. See Open questions. We do not fork Rakazo to a
 
 **Role.** Postgres holds state: actions, approvals, audit rows, artifact versions, and the outbox. An action and its event commit in one Postgres transaction (R16). A relay publishes the committed outbox row to Redpanda. If the relay dies after the commit, it publishes the row when it starts again. A rolled-back action leaves no outbox row and no event.
 
-The client system is not inside that transaction. The gateway stores the action as pending, calls the connector with an idempotency key, and commits the action and the outbox row only after the connector returns success. A retry sends the same key, and the connector must treat that key as already applied. Committing the outbox before the call would publish an event for a write that did not happen.
+The client system is not inside that transaction. The gateway stores an approved action as pending, calls the connector with an idempotency key, and commits the action and the outbox row only after success is known. A retry sends the same key. The connector applies the write once and, on a repeat, returns the result it already stored. Committing the outbox before the call would publish an event for a write that did not happen.
+
+If the gateway stops after the connector has applied the write and before that commit, the relay has nothing to publish. On startup, and again on a short interval, the gateway itself picks up approved actions that are still pending. It does not touch an action that is still waiting for a person. For each pending approved action it calls the connector with the same idempotency key, or reads back the result the connector stored for that key. Only when that result says the write is in place does it commit the action and the outbox row. The relay then publishes the event as usual.
 
 **Chosen tech.** Postgres. A small relay we run, reading the outbox with `SKIP LOCKED`. Redpanda from the first deploy, including the Akwara Cafe demo (R15). The outbox table is the contract. Debezium can replace the relay later without a change to writers. We do not run Debezium in the demo. A Connect cluster is more process than one café needs, and the relay still meets R16.
 
@@ -209,7 +211,7 @@ Amina asks why croissant waste is up, then the agent proposes the weekday cut. G
 2. The agent calls the gateway for Westlands sales and deliveries. The gateway checks OpenFGA, calls the Odoo connector as Amina, and returns only her branch (R4, R8).
 3. The agent proposes the cut. The gateway finds the approval rule: Grace. It stores a pending action. It does not call Odoo (R12).
 4. Grace approves in the app. The gateway stores her decision on that action (R13).
-5. The gateway loads the Odoo secret, calls the connector, and in one Postgres transaction writes the action as done and the outbox row (R16). The secret is then dropped.
+5. The gateway loads the Odoo secret, calls the connector with the action's idempotency key, and, once Odoo has accepted it, commits the action and the outbox row in one Postgres transaction (R16). The secret is then dropped. A crash before that commit is finished by the pending-action recovery above, not by a second approval.
 6. The relay publishes `{tenant}.audit`. The row names the action, Amina, Grace's decision, and Odoo (R17).
 7. Mailpit receives the readable copy. The log still wins if the mail is wrong (R21).
 
