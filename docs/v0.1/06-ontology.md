@@ -8,6 +8,8 @@ An agent needs four facts before it acts. What exists. How those things connect.
 
 The map holds those facts for one client. The gateway reads it. OpenFGA, not the model, decides access (R7). A write to a client system still needs the approval rule (R12, R14).
 
+R1 calls the map a live model. Two clocks must not be confused. Sales, deliveries, and waste are read from the client system through the gateway when the agent asks. They are not copied into HelixDB first, so they do not wait on a Foundry load. Structure, ownership, interests, and action types change only when a person approves a new map version. A reassigned owner is not live until that approval. A Westlands sale is.
+
 ## The four parts
 
 ### Objects
@@ -109,9 +111,11 @@ Foundry's draft is reviewed as a graph, as types and links, as mappings, and as 
 3. Foundry's agent drafts a version. Nothing in the live map changes.
 4. Nelly Achieng, the client admin, reviews it and approves it. In Foundry that approval is Make current, and only an owner or admin can do it. For Akwara Cafe, Nelly is that person. Our operators are not a standing Foundry admin of the client workspace.
 5. A load writes the current version into this stamp's HelixDB.
-6. The gateway writes an audit row for the approval, then regenerates OpenFGA tuples from the loaded map. A draft that Nelly has not approved does not change tuples (R3, R7).
+6. The gateway writes an audit row for the approval. It then writes the OpenFGA tuples for that version. The live pair is the Helix version and the tuples that were generated from it. A request uses one pair, the previous one or the new one, never the new map with the old tuples. The gateway switches the current version only after the tuple write for that version has succeeded. A draft Nelly has not approved does not change tuples (R3, R7).
 
-Client systems keep changing. Our connectors publish those changes on `{tenant}.changes`. Foundry's own connectors sync on its schedule and can refresh a load when its data changes. This document does not claim Foundry subscribes to Redpanda. That path is not in Foundry's docs. Until it is shown, a change on `{tenant}.changes` does not by itself edit the live map. A person still approves any new version before tuples move. See Open questions.
+If the tuple write fails, the previous pair stays current. Access the new map would remove stays in force only while that previous pair is current. It does not stay after the new tuples commit, and there is no extra grace period. The gateway retries on startup and on a short interval. The first failure is an audit row and an alert to Nelly. It does not serve the new Helix load as current, and it does not deny the whole company.
+
+Client systems keep changing. Our connectors publish those changes on `{tenant}.changes`. The agent reads sales and deliveries from the client system at that moment. Those records do not sit in the map waiting for Foundry. Foundry's own connectors sync on its schedule and can refresh a load when its data changes. This document does not claim Foundry subscribes to Redpanda. That path is not in Foundry's docs. A change on `{tenant}.changes` does not by itself replace the approved structure. A person still approves any new version before tuples move. See Open questions.
 
 ## Reuse
 
@@ -182,13 +186,13 @@ David's job is finance analyst, a `HasRole` link to that `Role`. His access to m
 
 ## How agents use it
 
-An agent never opens HelixDB. It calls the gateway. The gateway takes the caller's token, asks OpenFGA, and only then runs a Helix read. The result is already filtered. A retrieval bug in Helix must not widen what OpenFGA refused. That is why permissions are not "whatever the graph query returned" (R7, R8).
+An agent never opens HelixDB. It calls the gateway. The gateway takes the caller's token, asks OpenFGA for the current approved pair, and only then runs a Helix read of that same version. The result is already filtered. A retrieval bug in Helix must not widen what OpenFGA refused. That is why permissions are not "whatever the graph query returned" (R7, R8).
 
 A write is an action type. The gateway checks the precondition, the caller's tuples, and the approval rule. It then calls the connector. The agent does not.
 
 ## Open questions
 
-1. **Foundry and Redpanda.** Foundry refreshes a load on its own schedule when its sources change. Its docs do not show a subscription to `{tenant}.changes`. We have not verified a path that turns our event into a Foundry generation without a person starting it. Until that exists, a system change does not silently become the live map.
+1. **Foundry and Redpanda.** Foundry refreshes a load on its own schedule when its sources change. Its docs do not show a subscription to `{tenant}.changes`. We have not verified a path that turns our event into a Foundry generation without a person starting it. That gap is about structure: a new owner or a new interest. It is not about sales or deliveries. Those are read from the client system when the agent asks, so they are not stale for lack of a Foundry load. Until a verified path exists, a change on `{tenant}.changes` does not replace the approved map.
 2. **Labels are not a compiled schema.** The current HelixDB quickstart accepts a node label on write. It does not show a step that rejects an unknown type. Whether we also store Foundry's `ontology.toml` as the list of allowed labels, and refuse anything else, is not decided.
 3. **Foundry's model provider.** Foundry's docs say generation uses Anthropic models through Helix by default, or a workspace Anthropic key on Pro or Max. The Ramonda agent's provider is still unset, and the security model says that choice is client config. Whether Akwara Cafe's Foundry workspace may use Helix-hosted models is not decided.
 4. **Two `HasRole` meanings.** Job title and "may read this type" must not be one link. The names `HasRole` and `MayRead` above are a proposal. `06` can keep them. A rename belongs in `07-decisions.md` if Hassan wants different words.
