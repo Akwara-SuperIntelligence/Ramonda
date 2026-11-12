@@ -115,7 +115,9 @@ Foundry's draft is reviewed as a graph, as types and links, as mappings, and as 
 
 If the tuple write fails, the previous pair stays current. Access the new map would remove stays in force only while that previous pair is current. It does not stay after the new tuples commit, and there is no extra grace period. The gateway retries on startup and on a short interval. The first failure is an audit row and an alert to Nelly. It does not serve the new Helix load as current, and it does not deny the whole company.
 
-Client systems keep changing. Our connectors publish those changes on `{tenant}.changes`. The agent reads sales and deliveries from the client system at that moment. Those records do not sit in the map waiting for Foundry. Foundry's own connectors sync on its schedule and can refresh a load when its data changes. This document does not claim Foundry subscribes to Redpanda. That path is not in Foundry's docs. A change on `{tenant}.changes` does not by itself replace the approved structure. A person still approves any new version before tuples move. See Open questions.
+Client systems keep changing. Our connectors publish those changes on `{tenant}.changes`. The agent reads sales and deliveries from the client system at that moment. Those records do not sit in the map waiting for Foundry.
+
+Foundry can sync its own source snapshots on a schedule, and its product can start a load by itself when that data changes. That automatic load must not write this stamp's live HelixDB. The live database is written only in step 5, after Nelly has approved the version. A refresh that would change an `Owns`, `CaresAbout`, `HasRole`, `MayRead`, or `AccountableTo` link is a new version. It stays a proposal until she approves it, and the gateway does not switch the live pair until the tuples for that version commit. This document does not claim Foundry subscribes to Redpanda. That path is not in Foundry's docs. See Open questions.
 
 ## Reuse
 
