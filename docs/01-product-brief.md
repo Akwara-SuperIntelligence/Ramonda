@@ -22,9 +22,9 @@ Enterprises cannot safely deploy agents across roles. A generic agent does not r
 
 ## Systems and interfaces
 
-No new dashboard, and no custom dashboard per client. Agents read and write the client's existing systems (point of sale, inventory, HR, accounting, M-Pesa, email, and others) via MCP servers, API wrappers exposed as MCP, and change events. Headless browser automation is the last resort. All access goes through Ramonda's MCP gateway, acting as the specific person who asked. Agents never hold credentials. Artifacts are saved where staff already work (the client's Drive, SharePoint or email), never in a new Ramonda dashboard.
+No new dashboard, and no custom dashboard per client. Agents read and write the client's existing systems (point of sale, inventory, HR, accounting, M-Pesa, email, and others) via MCP servers, API wrappers exposed as MCP, and change events. Headless browser automation is the last resort. All access goes through Ramonda's MCP gateway. When a person asked, it acts as that person. When nobody asked, it acts as the standing agent's own identity, never a shared credential. Agents never hold credentials. Artifacts are saved where staff already work (the client's Drive, SharePoint or email), never in a new Ramonda dashboard.
 
-Staff use a Ramonda web and mobile app to chat, approve or decline, and receive push alerts. The app is Ramonda's own, so it does not depend on WhatsApp. Email carries a readable copy of approved actions and summaries; the audit log is the source of truth. A thin admin console covers roles, connected systems, approval rules, the audit log, and evals.
+Staff use a Ramonda web and mobile app to chat, approve or decline, and receive push alerts. The approval that counts is Ramonda's own step, recorded by the gateway. A Rakazo approval card alone does not release a write. The app is Ramonda's own, so it does not depend on WhatsApp. Email carries a readable copy of approved actions and summaries; the audit log is the source of truth. A thin admin console covers roles, connected systems, approval rules, the audit log, and evals, and a human can pause a standing agent from it.
 
 ## How it is built
 
@@ -43,7 +43,7 @@ A client request goes into core, a connector, or a pack, so the next client bene
 
 ## Security
 
-Enterprises will audit this, so security is a first-class requirement. Agents never hold credentials. Everything an agent reads is untrusted (prompt injection), so a data-changing action requires a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only, with a watcher agent over that stream as a second layer. The aim is SOC 2 and ISO 27001 readiness.
+Enterprises will audit this, so security is a first-class requirement. Agents never hold credentials. Everything an agent reads is untrusted (prompt injection), so a data-changing action requires a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher agent reads that stream, may alert an admin, and cannot stop a run. The aim is SOC 2 and ISO 27001 readiness.
 
 ## Out of scope
 

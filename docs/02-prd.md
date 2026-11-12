@@ -7,8 +7,8 @@ These requirements turn the [product brief](01-product-brief.md) into checks an 
 Five kinds of people use the product.
 
 - **Staff** use the web and mobile app to ask questions, propose actions, and receive push alerts.
-- **Approvers** are staff named by an approval rule. They approve or decline in the app before a change is written back, and before an artifact is marked official or sent outside.
-- **Client admins** use the thin admin console for roles, connected systems, approval rules, the audit log, and evals.
+- **Approvers** are staff named by an approval rule. They approve or decline in Ramonda's own approval step, including from the staff app on their phone, before a change is written back and before an artifact is marked official or sent outside. A Rakazo approval card alone does not count.
+- **Client admins** use the thin admin console for roles, connected systems, approval rules, the audit log, and evals. A human can pause a standing agent from that console.
 - **Akwara operators** onboard a client. They apply an industry pack and that client's config in the same console, inside that client's tenant.
 - **Auditors and security reviewers** read the audit log to check a sign-off. They do not change the log.
 
@@ -35,8 +35,8 @@ The worked example is Akwara Cafe, the fictional company in [03-demo-company.md]
 
 1. A staff member proposes a change, or the agent proposes one from their question. The gateway acts as the person who asked. In the example, cut weekday croissant orders.
 2. The proposal goes to the approver named by the rule. In the example, the regional ops lead.
-3. The approver approves or declines in the app.
-4. A decline writes nothing. The decision is still audited.
+3. The approver approves or declines in Ramonda's own approval step. They can do that from the staff app. The gateway records the decision. A Rakazo approval card alone does not count.
+4. A decline writes nothing. The gateway's decision is the audit record.
 5. An approval writes the change through the gateway into the existing system, as the person who asked. In the example, the ordering system.
 6. The action and its audit event commit together in Postgres and are relayed to Redpanda.
 7. The log keeps an immutable record: the action, who asked, the approver's decision, and the system written.
@@ -45,10 +45,10 @@ The worked example is Akwara Cafe, the fictional company in [03-demo-company.md]
 ### 3. An always-on agent alerts the right person
 
 1. A connected system emits a change event. In the example, sales or a bakery delivery showing croissant waste rising. The gateway receives it. The agent holds no credential.
-2. An always-on agent checks the event against the map and the rules.
+2. An always-on agent reads the event and decides whether it matters. Who should hear it comes from the map's ownership links, not from a script for this scenario.
 3. If there is a problem, the app push-alerts only people allowed to see it. The branch manager is alerted. The barista is not sent the waste figures.
-4. This flow does not itself change data. A write still needs a rule, or a human approval as in flow 2.
-5. The brief does not say which identity the gateway uses when nobody has asked. See Open questions. Do not pick one in the build.
+4. This flow does not itself change a client system. That write still needs a rule, or a human approval as in flow 2.
+5. When nobody asked, the gateway acts as that standing agent's own identity. It does not use a shared credential.
 
 ### 4. Work across departments without leaking restricted data
 
@@ -77,7 +77,7 @@ The worked example is Akwara Cafe, the fictional company in [03-demo-company.md]
 1. The reviewer opens the audit log in the admin console and finds the approved write from flow 2.
 2. The record shows the action, who asked, the approver's decision, and the system written. They cannot edit or delete it.
 3. If an email copy disagrees with the log, the log is the record.
-4. A watcher agent has received that audit event from Redpanda. What the watcher may do about a finding is an open question.
+4. A watcher agent has received that audit event from Redpanda. It may record a finding and alert the client admin. It cannot stop or change the action. A human may pause the agent from the console.
 
 ## Requirements
 
@@ -115,9 +115,9 @@ Done when: OpenFGA allows or refuses both the barista's question and the order-c
 
 ### Gateway and connectors
 
-**R8.** A read or write a person asked for goes through the MCP gateway as that person. The agent never holds the credential. When nobody has asked, see Open questions, and still do not give the agent a credential.
+**R8.** A read or write a person asked for goes through the MCP gateway as that person. When nobody asked, the gateway acts as the standing agent's own identity. The agent never holds the credential, and there is no shared credential.
 
-Done when: calls for a signed-in person run as that person, and the agent process has no system password or token.
+Done when: calls for a signed-in person run as that person, an unattended read runs as the standing agent, and the agent process has no system password or token.
 
 **R9.** Connect a system with an MCP server, an API wrapper exposed as MCP, or change events. Headless browser automation is only for a system with none of those, and it still goes through the gateway and R14.
 
@@ -137,9 +137,9 @@ Done when: demo credentials are in that store and are not in the agent, the sour
 
 Done when: the weekday order cut is not in the ordering system until the regional ops lead approves it.
 
-**R13.** The approver approves or declines in the app. A decline writes nothing. The decision is in the audit log.
+**R13.** The authoritative approve or decline is Ramonda's own approval step, controlled and recorded by the gateway, so it lands in the audit log. The approver can take that step from their phone in the staff app. A Rakazo approval card alone is not approval for a gated write. A decline writes nothing.
 
-Done when: a decline leaves the ordering system unchanged and the log contains that decline.
+Done when: a decline leaves the ordering system unchanged, the log contains that gateway decision, and a Rakazo card with no Ramonda decision does not write the order.
 
 **R14.** A data-changing action runs only when a rule or a human approval outside the model allows it. Data the agent read cannot grant that.
 
@@ -159,15 +159,15 @@ Done when: the event still reaches Redpanda if the relay stops after the commit,
 
 Done when: the app, the agent, and the console cannot update or delete a record, and a conflicting email does not override the log.
 
-**R18.** A watcher agent reads the audit stream as a second layer, separate from the agent that did the work.
+**R18.** A watcher agent reads the audit stream as a second layer, separate from the agent that did the work. It may record a finding and alert the client admin. It cannot stop or change a run.
 
-Done when: the watcher receives the approved order-change event from Redpanda.
+Done when: the watcher receives the approved order-change event from Redpanda, can alert the admin, and cannot itself pause the agent or alter the order.
 
 ### App and notifications
 
-**R19.** Staff use the Ramonda web app and mobile app to chat, approve or decline, and receive push alerts. WhatsApp is not a channel.
+**R19.** Staff use the Ramonda web app and mobile app to chat, to take Ramonda's own approval step, and to receive push alerts. WhatsApp is not a channel. A Rakazo approval card alone does not approve a gated write.
 
-Done when: the question, the approval, and a push alert work on web and on mobile, with no WhatsApp step.
+Done when: the question, Ramonda's approve or decline, and a push alert work on web and on mobile, with no WhatsApp step, and a Rakazo card without that step does not release the write.
 
 **R20.** An always-on agent flags a problem from an event before anyone asks, and alerts only people allowed to see it.
 
@@ -223,9 +223,9 @@ Done when: Akwara Cafe's Monday-pack template is marked approved, and a document
 
 ### Admin console
 
-**R32.** The console covers roles, connected systems, approval rules, the audit log, and evals. There is no new staff dashboard and no per-client console.
+**R32.** The console covers roles, connected systems, approval rules, the audit log, and evals. A human can pause a standing agent from it, for example after a watcher alert. There is no new staff dashboard and no per-client console.
 
-Done when: an admin manages those five items for Akwara Cafe in the shared console, and Akwara Cafe has no screen of its own.
+Done when: an admin manages those items for Akwara Cafe in the shared console, can pause a standing agent, and Akwara Cafe has no screen of its own.
 
 ### Reuse
 
@@ -259,7 +259,7 @@ Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R36
 
 ### Security
 
-R6, R8, R11, R14, R17, R18, R36, R37, and R38 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream. The aim is SOC 2 and ISO 27001 readiness.
+R6, R8, R11, R14, R17, R18, R36, R37, and R38 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream, may alert the admin, and cannot stop a run. The aim is SOC 2 and ISO 27001 readiness.
 
 ### Reliability
 
@@ -295,15 +295,9 @@ Akwara Cafe has about five branches, a central bakery, three suppliers, about fo
 2. The finance analyst asks the same question and also sees margins.
 3. The barista asks the same question and sees only their shifts. The three answers are not the same. Two differing answers would meet the brief; this demo checks all three.
 4. A weekday croissant order cut is proposed to the regional ops lead. Until they approve, the ordering system is unchanged.
-5. They approve in the Ramonda app. The gateway writes the change into the ordering system as the person who asked.
+5. They approve in Ramonda's own approval step, from the staff app. The gateway records that decision and writes the change into the ordering system as the person who asked. A Rakazo card alone does not release the write.
 6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
 7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
 8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
 9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using Akwara Cafe's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. An edit, or running it again, keeps the first version and writes a new one, which needs its own approval before it is official.
 
-## Open questions
-
-Unresolved in the brief. Do not close them in code.
-
-1. **Identity when nobody has asked.** The gateway acts as the person who asked. That does not cover an always-on read, or a write allowed only by a rule, when no person has asked. The brief names no identity and no permission scope for that case. Record the decision in `07-decisions.md`. The security effect belongs in `05-security-model.md`.
-2. **What the watcher may do.** It reads the audit stream as a second layer. The brief does not say it may only record a finding, alert a person, or stop a later action. Record the decision in those same documents.
