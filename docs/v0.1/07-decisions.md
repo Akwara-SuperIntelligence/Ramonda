@@ -66,7 +66,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 6. One identity per standing agent
 
-**Decision.** Each standing agent is one principal, like a new hire, not one identity per scenario (R8). The Akwara ops agent has a role, explicit limits, and a named human manager. When nobody asked, the gateway acts as that agent. It never uses a shared credential. It may read within its role and take a small step that does not change a client system. A write to a client system still follows the approval rules (R12, R14). The audit row names the agent and the accountable human. When a person asked, the gateway acts as that person.
+**Decision.** Each standing agent is one principal, like a new hire, not one identity per scenario (R8). The Akwara ops agent has a role, explicit limits, and a named human manager. When nobody asked, the gateway acts as that agent. It never uses a shared credential. It may read within its role. It may take a small reversible step that does not change a client system, such as drafting a note. It asks a human when it is unsure, when the step is irreversible, or when the step is outside its role. A write to a client system still follows the approval rules (R12, R14). The audit row names the agent and the accountable human. When a person asked, the gateway acts as that person.
 
 **Options turned down.** A shared service login. A fresh identity invented for each event.
 
