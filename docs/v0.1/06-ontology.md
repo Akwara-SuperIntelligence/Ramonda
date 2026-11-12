@@ -156,7 +156,7 @@ Types below are the ones `03-demo-company.md` needs. Properties are the minimum 
 | ArtifactVersion | One immutable revision of that pack. |
 | Agent | The Akwara ops agent. |
 
-Key links: `WorksAt`, `HasRole`, `MayRead`, `Owns`, `CaresAbout`, `SuppliedBy`, `ToBranch`, `OfProduct`, `AtBranch`, `UsesSource`, `BasedOnTemplate`, `BasedOnPast`, `AccountableTo`. `HasRole` is the job. `MayRead` is access to a type. They are not the same link.
+Key links: `WorksAt`, `HasRole`, `MayRead`, `Owns`, `CaresAbout`, `SuppliedBy`, `ToBranch`, `OfProduct`, `AtBranch`, `UsesSource`, `BasedOnTemplate`, `BasedOnPast`, `AccountableTo`. `HasRole` is the job. `MayRead` is access to a type. They are not the same link. That split is decided in [decision 11](07-decisions.md#11-a-job-is-not-the-same-link-as-access). A future rename is a new entry in that log, not an edit of this one.
 
 Key action: `PlaceReplenishment`. It runs through the Odoo connector. It changes a client system, so it is not a small reversible step. The approval rule names the regional operations lead. The demo proposal is Westlands from 80 to 60 weekday butter croissants, and Kilimani from 50 to 38. Nothing is written until Grace approves that proposal in Ramonda's approval step.
 
@@ -198,4 +198,3 @@ A write is an action type. The gateway checks the precondition, the caller's tup
 
 1. **Foundry and Redpanda.** Foundry refreshes a load on its own schedule when its sources change. Its docs do not show a subscription to `{tenant}.changes`. We have not verified a path that turns our event into a Foundry generation without a person starting it. That gap is about structure: a new owner or a new interest. It is not about sales or deliveries. Those are read from the client system when the agent asks, so they are not stale for lack of a Foundry load. Until a verified path exists, a change on `{tenant}.changes` does not replace the approved map.
 2. **Labels are not a compiled schema.** The current HelixDB quickstart accepts a node label on write. It does not show a step that rejects an unknown type. Whether we also store Foundry's `ontology.toml` as the list of allowed labels, and refuse anything else, is not decided.
-3. **Two `HasRole` meanings.** Job title and "may read this type" must not be one link. The names `HasRole` and `MayRead` above are a proposal. `06` can keep them. A rename belongs in `07-decisions.md` if Hassan wants different words.

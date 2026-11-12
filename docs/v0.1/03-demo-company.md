@@ -124,7 +124,7 @@ These are the acceptance checks, named to people and systems.
 | 2 | David asks the same question and also sees croissant margin. | R4 |
 | 3 | Brian asks the same question and sees only his shifts. | R4, R5 |
 | 4 | A cut to weekday croissant replenishment is proposed to Grace. Odoo is unchanged until she approves. | R12, R13 |
-| 5 | Grace approves in the Ramonda app. The gateway writes Westlands 60 and Kilimani 38 into Odoo Inventory, as the person who asked. | R8, R12 |
+| 5 | Grace approves in the Ramonda app. Approving only on Rakazo's own card does not release the write. Ramonda's approval step is the one that counts and is audited ([requirements](02-prd.md#approvals), [security model](05-security-model.md#approvals)). The gateway writes Westlands 60 and Kilimani 38 into Odoo Inventory, as the person who asked. | R8, R12 |
 | 6 | The audit log records the action, who asked, Grace's decision, and Odoo. The action and the event commit together in Postgres and appear on Redpanda. | R15, R16, R17 |
 | 7 | An email of that approval arrives in Mailpit. If it disagrees with the log, the log wins. | R21 |
 | 8 | Asking, approving, and the alert happen in the Ramonda web and mobile app. WhatsApp is not used. | R19 |
