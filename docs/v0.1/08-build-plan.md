@@ -62,7 +62,7 @@ A hot-path source file is named `*.hot.rs`. The name means no blocking call, no 
 
 | Rule | Enforced by |
 | --- | --- |
-| Languages have homes. Rust is `core/gateway`, `core/relay`, and `core/outbox`. Python 3.12 is one package under `connectors/`. TypeScript is `core/console`. | Cargo, import-linter, and dependency-cruiser. A file outside its home fails CI. |
+| Languages have homes. Rust is `core/gateway`, `core/relay`, and `core/outbox`. Python 3.12 connector packages live under `connectors/`. `scripts/seed_akwara_cafe.py` is the one other Python file. TypeScript is `core/console`. | Cargo, import-linter, and dependency-cruiser. Any other file outside its home fails CI. |
 | Least new code. Take the first rung of the Ponytail ladder that fully works. | `.cursor/rules/ponytail.mdc` and the Ponytail skill. This row is prose. The rows below are checks. |
 | Folders are the architecture. | The boundary checks. The error names the folder that may do the job. |
 | Comments do not narrate. | The comment check in the lint job. |
@@ -85,7 +85,7 @@ pstack and Ponytail are installed for coding agents from the repo. `.cursor/sett
 }
 ```
 
-The same ref's always-on rule is copied to `.cursor/rules/ponytail.mdc`. Cloud agents do not run Ponytail's `sessionStart` hook, so the rule file is what they read. The ref is a full commit SHA.
+`pstack` stays `{ "enabled": true }`. That name is the public marketplace plugin, and Cursor installs its reviewed release. A git URL for `https://github.com/cursor/plugins` would pin the marketplace repo, not the `pstack/` plugin, so this entry has no `gitRef`. Ponytail is not on that marketplace. Its `gitRef` is a full commit SHA, and the same commit's always-on rule is copied to `.cursor/rules/ponytail.mdc`. Cloud agents do not run Ponytail's `sessionStart` hook, so the rule file is what they read.
 
 TLA+ models land in the same slice as the code they cover. They are not written in slice 0. The outbox and relay recovery model is slice 3. The approval and permission state machine is slice 3 as well: that is the slice where a write is pending, approved, or declined, and where the permission check from slice 2 becomes part of that path. Both models go in `specs/`.
 
