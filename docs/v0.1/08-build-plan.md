@@ -79,11 +79,11 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** A standing agent, woken by a real change, decides the Westlands waste is worth raising and tells Amina and Grace, not Brian.
 
-**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway publishes that change to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
+**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway writes that change and an outbox row. The relay publishes it to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
 
-**Demo path.** A Westlands sale or waste sheet is recorded in Odoo. Odoo notifies the gateway, and the gateway publishes it to `{tenant}.changes`. The ops agent raises it to Amina and to Grace. Brian does not get the figures. The audit row names the ops agent and Grace. No waste rule in our code matches on "croissant".
+**Demo path.** A Westlands sale or waste sheet is recorded in Odoo. Odoo notifies the gateway. The gateway writes the change and an outbox row, and the relay publishes `{tenant}.changes`. The ops agent raises it to Amina and to Grace. Brian does not get the figures. The audit row names the ops agent and Grace. No waste rule in our code matches on "croissant".
 
-**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent. The alert names the right people. An attempt by the agent to write the replenishment without approval does not change Odoo. A row inserted only on the topic, with no Odoo record, is not this demo.
+**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent: the outbox row, then the relay. The alert names the right people. An attempt by the agent to write the replenishment without approval does not change Odoo. A row placed on `{tenant}.changes` with no Odoo record behind it does not pass.
 
 **Blocked by.** 3.
 
@@ -143,7 +143,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** All nine checks in the demo company doc pass on one reset of the seed.
 
-**What to build.** What the earlier slices left out. Frappe HR, so Brian sees only his own shifts. Mailpit, so Grace's approval has an email copy and the log still wins if the mail is wrong. The mobile client, so the question, the approval, and an alert work there as well as on the web. The rest of the Monday pack: the excluded smoked-salt draft is not a style source, a second run keeps version 1 and writes version 2, and version 2 is not official until Grace approves it. The planted delivery note does not set orders to zero. The seed script resets only this tenant.
+**What to build.** What the earlier slices left out. The rest of the map: the five branches, the bakery, the products, the forty staff, and the three suppliers. Frappe HR, so Brian sees only his own shifts. Mailpit, so Grace's approval has an email copy and the log still wins if the mail is wrong. The mobile client, so the question, the approval, and an alert work there as well as on the web. The rest of the Monday pack: the excluded smoked-salt draft is not a style source, a second run keeps version 1 and writes version 2, and version 2 is not official until Grace approves it. The planted delivery note does not set orders to zero. The seed script resets only this tenant.
 
 **Demo path.** Hassan runs the nine checks in order, from Amina's question through the second pack version. He shows the map now listing the five branches and three suppliers. He also shows the planted note refused.
 
