@@ -205,7 +205,11 @@ impl TokenCheck {
 
     async fn authenticate(&self, header: Option<&str>) -> Option<Caller> {
         let token = bearer_token(header?)?;
-        let kid = decode_header(token).ok()?.kid?;
+        let header = decode_header(token).ok()?;
+        if header.alg != Algorithm::RS256 {
+            return None;
+        }
+        let kid = header.kid?;
         let keys = self.jwks(false).await?;
         if keys.find(&kid).is_some() {
             return verify(&self.issuer, &self.audience, &keys, token);
@@ -640,9 +644,10 @@ mod tests {
     #[tokio::test]
     async fn bad_signature_issuer_and_audience_are_rejected() {
         let good = token(ISSUER, AUDIENCE, "amina");
-        let mut tampered = good.clone();
-        let last = tampered.pop().expect("token");
-        tampered.push(if last == 'a' { 'b' } else { 'a' });
+        let mut chars: Vec<char> = good.chars().collect();
+        let index = chars.len() - 2;
+        chars[index] = if chars[index] == 'a' { 'b' } else { 'a' };
+        let tampered: String = chars.into_iter().collect();
         let cases = [
             tampered,
             token("http://evil.example/realms/akwara", AUDIENCE, "amina"),
