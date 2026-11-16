@@ -4,6 +4,8 @@ This is the order of work for the Akwara Cafe demo. It follows the [brief](01-pr
 
 Each slice is a thin path through every layer it needs. Hassan can demo it on its own. A fresh coding session that has never seen these docs should be able to finish one slice and stop. Infrastructure is not its own step. Postgres, Keycloak, Rakazo, the gateway, Odoo, HelixDB, OpenFGA, Redpanda, and OpenBao each arrive in the first slice that needs them.
 
+The code a slice builds uses three languages ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). The gateway and the outbox relay are Rust. Connectors are Python 3.12, typed, using the official MCP Python SDK. The admin console is TypeScript, built with Vite, with bun as the package manager.
+
 We cut this way so the whole path is proven early, not after every layer is finished. After slice 3, two tracks can run at once: slices 4 and 5, and slices 6 and 7. Slice 8 waits for both tracks.
 
 When a slice is approved, it becomes a GitHub issue. Later issues name their blockers with `gh issue create --blocked-by`. Do not open those issues until this plan is approved.
@@ -31,17 +33,17 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** Amina Hassan signs in and is told Westlands sales from Odoo, and the gateway writes an audit row.
 
-**What to build.** The smallest Compose stack: Keycloak, Rakazo v0.9.0 unmodified, the gateway, Odoo Community with Point of Sale and Inventory, OpenBao, and Postgres for the audit row. Amina signs in as herself. The agent calls only the gateway. The gateway acts as Amina, reads Westlands sales and the bakery deliveries for that branch, and does not write to Odoo. No map and no OpenFGA yet. This slice trusts one signed-in user.
+**What to build.** The smallest Compose stack: Keycloak, Rakazo v0.9.0 unmodified, the gateway, Odoo Community with Point of Sale and Inventory, OpenBao, and Postgres for the audit row. The gateway is Rust from day one, with no Python stopgap. The Odoo connector is Python 3.12, typed, using the official MCP Python SDK. Amina signs in as herself. The agent calls only the gateway. The gateway acts as Amina, reads Westlands sales and the bakery deliveries for that branch, and does not write to Odoo. No map and no OpenFGA yet. This slice trusts one signed-in user. It has to show the Rust gateway speaking MCP to Rakazo with Keycloak OAuth before a later slice builds on it.
 
 **Demo path.** Amina asks why croissant waste is up. The answer uses her branch's sales and deliveries. Brian cannot sign in as Amina. WhatsApp is not involved.
 
-**Done when.** On an empty tree, Amina has no login, the agent cannot read Odoo, and there is no audit row. After the slice: she is a Keycloak user, the answer quotes the seeded Westlands figures, and one audit row names her and the read.
+**Done when.** On an empty tree, Amina has no login, the agent cannot read Odoo, and there is no audit row. After the slice: she is a Keycloak user, the answer quotes the seeded Westlands figures, and one audit row names her and the read. Rakazo reached that Rust gateway over MCP with a Keycloak OAuth token issued for Amina.
 
 **Blocked by.** None.
 
 **Requirements.** R6, R8, R9, R11, R17. Demo check 1, the read half only.
 
-**Decisions.** [1](07-decisions.md#1-consume-rakazo-unmodified), [8](07-decisions.md#8-the-gateway-learns-who-is-calling-from-its-own-oauth-token), [14](07-decisions.md#14-the-gateway-is-the-only-door), [16](07-decisions.md#16-the-demo-secret-store-is-openbao).
+**Decisions.** [1](07-decisions.md#1-consume-rakazo-unmodified), [8](07-decisions.md#8-the-gateway-learns-who-is-calling-from-its-own-oauth-token), [14](07-decisions.md#14-the-gateway-is-the-only-door), [16](07-decisions.md#16-the-demo-secret-store-is-openbao), [17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript).
 
 ## 2. David is allowed margins. Brian is refused.
 
@@ -63,7 +65,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** A proposed Odoo change sits pending until a person approves it in Ramonda's own step, then the write and its event are committed together.
 
-**What to build.** Redpanda and the outbox relay. The action `PlaceReplenishment` on the Odoo connector. The gateway returns pending and does not call Odoo. Grace Mwangi approves or declines in Ramonda's approval step, including from the staff app. A Rakazo card alone does not release the write. On approval, the gateway calls Odoo with an idempotency key, then commits the action and the outbox row. The relay publishes `{tenant}.changes` and `{tenant}.audit`. A decline writes nothing and is still audited.
+**What to build.** Redpanda and the Rust outbox relay, in the same Cargo workspace as the gateway. The action `PlaceReplenishment` on the Odoo connector. The gateway returns pending and does not call Odoo. Grace Mwangi approves or declines in Ramonda's approval step, including from the staff app. A Rakazo card alone does not release the write. On approval, the gateway calls Odoo with an idempotency key, then commits the action and the outbox row. The relay publishes `{tenant}.changes` and `{tenant}.audit`. A decline writes nothing and is still audited.
 
 **Demo path.** The agent proposes Westlands 60 and Kilimani 38 weekday butter croissants. Odoo is unchanged. Grace approves. Odoo then shows those quantities. Clicking only Rakazo's card leaves Odoo unchanged.
 
@@ -73,23 +75,23 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Requirements.** R12, R13, R14, R15, R16. Demo checks 4, 5, and 6.
 
-**Decisions.** [2](07-decisions.md#2-redpanda-from-the-start), [9](07-decisions.md#9-ramondas-approval-step-is-the-one-that-counts).
+**Decisions.** [2](07-decisions.md#2-redpanda-from-the-start), [9](07-decisions.md#9-ramondas-approval-step-is-the-one-that-counts), [17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript).
 
 ## 4. The waste agent notices
 
 **Goal.** A standing agent, woken by a real change, decides the Westlands waste is worth raising and tells Amina and Grace, not Brian.
 
-**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway writes that change and an outbox row. The relay publishes it to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
+**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. It has its own Keycloak client. The gateway acts as the agent with the token from that client. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway writes that change and an outbox row. The relay publishes it to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
 
 **Demo path.** A Westlands sale or waste sheet is recorded in Odoo. Odoo notifies the gateway. The gateway writes the change and an outbox row, and the relay publishes `{tenant}.changes`. The ops agent raises it to Amina and to Grace. Brian does not get the figures. The audit row names the ops agent and Grace. No waste rule in our code matches on "croissant".
 
-**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent: the outbox row, then the relay. The alert names the right people. An attempt by the agent to write the replenishment without approval does not change Odoo. A row placed on `{tenant}.changes` with no Odoo record behind it does not pass.
+**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent: the outbox row, then the relay. The alert names the right people. The gateway acts as the ops agent with a token from that agent's own Keycloak client. A run that acts as the agent with any other credential does not pass. An attempt by the agent to write the replenishment without approval does not change Odoo. A row placed on `{tenant}.changes` with no Odoo record behind it does not pass.
 
 **Blocked by.** 3.
 
 **Requirements.** R8, R20. The paragraph under the nine checks in the demo company doc, not one of the nine rows.
 
-**Decisions.** [5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario), [6](07-decisions.md#6-one-identity-per-standing-agent).
+**Decisions.** [5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario), [6](07-decisions.md#6-one-identity-per-standing-agent), [8](07-decisions.md#8-the-gateway-learns-who-is-calling-from-its-own-oauth-token).
 
 ## 5. A weekly waste report in Akwara's house style
 
@@ -127,7 +129,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** Nelly approves one map change, and the live map and its tuples switch together. A forced failure leaves the old pair in place and alerts her.
 
-**What to build.** The admin console: roles, connected systems, approval rules, the audit log, evals, template marks, and pause. A proposed link, for example Amina no longer owns Westlands. The gateway writes tuples for the new version and switches only after that write commits. A test flag fails the tuple write once. The previous pair stays current. Nelly is alerted. The new Helix load is not served. Retry then succeeds, and the pair switches. There is no extra grace period.
+**What to build.** The admin console is TypeScript, built with Vite, with bun as the package manager. It is not Next.js. It covers roles, connected systems, approval rules, the audit log, evals, template marks, and pause. A proposed link, for example Amina no longer owns Westlands. The gateway writes tuples for the new version and switches only after that write commits. A test flag fails the tuple write once. The previous pair stays current. Nelly is alerted. The new Helix load is not served. Retry then succeeds, and the pair switches. There is no extra grace period.
 
 **Demo path.** Hassan runs the forced failure and shows Amina can still read Westlands. He runs the retry and shows the new ownership. The watcher does not perform this change.
 
@@ -137,7 +139,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Requirements.** R3, R7, R32.
 
-**Decisions.** [3](07-decisions.md#3-the-map-goes-live-only-after-a-person-approves-it), [4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair).
+**Decisions.** [3](07-decisions.md#3-the-map-goes-live-only-after-a-person-approves-it), [4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair), [17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript).
 
 ## 8. The full demo
 
