@@ -59,7 +59,7 @@ Email is the readable copy the company keeps. The audit log is the source of tru
 
 Spaces are a Rakazo feature. They are not the permission boundary. OpenFGA is (R5, R7). Two departments on one client do not get isolation by being placed in two Spaces.
 
-Agents are not scripted per scenario. Noticing and authority are separate. These two decisions will be recorded in `07-decisions.md`.
+Agents are not scripted per scenario. Noticing and authority are separate. Noticing is [decision 5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario). Authority is [decision 6](07-decisions.md#6-one-identity-per-standing-agent).
 
 **What it notices.** An always-on agent is woken by events on Redpanda and decides for itself what matters. Nothing in our code says "if croissant waste crosses a line, raise it." Who would care is read from the map: ownership and responsibility links, such as Amina owning Westlands, and waste cost mattering to her and to Grace. The agent may also use what it has already learned about this company. That memory does not grant authority.
 
@@ -193,7 +193,7 @@ Visibility is the narrowest source. Before the model sees a past pack or a templ
 
 **Chosen tech.** A Postgres table the application role cannot update or delete. Each row stores the previous row's hash and the SHA-256 of that hash plus the payload as UTF-8 JSON with sorted keys. The row names the acting identity. When that identity is a standing agent, the row also names the accountable human. The relay copies the same bytes to `{tenant}.audit`. The watcher, a Rakazo agent, reads that topic through a read-only gateway tool (R18).
 
-**Why.** A hash chain makes a silent edit visible. Redpanda gives the watcher a stream without a second query path into the table. The watcher may record a finding and alert the client admin. For Akwara Cafe that person is Nelly. It cannot stop a run, pause an agent, or change a record. Pausing an agent is a control on the admin console, and a human makes that call. This decision will be recorded in `07-decisions.md`.
+**Why.** A hash chain makes a silent edit visible. Redpanda gives the watcher a stream without a second query path into the table. The watcher may record a finding and alert the client admin. For Akwara Cafe that person is Nelly. It cannot stop a run, pause an agent, or change a record. Pausing an agent is a control on the admin console, and a human makes that call. That limit is [decision 7](07-decisions.md#7-the-watcher-records-and-alerts-a-human-pauses).
 
 **Requirements.** R16, R17, R18, R21, R26.
 
@@ -315,6 +315,6 @@ Nothing here is a speed target. The compose file is for correctness of the nine 
 
 ## Open questions
 
-Noticing, agent identity, and the watcher's limits are decided above. They will be recorded in `07-decisions.md`. Security consequences belong in `05-security-model.md`. One check is still open. Do not close it by assuming the demo already passed.
+Noticing, agent identity, and the watcher's limits are [decision 5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario), [decision 6](07-decisions.md#6-one-identity-per-standing-agent), and [decision 7](07-decisions.md#7-the-watcher-records-and-alerts-a-human-pauses). Security consequences belong in `05-security-model.md`. One check is still open. Do not close it by assuming the demo already passed.
 
 **Keycloak as the gateway's OAuth server.** Rakazo documents generic OIDC for its own login, and separate OAuth for each remote MCP server. It does not name Keycloak. We still have to confirm, in the Akwara Cafe demo, that a staff member who signed in through Keycloak can consent once to the gateway and that the gateway then receives a token for that person. The same check applies to the ops agent's own client. The gateway in both checks is the Rust one ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). [Slice 1](08-build-plan.md#1-amina-reads-westlands-sales) has to show the staff token before a later slice builds on the gateway. [Slice 4](08-build-plan.md#4-the-waste-agent-notices) has to show the ops agent's own client before that agent acts. Until those runs work, do not fork Rakazo to bridge the gap.
