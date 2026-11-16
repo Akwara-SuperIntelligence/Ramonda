@@ -102,3 +102,5 @@ jobs:
         run: .github/check-layout.sh homes
       - name: packs and clients
         run: .github/check-layout.sh config
+      - name: ramonda
+        run: verify/ramonda
