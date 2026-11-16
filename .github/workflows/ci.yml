@@ -29,8 +29,9 @@ jobs:
         working-directory: core
         run: cargo fmt --check
       - name: clippy
-        working-directory: core
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings -D clippy::pedantic
+        run: .github/check-clippy.sh
+      - name: comments
+        run: .github/check-comments.sh rust
       - name: crate-graph
         working-directory: core
         run: ./check-crate-graph.sh
@@ -52,6 +53,8 @@ jobs:
       - name: ruff
         working-directory: connectors
         run: uv run --frozen ruff check
+      - name: comments
+        run: .github/check-comments.sh python
       - name: pyright
         working-directory: connectors
         run: uv run --frozen pyright
@@ -82,6 +85,8 @@ jobs:
       - name: biome
         working-directory: core/console
         run: bun run lint -- --error-on-warnings
+      - name: comments
+        run: .github/check-comments.sh typescript
       - name: dependency-cruiser
         working-directory: core/console
         run: bun run depcruise
@@ -97,3 +102,23 @@ jobs:
         run: .github/check-layout.sh homes
       - name: packs and clients
         run: .github/check-layout.sh config
+
+  violations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+        with:
+          toolchain: "1.100.0"
+          components: rustfmt, clippy
+      - name: narrating comment fails
+        run: .github/check-violations.sh comments
+      - name: allowed comments pass
+        run: .github/check-violations.sh comments-ok
+      - name: boundary violation fails
+        run: .github/check-violations.sh boundary
+      - name: hot-path API fails clippy
+        run: .github/check-violations.sh hot

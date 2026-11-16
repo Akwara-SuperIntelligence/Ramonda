@@ -14,3 +14,6 @@ warnings = "deny"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = "deny"
+disallowed_methods = { level = "allow", priority = 1 }
+disallowed_macros = { level = "allow", priority = 1 }
+disallowed_types = { level = "allow", priority = 1 }
