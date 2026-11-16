@@ -1,5 +1,5 @@
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -21,6 +21,8 @@ use tokio::net::TcpListener;
 
 const MCP_PATH: &str = "/mcp";
 const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
+const JWKS_TTL: Duration = Duration::from_secs(300);
+const JWKS_REFETCH: Duration = Duration::from_secs(30);
 
 /// Settings the process reads before it listens.
 pub struct Config {
@@ -72,13 +74,35 @@ struct IdClaims {
     preferred_username: String,
 }
 
+struct CachedKeys {
+    keys: Arc<JwkSet>,
+    fetched: Instant,
+    forced: Option<Instant>,
+}
+
+#[cfg(test)]
+struct Queue {
+    sets: std::collections::VecDeque<Arc<JwkSet>>,
+    fetches: usize,
+}
+
+#[derive(Clone)]
+enum Origin {
+    Remote {
+        url: String,
+        client: reqwest::Client,
+    },
+    #[cfg(test)]
+    Queue(Arc<Mutex<Queue>>),
+}
+
 #[derive(Clone)]
 enum Keys {
     #[cfg(test)]
     Fixed(Arc<JwkSet>),
-    Remote {
-        url: String,
-        client: reqwest::Client,
+    Cached {
+        cache: Arc<Mutex<Option<CachedKeys>>>,
+        origin: Origin,
     },
 }
 
@@ -100,7 +124,15 @@ impl TokenCheck {
             .build()
             .map_err(|_| "could not build the JWKS client".to_owned())?;
         let url = format!("{issuer}/protocol/openid-connect/certs");
-        Self::new(issuer, audience, public_url, Keys::Remote { url, client })
+        Self::new(
+            issuer,
+            audience,
+            public_url,
+            Keys::Cached {
+                cache: Arc::new(Mutex::new(None)),
+                origin: Origin::Remote { url, client },
+            },
+        )
     }
 
     #[cfg(test)]
@@ -116,6 +148,20 @@ impl TokenCheck {
             public_url.into(),
             Keys::Fixed(Arc::new(keys)),
         )
+    }
+
+    #[cfg(test)]
+    fn queued(queue: Arc<Mutex<Queue>>) -> Self {
+        Self::new(
+            "http://keycloak.example/realms/akwara".to_owned(),
+            "ramonda-gateway".to_owned(),
+            "http://127.0.0.1:8080".to_owned(),
+            Keys::Cached {
+                cache: Arc::new(Mutex::new(None)),
+                origin: Origin::Queue(queue),
+            },
+        )
+        .expect("check")
     }
 
     fn new(
@@ -147,24 +193,81 @@ impl TokenCheck {
 
     async fn authenticate(&self, header: Option<&str>) -> Option<Caller> {
         let token = bearer_token(header?)?;
-        let keys = self.jwks().await?;
+        let kid = decode_header(token).ok()?.kid?;
+        let keys = self.jwks(false).await?;
+        if keys.find(&kid).is_some() {
+            return verify(&self.issuer, &self.audience, &keys, token);
+        }
+        let keys = self.jwks(true).await?;
         verify(&self.issuer, &self.audience, &keys, token)
     }
 
-    async fn jwks(&self) -> Option<Arc<JwkSet>> {
+    async fn jwks(&self, force: bool) -> Option<Arc<JwkSet>> {
         match &self.keys {
             #[cfg(test)]
             Keys::Fixed(keys) => Some(Arc::clone(keys)),
-            Keys::Remote { url, client } => {
-                let response = client.get(url).send().await.ok()?;
-                if !response.status().is_success() {
-                    return None;
-                }
-                let bytes = response.bytes().await.ok()?;
-                serde_json::from_slice(&bytes).ok().map(Arc::new)
-            }
+            Keys::Cached { cache, origin } => cached_jwks(cache, origin, force).await,
         }
     }
+}
+
+async fn cached_jwks(
+    cache: &Mutex<Option<CachedKeys>>,
+    origin: &Origin,
+    force: bool,
+) -> Option<Arc<JwkSet>> {
+    if let Some(keys) = fresh(cache, force) {
+        return Some(keys);
+    }
+    let keys = fetch_origin(origin).await?;
+    let mut slot = lock(cache);
+    let forced = if force {
+        Some(Instant::now())
+    } else {
+        slot.as_ref().and_then(|hit| hit.forced)
+    };
+    *slot = Some(CachedKeys {
+        keys: Arc::clone(&keys),
+        fetched: Instant::now(),
+        forced,
+    });
+    Some(keys)
+}
+
+fn fresh(cache: &Mutex<Option<CachedKeys>>, force: bool) -> Option<Arc<JwkSet>> {
+    let slot = lock(cache);
+    let hit = slot.as_ref()?;
+    let use_cache = if force {
+        hit.forced.is_some_and(|at| at.elapsed() < JWKS_REFETCH)
+    } else {
+        hit.fetched.elapsed() < JWKS_TTL
+    };
+    use_cache.then(|| Arc::clone(&hit.keys))
+}
+
+async fn fetch_origin(origin: &Origin) -> Option<Arc<JwkSet>> {
+    match origin {
+        Origin::Remote { url, client } => {
+            let response = client.get(url).send().await.ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            let bytes = response.bytes().await.ok()?;
+            serde_json::from_slice(&bytes).ok().map(Arc::new)
+        }
+        #[cfg(test)]
+        Origin::Queue(queue) => {
+            let mut queue = lock(queue);
+            queue.fetches += 1;
+            queue.sets.pop_front()
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Option<Caller> {
@@ -331,7 +434,7 @@ fn http_url(name: &str, raw: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
 
     use axum::body::{Body, to_bytes};
@@ -343,7 +446,7 @@ mod tests {
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     use tower::ServiceExt;
 
-    use super::{MCP_PATH, METADATA_PATH, TokenCheck, router};
+    use super::{MCP_PATH, METADATA_PATH, Queue, TokenCheck, lock, router};
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
     const AUDIENCE: &str = "ramonda-gateway";
@@ -477,6 +580,48 @@ mod tests {
         for token in cases {
             assert_eq!(call(Some(&token)).await.status(), StatusCode::UNAUTHORIZED);
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_kid_refetches_once() {
+        let queue = Arc::new(Mutex::new(Queue {
+            sets: std::collections::VecDeque::from([
+                Arc::new(JwkSet { keys: vec![] }),
+                Arc::new(signing_key().set.clone()),
+            ]),
+            fetches: 0,
+        }));
+        let check = TokenCheck::queued(Arc::clone(&queue));
+        let caller = check
+            .authenticate(Some(&format!(
+                "Bearer {}",
+                token(ISSUER, AUDIENCE, "amina")
+            )))
+            .await
+            .expect("refetch");
+        assert_eq!(caller.username, "amina");
+        assert_eq!(lock(&queue).fetches, 2);
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("missing".to_owned());
+        let missing = encode(
+            &header,
+            &serde_json::json!({
+                "iss": ISSUER,
+                "aud": AUDIENCE,
+                "sub": "subject-1",
+                "preferred_username": "amina",
+                "exp": jsonwebtoken::get_current_timestamp() + 3600,
+            }),
+            &signing_key().encoding,
+        )
+        .expect("token");
+        assert!(
+            check
+                .authenticate(Some(&format!("Bearer {missing}")))
+                .await
+                .is_none()
+        );
+        assert_eq!(lock(&queue).fetches, 2);
     }
 
     #[tokio::test]
