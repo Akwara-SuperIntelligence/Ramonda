@@ -272,6 +272,8 @@ The MCP OAuth token supplies the person, or the standing agent. The gateway igno
 
 A request that only Akwara Cafe would use is added to the pack, a connector, or this config. It does not add a module named for the café (R35). Evals in the pack are run by Rakazo. The console lists them. We do not build a second eval runner.
 
+How these directories are scaffolded, including the crates inside `core/`, is [slice 0](08-build-plan.md#0-repo-foundations) of the build plan.
+
 ## Deployment
 
 The Akwara Cafe demo is one Docker Compose file on one machine. Daraja is not in that file. It is Safaricom's sandbox, called over the network.
