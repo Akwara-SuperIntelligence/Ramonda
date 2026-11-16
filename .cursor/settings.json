@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "pstack": { "enabled": true },
+    "ponytail": {
+      "enabled": true,
+      "gitUrl": "https://github.com/DietrichGebert/ponytail",
+      "gitRef": "96608e078b2d5ea607c5c3b8b5a54d1c1fba6846"
+    }
+  }
+}
