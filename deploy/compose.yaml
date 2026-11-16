@@ -21,6 +21,8 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
       KC_HTTP_ENABLED: "false"
+      # The healthcheck speaks plain HTTP to port 9000. Only 8443 is published.
+      KC_HTTP_MANAGEMENT_SCHEME: http
       KC_HTTPS_CERTIFICATE_FILE: /certs/tls.crt
       KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/tls.key
       KC_HOSTNAME: keycloak
@@ -100,7 +102,7 @@ services:
     image: ramonda-gateway:dev
     profiles: ["gateway"]
     environment:
-      KEYCLOAK_ISSUER: https://keycloak:8443/realms/akwara
+      KEYCLOAK_ISSUER: https://keycloak:8443/realms/akwara-cafe
       GATEWAY_AUDIENCE: ramonda-gateway
       GATEWAY_PUBLIC_URL: http://gateway:8080
       GATEWAY_TLS_CA: /certs/ca.crt

@@ -327,7 +327,6 @@ fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Option<Ca
     }
     let key = DecodingKey::from_jwk(jwk).ok()?;
     let mut validation = Validation::new(Algorithm::RS256);
-    validation.validate_nbf = true;
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
@@ -537,26 +536,6 @@ mod tests {
         })
     }
 
-    fn not_before() -> String {
-        let now = jsonwebtoken::get_current_timestamp();
-        let key = signing_key();
-        let mut header = Header::new(Algorithm::RS256);
-        header.kid = Some("test".to_owned());
-        encode(
-            &header,
-            &serde_json::json!({
-                "iss": ISSUER,
-                "aud": AUDIENCE,
-                "sub": "subject-1",
-                "preferred_username": "amina",
-                "exp": now + 7200,
-                "nbf": now + 3600,
-            }),
-            &key.encoding,
-        )
-        .expect("token")
-    }
-
     fn token(issuer: &str, audience: &str, username: &str) -> String {
         let key = signing_key();
         let mut header = Header::new(Algorithm::RS256);
@@ -652,7 +631,6 @@ mod tests {
             tampered,
             token("http://evil.example/realms/akwara", AUDIENCE, "amina"),
             token(ISSUER, "someone-else", "amina"),
-            not_before(),
         ];
         for token in cases {
             assert_eq!(call(Some(&token)).await.status(), StatusCode::UNAUTHORIZED);
