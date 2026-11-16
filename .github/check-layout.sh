@@ -32,10 +32,11 @@ TS_SPEC = re.compile(
     r"""(?:\bfrom\s+|\bimport\s*\(|\brequire\s*\(|\bimport\s+)(['"`])(.*?)\1""",
     re.DOTALL,
 )
-INCLUDE = re.compile(r'\binclude!\s*\(\s*"([^"]*)"')
+INCLUDE = re.compile(r'\binclude!\s*([(\[{])\s*"([^"]*)"\s*([)\]}])')
 PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]*)"\s*\]')
 TOML_PATH = re.compile(r"""path\s*=\s*['"]([^'"]+)['"]""")
 C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
+INCLUDE_PAIRS = {"(": ")", "[": "]", "{": "}"}
 
 
 def read(path: str) -> str:
@@ -45,6 +46,110 @@ def read(path: str) -> str:
 
 def strip_c_comments(text: str) -> str:
     return C_COMMENT.sub("", text)
+
+
+def at_boundary(text: str, index: int) -> bool:
+    return index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")
+
+
+def try_raw(text: str, index: int) -> int | None:
+    if not at_boundary(text, index):
+        return None
+    matched = re.match(r'(?:br|cr|r)(#*)"', text[index:])
+    if not matched:
+        return None
+    hashes = matched.group(1)
+    start = index + matched.end()
+    end = text.find('"' + hashes, start)
+    if end == -1:
+        return len(text)
+    return end + 1 + len(hashes)
+
+
+def try_cooked(text: str, index: int) -> int | None:
+    if text[index] == '"':
+        cursor = index + 1
+    elif text.startswith(('b"', 'c"'), index) and at_boundary(text, index):
+        cursor = index + 2
+    else:
+        return None
+    while cursor < len(text):
+        if text[cursor] == "\\":
+            cursor += 2
+            continue
+        if text[cursor] == '"':
+            return cursor + 1
+        if text[cursor] == "\n":
+            return None
+        cursor += 1
+    return None
+
+
+def try_char(text: str, index: int) -> int | None:
+    if not at_boundary(text, index):
+        return None
+    matched = re.match(r"b?'", text[index:])
+    if not matched:
+        return None
+    cursor = index + matched.end()
+    if cursor >= len(text):
+        return None
+    if text[cursor] == "\\":
+        if text.startswith("\\u{", cursor):
+            end = text.find("}", cursor)
+            if end == -1:
+                return None
+            cursor = end + 1
+        else:
+            cursor += 2
+    else:
+        cursor += 1
+    if cursor < len(text) and text[cursor] == "'":
+        return cursor + 1
+    return None
+
+
+def skip_block(text: str, index: int) -> int:
+    depth = 1
+    while index < len(text) and depth:
+        if text.startswith("/*", index):
+            depth += 1
+            index += 2
+        elif text.startswith("*/", index):
+            depth -= 1
+            index += 2
+        else:
+            index += 1
+    return index
+
+
+def strip_rust(text: str) -> str:
+    out: list[str] = []
+    index = 0
+    while index < len(text):
+        end = try_raw(text, index) or try_cooked(text, index) or try_char(text, index)
+        if end is not None:
+            out.append(text[index:end])
+            index = end
+            continue
+        if text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = len(text) if newline == -1 else newline
+            continue
+        if text.startswith("/*", index):
+            index = skip_block(text, index + 2)
+            continue
+        out.append(text[index])
+        index += 1
+    return "".join(out)
+
+
+def include_paths(text: str) -> list[str]:
+    paths: list[str] = []
+    for opener, spec, closer in INCLUDE.findall(text):
+        if INCLUDE_PAIRS[opener] == closer:
+            paths.append(spec)
+    return paths
 
 
 def strip_hash_comments(text: str) -> str:
@@ -63,9 +168,16 @@ def targets(spec: str, file_dir: str) -> bool:
     if spec in CONFIG_MODULES or spec.startswith(("packs/", "clients/")):
         return True
     if spec.startswith("."):
-        norm = posixpath.normpath(posixpath.join(file_dir, spec))
-        return norm in CONFIG_MODULES or norm.startswith(("packs/", "clients/"))
+        return filesystem_targets(spec, file_dir)
     return False
+
+
+def filesystem_targets(spec: str, file_dir: str) -> bool:
+    spec = spec.strip()
+    if not spec or spec.startswith("/"):
+        return False
+    norm = posixpath.normpath(posixpath.join(file_dir, spec))
+    return norm in CONFIG_MODULES or norm.startswith(("packs/", "clients/"))
 
 
 def call_name(node: ast.AST) -> str:
@@ -101,6 +213,35 @@ def forbid(path: str, spec: str, errors: list[str]) -> None:
     errors.append(f"{path}: imports {spec}. Read the files as config.")
 
 
+def dynamic_names(tree: ast.AST) -> set[str]:
+    names = {"import_module", "__import__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "import_module":
+                    names.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                imported = alias.name.rsplit(".", 1)[-1]
+                if imported == "import_module" and alias.asname:
+                    names.add(alias.asname)
+    return names
+
+
+def called_modules(tree: ast.AST) -> list[str]:
+    names = dynamic_names(tree)
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or call_name(node.func) not in names:
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Constant):
+            continue
+        value = node.args[0].value
+        if isinstance(value, str):
+            found.append(value)
+    return found
+
+
 def check_py(path: str, errors: list[str]) -> None:
     try:
         tree = ast.parse(read(path), filename=path)
@@ -112,22 +253,15 @@ def check_py(path: str, errors: list[str]) -> None:
             for alias in node.names:
                 if top_module(alias.name) in CONFIG_MODULES:
                     forbid(path, alias.name, errors)
-        elif isinstance(node, ast.ImportFrom):
-            if (
-                node.level == 0
-                and node.module
-                and top_module(node.module) in CONFIG_MODULES
-            ):
-                forbid(path, node.module, errors)
-        elif isinstance(node, ast.Call) and call_name(node.func) in {
-            "import_module",
-            "__import__",
-        }:
-            if not node.args or not isinstance(node.args[0], ast.Constant):
-                continue
-            value = node.args[0].value
-            if isinstance(value, str) and top_module(value) in CONFIG_MODULES:
-                forbid(path, value, errors)
+        elif isinstance(node, ast.ImportFrom) and (
+            node.level == 0
+            and node.module
+            and top_module(node.module) in CONFIG_MODULES
+        ):
+            forbid(path, node.module, errors)
+    for value in called_modules(tree):
+        if top_module(value) in CONFIG_MODULES:
+            forbid(path, value, errors)
 
 
 def check_script(path: str, errors: list[str]) -> None:
@@ -138,18 +272,19 @@ def check_script(path: str, errors: list[str]) -> None:
 
 
 def check_rs(path: str, errors: list[str]) -> None:
-    text = strip_c_comments(read(path))
+    text = strip_rust(read(path))
     file_dir = posixpath.dirname(path)
-    for pattern in (INCLUDE, PATH_ATTR):
-        for spec in pattern.findall(text):
-            if targets(spec, file_dir):
-                forbid(path, spec, errors)
+    specs = include_paths(text)
+    specs.extend(PATH_ATTR.findall(text))
+    for spec in specs:
+        if filesystem_targets(spec, file_dir):
+            forbid(path, spec, errors)
 
 
 def check_toml(path: str, errors: list[str]) -> None:
     file_dir = posixpath.dirname(path)
     for spec in TOML_PATH.findall(strip_hash_comments(read(path))):
-        if targets(spec, file_dir):
+        if filesystem_targets(spec, file_dir):
             forbid(path, spec, errors)
 
 
@@ -193,7 +328,33 @@ def check_config(files: list[str], errors: list[str]) -> None:
             check_package_json(path, errors)
 
 
+def self_check() -> None:
+    hidden = (
+        'pub const OPEN: &str = "/*";\n'
+        'include!("../../../packs/rules.inc");\n'
+        'pub const CLOSE: &str = "*/";\n'
+    )
+    commented = '/* include!("../../../packs/rules.inc"); */\n'
+    braced = 'include! { "../../../packs/rules.inc" }\n'
+    bracketed = 'include!["../../../packs/rules.inc"]\n'
+    literal = 'include_str!("../../../packs/hospitality/x.toml");\n'
+    alias = 'from importlib import import_module as load\nload("packs")\n'
+    ok = (
+        "../../../packs/rules.inc" in include_paths(strip_rust(hidden))
+        and not include_paths(strip_rust(commented))
+        and "../../../packs/rules.inc" in include_paths(strip_rust(braced))
+        and "../../../packs/rules.inc" in include_paths(strip_rust(bracketed))
+        and not include_paths(strip_rust(literal))
+        and filesystem_targets("local/../../../../packs/rules.inc", "core/gateway/src")
+        and "packs" in called_modules(ast.parse(alias))
+    )
+    if not ok:
+        sys.stderr.write("layout self-check failed\n")
+        sys.exit(1)
+
+
 def main() -> None:
+    self_check()
     mode = sys.argv[1] if len(sys.argv) > 1 else "all"
     if mode not in {"all", "homes", "config"}:
         sys.stderr.write("usage: check-layout.sh [homes|config]\n")

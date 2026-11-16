@@ -57,7 +57,7 @@ jobs:
         run: uv run --frozen pyright
       - name: pytest
         working-directory: connectors
-        run: uv run --frozen pytest
+        run: uv run --frozen pytest -W error
       - name: import-linter
         working-directory: connectors
         run: ./check_imports
@@ -81,7 +81,7 @@ jobs:
         run: bun run typecheck
       - name: biome
         working-directory: core/console
-        run: bun run lint
+        run: bun run lint -- --error-on-warnings
       - name: dependency-cruiser
         working-directory: core/console
         run: bun run depcruise
