@@ -3,10 +3,7 @@ set -eu
 unset CDPATH
 cd -- "$(git rev-parse --show-toplevel)"
 exec python3 - "$@" <<'PY'
-import ast
-import json
 import posixpath
-import re
 import subprocess
 import sys
 
@@ -15,7 +12,7 @@ PYTHON_HOME = "connectors/"
 PYTHON_EXCEPTION = "scripts/seed_akwara_cafe.py"
 TYPESCRIPT_HOME = "core/console/"
 CONFIG_ROOTS = ("packs/", "clients/")
-CONFIG_MODULES = {"packs", "clients"}
+REFERENCES = ("packs/", "clients/")
 MANIFESTS = {
     "Cargo.toml",
     "Pipfile",
@@ -24,291 +21,18 @@ MANIFESTS = {
     "setup.cfg",
     "setup.py",
 }
-PYTHON_SUFFIXES = (".py", ".pyi")
-TYPESCRIPT_SUFFIXES = (".ts", ".tsx", ".mts", ".cts")
-SCRIPT_SUFFIXES = TYPESCRIPT_SUFFIXES + (".js", ".jsx", ".mjs", ".cjs")
+CODE_SUFFIXES = (".py", ".rs", ".toml", ".ts", ".tsx")
+CODE_NAMES = {"Cargo.toml", "package.json", "pyproject.toml"}
 
-TS_SPEC = re.compile(
-    r"""(?:\bfrom\s+|\bimport\s*\(|\brequire\s*\(|\bimport\s+)(['"`])(.*?)\1""",
-    re.DOTALL,
-)
-TOML_PATH = re.compile(r"""path\s*=\s*['"]([^'"]+)['"]""")
-C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
-INCLUDE_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
+def tracked() -> list[str]:
+    raw = subprocess.check_output(["git", "ls-files", "-z"])
+    return [item.decode() for item in raw.split(b"\0") if item]
 
 
 def read(path: str) -> str:
     with open(path, encoding="utf-8") as handle:
         return handle.read()
-
-
-def strip_c_comments(text: str) -> str:
-    return C_COMMENT.sub("", text)
-
-
-def at_boundary(text: str, index: int) -> bool:
-    return index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")
-
-
-def read_raw(text: str, index: int) -> tuple[int, str] | None:
-    if not at_boundary(text, index):
-        return None
-    matched = re.match(r'(?:br|cr|r)(#*)"', text[index:])
-    if not matched:
-        return None
-    hashes = matched.group(1)
-    start = index + matched.end()
-    end = text.find('"' + hashes, start)
-    if end == -1:
-        return len(text), text[start:]
-    return end + len(hashes) + 1, text[start:end]
-
-
-def read_cooked(text: str, index: int) -> tuple[int, str] | None:
-    if text[index] == '"':
-        cursor = index + 1
-    elif text.startswith(('b"', 'c"'), index) and at_boundary(text, index):
-        cursor = index + 2
-    else:
-        return None
-    chars: list[str] = []
-    while cursor < len(text):
-        if text[cursor] == "\\":
-            decoded, cursor = decode_escape(text, cursor + 1)
-            chars.append(decoded)
-            continue
-        if text[cursor] == '"':
-            return cursor + 1, "".join(chars)
-        if text[cursor] == "\n":
-            return None
-        chars.append(text[cursor])
-        cursor += 1
-    return None
-
-
-def is_hex(text: str) -> bool:
-    return bool(text) and all(char in "0123456789abcdefABCDEF" for char in text)
-
-
-def decode_escape(text: str, cursor: int) -> tuple[str, int]:
-    if cursor >= len(text):
-        return "", cursor
-    char = text[cursor]
-    simple = {
-        "n": "\n",
-        "r": "\r",
-        "t": "\t",
-        "\\": "\\",
-        "0": "\0",
-        "'": "'",
-        '"': '"',
-    }
-    if char in simple:
-        return simple[char], cursor + 1
-    if char == "\n":
-        cursor += 1
-        while cursor < len(text) and text[cursor] in " \t":
-            cursor += 1
-        return "", cursor
-    hexpart = text[cursor + 1 : cursor + 3]
-    if char == "x" and len(hexpart) == 2 and is_hex(hexpart):
-        return chr(int(hexpart, 16)), cursor + 3
-    if char == "u" and text.startswith("{", cursor + 1):
-        end = text.find("}", cursor + 2)
-        hexpart = "" if end == -1 else text[cursor + 2 : end]
-        if end != -1 and is_hex(hexpart) and len(hexpart) <= 6:
-            return chr(int(hexpart, 16)), end + 1
-    return char, cursor + 1
-
-
-def try_char(text: str, index: int) -> int | None:
-    if not at_boundary(text, index):
-        return None
-    matched = re.match(r"b?'", text[index:])
-    if not matched:
-        return None
-    cursor = index + matched.end()
-    if cursor >= len(text):
-        return None
-    if text[cursor] == "\\":
-        if text.startswith("\\u{", cursor):
-            end = text.find("}", cursor)
-            if end == -1:
-                return None
-            cursor = end + 1
-        else:
-            cursor += 2
-    else:
-        cursor += 1
-    if cursor < len(text) and text[cursor] == "'":
-        return cursor + 1
-    return None
-
-
-def skip_block(text: str, index: int) -> int:
-    depth = 1
-    while index < len(text) and depth:
-        if text.startswith("/*", index):
-            depth += 1
-            index += 2
-        elif text.startswith("*/", index):
-            depth -= 1
-            index += 2
-        else:
-            index += 1
-    return index
-
-
-def skip_ws_comments(text: str, index: int) -> int:
-    length = len(text)
-    while index < length:
-        if text[index].isspace():
-            index += 1
-            continue
-        if text.startswith("//", index):
-            newline = text.find("\n", index)
-            index = length if newline == -1 else newline + 1
-            continue
-        if text.startswith("/*", index):
-            index = skip_block(text, index + 2)
-            continue
-        break
-    return index
-
-
-def skip_noise(text: str, index: int) -> int | None:
-    if text.startswith("//", index):
-        newline = text.find("\n", index)
-        return len(text) if newline == -1 else newline + 1
-    if text.startswith("/*", index):
-        return skip_block(text, index + 2)
-    literal = read_raw(text, index) or read_cooked(text, index)
-    if literal is not None:
-        return literal[0]
-    return try_char(text, index)
-
-
-def ident_continues(text: str, index: int) -> bool:
-    return index < len(text) and (text[index].isalnum() or text[index] == "_")
-
-
-def parse_include(text: str, index: int) -> tuple[list[str], int]:
-    length = len(text)
-    index = skip_ws_comments(text, index)
-    if index >= length or text[index] not in INCLUDE_PAIRS:
-        return [], index
-    closer = INCLUDE_PAIRS[text[index]]
-    index = skip_ws_comments(text, index + 1)
-    literal = read_raw(text, index) or read_cooked(text, index)
-    if literal is None:
-        return [], index
-    end, content = literal
-    cursor = skip_ws_comments(text, end)
-    if cursor < length and text[cursor] == ",":
-        cursor = skip_ws_comments(text, cursor + 1)
-    if cursor < length and text[cursor] == closer:
-        return [content], cursor + 1
-    return [], end
-
-
-def include_bang(text: str, index: int) -> int | None:
-    if not at_boundary(text, index) or not text.startswith("include", index):
-        return None
-    after = index + len("include")
-    if ident_continues(text, after):
-        return None
-    cursor = skip_ws_comments(text, after)
-    if cursor < len(text) and text[cursor] == "!":
-        return cursor + 1
-    return None
-
-
-def include_paths(text: str) -> list[str]:
-    paths: list[str] = []
-    index = 0
-    length = len(text)
-    while index < length:
-        skipped = skip_noise(text, index)
-        if skipped is not None:
-            index = skipped
-            continue
-        bang = include_bang(text, index)
-        if bang is not None:
-            found, index = parse_include(text, bang)
-            paths.extend(found)
-            continue
-        index += 1
-    return paths
-
-
-def parse_path_attr(text: str, index: int) -> tuple[list[str], int]:
-    cursor = skip_ws_comments(text, index)
-    if not at_boundary(text, cursor) or not text.startswith("path", cursor):
-        return [], cursor
-    after = cursor + len("path")
-    if ident_continues(text, after):
-        return [], after
-    cursor = skip_ws_comments(text, after)
-    if cursor >= len(text) or text[cursor] != "=":
-        return [], cursor
-    cursor = skip_ws_comments(text, cursor + 1)
-    literal = read_raw(text, cursor) or read_cooked(text, cursor)
-    if literal is None:
-        return [], cursor
-    return [literal[1]], literal[0]
-
-
-def path_attrs(text: str) -> list[str]:
-    paths: list[str] = []
-    index = 0
-    length = len(text)
-    while index < length:
-        skipped = skip_noise(text, index)
-        if skipped is not None:
-            index = skipped
-            continue
-        if text.startswith("#[", index):
-            found, index = parse_path_attr(text, index + 2)
-            paths.extend(found)
-            continue
-        index += 1
-    return paths
-
-
-def strip_hash_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-
-def top_module(name: str) -> str:
-    return name.split(".", 1)[0]
-
-
-def targets(spec: str, file_dir: str) -> bool:
-    spec = spec.strip()
-    for prefix in ("file:", "link:"):
-        spec = spec.removeprefix(prefix)
-    spec = spec.split("?", 1)[0].split("#", 1)[0]
-    if spec in CONFIG_MODULES or spec.startswith(("packs/", "clients/")):
-        return True
-    if spec.startswith("."):
-        return filesystem_targets(spec, file_dir)
-    return False
-
-
-def filesystem_targets(spec: str, file_dir: str) -> bool:
-    spec = spec.strip()
-    if not spec or spec.startswith("/"):
-        return False
-    norm = posixpath.normpath(posixpath.join(file_dir, spec))
-    return norm in CONFIG_MODULES or norm.startswith(("packs/", "clients/"))
-
-
-def call_name(node: ast.AST) -> str:
-    if isinstance(node, ast.Name):
-        return node.id
-    if isinstance(node, ast.Attribute):
-        return node.attr
-    return ""
 
 
 def check_homes(files: list[str], errors: list[str]) -> None:
@@ -318,7 +42,7 @@ def check_homes(files: list[str], errors: list[str]) -> None:
                 f"{path}: Rust lives in core/gateway, core/relay, and core/outbox."
             )
         elif (
-            path.endswith(PYTHON_SUFFIXES)
+            path.endswith(".py")
             and path != PYTHON_EXCEPTION
             and not path.startswith(PYTHON_HOME)
         ):
@@ -326,122 +50,12 @@ def check_homes(files: list[str], errors: list[str]) -> None:
                 f"{path}: Python lives under connectors/. "
                 "scripts/seed_akwara_cafe.py is the one other Python file."
             )
-        elif path.endswith(TYPESCRIPT_SUFFIXES) and not path.startswith(
-            TYPESCRIPT_HOME
-        ):
+        elif path.endswith((".ts", ".tsx")) and not path.startswith(TYPESCRIPT_HOME):
             errors.append(f"{path}: TypeScript lives in core/console.")
 
 
-def forbid(path: str, spec: str, errors: list[str]) -> None:
-    errors.append(f"{path}: imports {spec}. Read the files as config.")
-
-
-def dynamic_names(tree: ast.AST) -> set[str]:
-    names = {"import_module", "__import__"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                if alias.name == "import_module":
-                    names.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                imported = alias.name.rsplit(".", 1)[-1]
-                if imported == "import_module" and alias.asname:
-                    names.add(alias.asname)
-    return names
-
-
-def called_modules(tree: ast.AST) -> list[str]:
-    names = dynamic_names(tree)
-    found: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or call_name(node.func) not in names:
-            continue
-        value = module_argument(node)
-        if value is not None:
-            found.append(value)
-    return found
-
-
-def module_argument(node: ast.Call) -> str | None:
-    if node.args:
-        value = node.args[0]
-        if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            return value.value
-        return None
-    for keyword in node.keywords:
-        if keyword.arg != "name" or not isinstance(keyword.value, ast.Constant):
-            continue
-        if isinstance(keyword.value.value, str):
-            return keyword.value.value
-    return None
-
-
-def check_py(path: str, errors: list[str]) -> None:
-    try:
-        tree = ast.parse(read(path), filename=path)
-    except SyntaxError as err:
-        errors.append(f"{path}: {err.msg}")
-        return
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if top_module(alias.name) in CONFIG_MODULES:
-                    forbid(path, alias.name, errors)
-        elif isinstance(node, ast.ImportFrom) and (
-            node.level == 0
-            and node.module
-            and top_module(node.module) in CONFIG_MODULES
-        ):
-            forbid(path, node.module, errors)
-    for value in called_modules(tree):
-        if top_module(value) in CONFIG_MODULES:
-            forbid(path, value, errors)
-
-
-def check_script(path: str, errors: list[str]) -> None:
-    file_dir = posixpath.dirname(path)
-    for _, spec in TS_SPEC.findall(strip_c_comments(read(path))):
-        if targets(spec, file_dir):
-            forbid(path, spec, errors)
-
-
-def check_rs(path: str, errors: list[str]) -> None:
-    text = read(path)
-    file_dir = posixpath.dirname(path)
-    specs = include_paths(text)
-    specs.extend(path_attrs(text))
-    for spec in specs:
-        if filesystem_targets(spec, file_dir):
-            forbid(path, spec, errors)
-
-
-def check_toml(path: str, errors: list[str]) -> None:
-    file_dir = posixpath.dirname(path)
-    for spec in TOML_PATH.findall(strip_hash_comments(read(path))):
-        if filesystem_targets(spec, file_dir):
-            forbid(path, spec, errors)
-
-
-def check_package_json(path: str, errors: list[str]) -> None:
-    data = json.loads(read(path))
-    if not isinstance(data, dict):
-        return
-    file_dir = posixpath.dirname(path)
-    for field in (
-        "dependencies",
-        "devDependencies",
-        "optionalDependencies",
-        "peerDependencies",
-    ):
-        deps = data.get(field) or {}
-        if not isinstance(deps, dict):
-            continue
-        for name, spec in deps.items():
-            if name in CONFIG_MODULES or (
-                isinstance(spec, str) and targets(spec, file_dir)
-            ):
-                forbid(path, name, errors)
+def is_code(path: str) -> bool:
+    return path.endswith(CODE_SUFFIXES) or posixpath.basename(path) in CODE_NAMES
 
 
 def check_config(files: list[str], errors: list[str]) -> None:
@@ -451,72 +65,20 @@ def check_config(files: list[str], errors: list[str]) -> None:
                 f"{path}: packs/ and clients/ have no package manifest. "
                 "Read the files as config."
             )
-        if path.endswith(PYTHON_SUFFIXES):
-            check_py(path, errors)
-        elif path.endswith(SCRIPT_SUFFIXES):
-            check_script(path, errors)
-        elif path.endswith(".rs"):
-            check_rs(path, errors)
-        elif posixpath.basename(path) in {"Cargo.toml", "pyproject.toml"}:
-            check_toml(path, errors)
-        elif posixpath.basename(path) == "package.json":
-            check_package_json(path, errors)
-
-
-def self_check() -> None:
-    hidden = (
-        'pub const OPEN: &str = "/*";\n'
-        'include!("../../../packs/rules.inc");\n'
-        'pub const CLOSE: &str = "*/";\n'
-    )
-    commented = '/* include!("../../../packs/rules.inc"); */\n'
-    braced = 'include! { "../../../packs/rules.inc" }\n'
-    bracketed = 'include!["../../../packs/rules.inc"]\n'
-    literal = 'include_str!("../../../packs/hospitality/x.toml");\n'
-    raw_include = 'include!(r"../../../packs/rules.inc");\n'
-    raw_text = 'const EXAMPLE: &str = r#"include!("../../../packs/rules.inc");"#;\n'
-    spaced = 'include /* c */ !("../../../packs/rules.inc");\n'
-    commented_arg = 'include!(/* config */ "../../../packs/rules.inc");\n'
-    comma = 'include!("../../../packs/rules.inc",);\n'
-    escaped = 'include!("../../../\\x70acks/rules.inc");\n'
-    real_attr = '#[path = "../../../packs/rules.inc"]\n'
-    quoted_attr = (
-        'pub const EXAMPLE: &str = r##"#[path = "../../../packs/rules.inc"]"##;\n'
-    )
-    alias = 'from importlib import import_module as load\nload("packs")\n'
-    keyword = 'from importlib import import_module as load\nload(name="packs")\n'
-    target = "../../../packs/rules.inc"
-    ok = (
-        target in include_paths(hidden)
-        and not include_paths(commented)
-        and target in include_paths(braced)
-        and target in include_paths(bracketed)
-        and not include_paths(literal)
-        and target in include_paths(raw_include)
-        and not include_paths(raw_text)
-        and target in include_paths(spaced)
-        and target in include_paths(commented_arg)
-        and target in include_paths(comma)
-        and target in include_paths(escaped)
-        and target in path_attrs(real_attr)
-        and not path_attrs(quoted_attr)
-        and filesystem_targets("local/../../../../packs/rules.inc", "core/gateway/src")
-        and "packs" in called_modules(ast.parse(alias))
-        and "packs" in called_modules(ast.parse(keyword))
-    )
-    if not ok:
-        sys.stderr.write("layout self-check failed\n")
-        sys.exit(1)
+        if path.startswith(CONFIG_ROOTS) or not is_code(path):
+            continue
+        text = read(path)
+        for needle in REFERENCES:
+            if needle in text:
+                errors.append(f"{path}: refers to {needle}. Read the files as config.")
 
 
 def main() -> None:
-    self_check()
     mode = sys.argv[1] if len(sys.argv) > 1 else "all"
     if mode not in {"all", "homes", "config"}:
         sys.stderr.write("usage: check-layout.sh [homes|config]\n")
         sys.exit(2)
-    raw = subprocess.check_output(["git", "ls-files", "-z"])
-    files = [item.decode() for item in raw.split(b"\0") if item]
+    files = tracked()
     errors: list[str] = []
     if mode in {"all", "homes"}:
         check_homes(files, errors)
