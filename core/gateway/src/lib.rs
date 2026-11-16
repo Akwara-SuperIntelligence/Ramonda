@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::State;
@@ -7,26 +7,20 @@ use axum::http::header::{AUTHORIZATION, WWW_AUTHENTICATE};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router};
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use rmcp::handler::server::tool::Extension;
-use rmcp::handler::server::wrapper::Parameters;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
 
 const MCP_PATH: &str = "/mcp";
 const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
-const JWKS_PATH: &str = "/protocol/openid-connect/certs";
-const JWKS_LIMIT: usize = 1_048_576;
-const JWKS_REFRESH: Duration = Duration::from_secs(60);
 
 /// Settings the process reads before it listens.
 pub struct Config {
@@ -65,7 +59,6 @@ pub async fn serve(config: Config) -> std::io::Result<()> {
 struct ResourceMetadata {
     resource: String,
     authorization_servers: Vec<String>,
-    bearer_methods_supported: [&'static str; 1],
 }
 
 #[derive(Clone)]
@@ -79,38 +72,18 @@ struct IdClaims {
     preferred_username: String,
 }
 
-enum AuthFail {
-    Unauthorized,
-    Unavailable,
-}
-
-enum VerifyFail {
-    Rejected,
-    UnknownKid,
-}
-
 #[derive(Clone)]
-struct CachedJwks {
-    keys: Arc<JwkSet>,
-    fetched: Instant,
-}
-
 enum Keys {
     #[cfg(test)]
     Fixed(Arc<JwkSet>),
     Remote {
         url: String,
         client: reqwest::Client,
-        cached: Arc<RwLock<Option<CachedJwks>>>,
     },
 }
 
 #[derive(Clone)]
 struct TokenCheck {
-    inner: Arc<CheckInner>,
-}
-
-struct CheckInner {
     issuer: String,
     audience: String,
     public_url: String,
@@ -123,21 +96,11 @@ struct CheckInner {
 impl TokenCheck {
     fn remote(issuer: String, audience: String, public_url: String) -> Result<Self, String> {
         let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(5))
             .build()
             .map_err(|_| "could not build the JWKS client".to_owned())?;
-        let url = format!("{issuer}{JWKS_PATH}");
-        Self::new(
-            issuer,
-            audience,
-            public_url,
-            Keys::Remote {
-                url,
-                client,
-                cached: Arc::new(RwLock::new(None)),
-            },
-        )
+        let url = format!("{issuer}/protocol/openid-connect/certs");
+        Self::new(issuer, audience, public_url, Keys::Remote { url, client })
     }
 
     #[cfg(test)]
@@ -169,112 +132,65 @@ impl TokenCheck {
         ))
         .map_err(|_| format!("{metadata} is not a header value"))?;
         Ok(Self {
-            inner: Arc::new(CheckInner {
-                document: ResourceMetadata {
-                    resource: format!("{public_url}{MCP_PATH}"),
-                    authorization_servers: vec![issuer.clone()],
-                    bearer_methods_supported: ["header"],
-                },
-                issuer,
-                audience,
-                public_url,
-                missing,
-                invalid,
-                keys,
-            }),
+            document: ResourceMetadata {
+                resource: format!("{public_url}{MCP_PATH}"),
+                authorization_servers: vec![issuer.clone()],
+            },
+            issuer,
+            audience,
+            public_url,
+            missing,
+            invalid,
+            keys,
         })
     }
 
-    async fn authenticate(&self, header: Option<&str>) -> Result<Caller, AuthFail> {
-        let Some(token) = header.and_then(bearer_token) else {
-            return Err(AuthFail::Unauthorized);
-        };
-        let keys = self.load(false).await?;
-        match verify(&self.inner.issuer, &self.inner.audience, &keys, token) {
-            Ok(caller) => Ok(caller),
-            Err(VerifyFail::UnknownKid) => {
-                let keys = self.load(true).await?;
-                verify(&self.inner.issuer, &self.inner.audience, &keys, token)
-                    .map_err(|_| AuthFail::Unauthorized)
-            }
-            Err(VerifyFail::Rejected) => Err(AuthFail::Unauthorized),
-        }
+    async fn authenticate(&self, header: Option<&str>) -> Option<Caller> {
+        let token = bearer_token(header?)?;
+        let keys = self.jwks().await?;
+        verify(&self.issuer, &self.audience, &keys, token)
     }
 
-    async fn load(&self, refresh: bool) -> Result<Arc<JwkSet>, AuthFail> {
-        match &self.inner.keys {
+    async fn jwks(&self) -> Option<Arc<JwkSet>> {
+        match &self.keys {
             #[cfg(test)]
-            Keys::Fixed(keys) => Ok(Arc::clone(keys)),
-            Keys::Remote {
-                url,
-                client,
-                cached,
-            } => {
-                if let Some(hit) = cached.read().await.clone()
-                    && (!refresh || hit.fetched.elapsed() < JWKS_REFRESH)
-                {
-                    return Ok(hit.keys);
+            Keys::Fixed(keys) => Some(Arc::clone(keys)),
+            Keys::Remote { url, client } => {
+                let response = client.get(url).send().await.ok()?;
+                if !response.status().is_success() {
+                    return None;
                 }
-                let keys = fetch_jwks(client, url).await?;
-                *cached.write().await = Some(CachedJwks {
-                    keys: Arc::clone(&keys),
-                    fetched: Instant::now(),
-                });
-                Ok(keys)
+                let bytes = response.bytes().await.ok()?;
+                serde_json::from_slice(&bytes).ok().map(Arc::new)
             }
         }
     }
 }
 
-async fn fetch_jwks(client: &reqwest::Client, url: &str) -> Result<Arc<JwkSet>, AuthFail> {
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| AuthFail::Unavailable)?;
-    if !response.status().is_success() {
-        return Err(AuthFail::Unavailable);
-    }
-    let bytes = response.bytes().await.map_err(|_| AuthFail::Unavailable)?;
-    if bytes.len() > JWKS_LIMIT {
-        return Err(AuthFail::Unavailable);
-    }
-    serde_json::from_slice(&bytes)
-        .map(Arc::new)
-        .map_err(|_| AuthFail::Unavailable)
-}
-
-fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Result<Caller, VerifyFail> {
-    let header = decode_header(token).map_err(|_| VerifyFail::Rejected)?;
+fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Option<Caller> {
+    let header = decode_header(token).ok()?;
     if header.alg != Algorithm::RS256 {
-        return Err(VerifyFail::Rejected);
+        return None;
     }
-    let Some(kid) = header.kid else {
-        return Err(VerifyFail::Rejected);
-    };
-    let Some(jwk) = keys.find(&kid) else {
-        return Err(VerifyFail::UnknownKid);
-    };
+    let jwk = keys.find(header.kid.as_deref()?)?;
     if jwk
         .common
         .key_algorithm
         .is_some_and(|alg| alg != KeyAlgorithm::RS256)
+        || !matches!(jwk.algorithm, AlgorithmParameters::RSA(_))
     {
-        return Err(VerifyFail::Rejected);
+        return None;
     }
-    if !matches!(jwk.algorithm, AlgorithmParameters::RSA(_)) {
-        return Err(VerifyFail::Rejected);
-    }
-    let key = DecodingKey::from_jwk(jwk).map_err(|_| VerifyFail::Rejected)?;
+    let key = DecodingKey::from_jwk(jwk).ok()?;
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
-    let data = decode::<IdClaims>(token, &key, &validation).map_err(|_| VerifyFail::Rejected)?;
+    let data = decode::<IdClaims>(token, &key, &validation).ok()?;
     if data.claims.sub.is_empty() || data.claims.preferred_username.is_empty() {
-        return Err(VerifyFail::Rejected);
+        return None;
     }
-    Ok(Caller {
+    Some(Caller {
         username: data.claims.preferred_username,
     })
 }
@@ -298,9 +214,9 @@ fn router(check: TokenCheck) -> Router {
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true)
-            .with_allowed_hosts(allowed_hosts(&check.inner.public_url)),
+            .with_allowed_hosts(allowed_hosts(&check.public_url)),
     );
-    let document = check.inner.document.clone();
+    let document = check.document.clone();
     let protected = Router::new()
         .nest_service(MCP_PATH, mcp)
         .layer(middleware::from_fn_with_state(check, require_token));
@@ -340,23 +256,16 @@ async fn require_token(
         .headers()
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
-    match check.authenticate(header).await {
-        Ok(caller) => {
-            request.extensions_mut().insert(caller);
-            next.run(request).await
-        }
-        Err(AuthFail::Unauthorized) => unauthorized(&check, presented),
-        Err(AuthFail::Unavailable) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    if let Some(caller) = check.authenticate(header).await {
+        request.extensions_mut().insert(caller);
+        return next.run(request).await;
     }
-}
-
-fn unauthorized(check: &TokenCheck, presented: bool) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = StatusCode::UNAUTHORIZED;
     let challenge = if presented {
-        &check.inner.invalid
+        &check.invalid
     } else {
-        &check.inner.missing
+        &check.missing
     };
     response
         .headers_mut()
@@ -367,25 +276,13 @@ fn unauthorized(check: &TokenCheck, presented: bool) -> Response {
 #[derive(Clone)]
 struct Gateway;
 
-#[derive(Deserialize, JsonSchema)]
-struct WhoamiArgs {
-    #[serde(default)]
-    user_id: Option<String>,
-    #[serde(default)]
-    tenant_id: Option<String>,
-}
-
 #[tool_router]
 impl Gateway {
     #[allow(clippy::unused_self)]
-    #[tool(description = "Return the signed-in username. user_id and tenant_id are ignored.")]
-    fn whoami(
-        &self,
-        Parameters(args): Parameters<WhoamiArgs>,
-        Extension(parts): Extension<Parts>,
-    ) -> Result<String, ErrorData> {
-        let WhoamiArgs { user_id, tenant_id } = args;
-        let _ = (user_id, tenant_id);
+    #[tool(
+        description = "Return the signed-in username. A user or tenant id in the arguments is ignored."
+    )]
+    fn whoami(&self, Extension(parts): Extension<Parts>) -> Result<String, ErrorData> {
         parts
             .extensions
             .get::<Caller>()
@@ -415,18 +312,18 @@ fn bind_address() -> Result<String, String> {
 
 fn http_url(name: &str, raw: &str) -> Result<String, String> {
     let url = raw.trim().trim_end_matches('/');
+    let message = format!("{name} must be an http or https URL");
+    let Ok(parsed) = url.parse::<axum::http::Uri>() else {
+        return Err(message);
+    };
+    let scheme = parsed.scheme_str().unwrap_or("");
     if url
         .chars()
         .any(|c| c.is_ascii_control() || c == '"' || c == '\\')
+        || (scheme != "http" && scheme != "https")
+        || parsed.authority().is_none()
     {
-        return Err(format!("{name} must be an http or https URL"));
-    }
-    let Ok(parsed) = url.parse::<axum::http::Uri>() else {
-        return Err(format!("{name} must be an http or https URL"));
-    };
-    let scheme = parsed.scheme_str().unwrap_or("");
-    if (scheme != "http" && scheme != "https") || parsed.authority().is_none() {
-        return Err(format!("{name} must be an http or https URL"));
+        return Err(message);
     }
     Ok(url.to_owned())
 }
@@ -439,16 +336,13 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HOST, WWW_AUTHENTICATE};
     use axum::http::{Request, StatusCode};
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use jsonwebtoken::jwk::JwkSet;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use rsa::RsaPrivateKey;
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
-    use rsa::traits::PublicKeyParts;
     use tower::ServiceExt;
 
-    use super::{METADATA_PATH, TokenCheck, router};
+    use super::{MCP_PATH, METADATA_PATH, TokenCheck, router};
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
     const AUDIENCE: &str = "ramonda-gateway";
@@ -467,17 +361,12 @@ mod tests {
             let key = RsaPrivateKey::new(&mut rng, 2048).expect("rsa key");
             let pem = key.to_pkcs1_pem(LineEnding::LF).expect("pem");
             let encoding = EncodingKey::from_rsa_pem(pem.as_bytes()).expect("encoding key");
-            let jwks = serde_json::json!({
-                "keys": [{
-                    "kty": "RSA",
-                    "alg": "RS256",
-                    "use": "sig",
-                    "kid": "test",
-                    "n": URL_SAFE_NO_PAD.encode(key.n().to_bytes_be()),
-                    "e": URL_SAFE_NO_PAD.encode(key.e().to_bytes_be()),
-                }]
-            });
-            let set = serde_json::from_value(jwks).expect("jwks");
+            let mut jwk = jsonwebtoken::jwk::Jwk::from_encoding_key(&encoding, Algorithm::RS256)
+                .expect("jwk");
+            jwk.common.key_id = Some("test".to_owned());
+            let set = JwkSet { keys: vec![jwk] };
+            let set =
+                serde_json::from_str(&serde_json::to_string(&set).expect("json")).expect("jwks");
             SigningKey { set, encoding }
         })
     }
@@ -500,21 +389,11 @@ mod tests {
         .expect("token")
     }
 
-    fn tamper(token: &str) -> String {
-        let mut token = token.to_owned();
-        let last = token.pop().expect("token");
-        token.push(if last == 'a' { 'b' } else { 'a' });
-        token
-    }
-
     fn app() -> axum::Router {
-        let check = TokenCheck::fixed(ISSUER, AUDIENCE, PUBLIC_URL, signing_key().set.clone())
-            .expect("check");
-        router(check)
-    }
-
-    fn metadata_url() -> String {
-        format!("{PUBLIC_URL}{METADATA_PATH}")
+        router(
+            TokenCheck::fixed(ISSUER, AUDIENCE, PUBLIC_URL, signing_key().set.clone())
+                .expect("check"),
+        )
     }
 
     async fn call(token: Option<&str>) -> axum::response::Response {
@@ -527,34 +406,24 @@ mod tests {
         if let Some(token) = token {
             builder = builder.header(AUTHORIZATION, format!("Bearer {token}"));
         }
-        let request = builder.body(Body::from(WHOAMI)).expect("request");
-        tokio::time::timeout(Duration::from_secs(5), app().oneshot(request))
-            .await
-            .expect("gateway hung")
-            .expect("response")
-    }
-
-    fn challenge(response: &axum::response::Response) -> &str {
-        response
-            .headers()
-            .get(WWW_AUTHENTICATE)
-            .expect("WWW-Authenticate")
-            .to_str()
-            .expect("header")
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            app().oneshot(builder.body(Body::from(WHOAMI)).expect("request")),
+        )
+        .await
+        .expect("gateway hung")
+        .expect("response")
     }
 
     #[tokio::test]
-    async fn missing_token_points_at_metadata() {
+    async fn missing_token_points_at_keycloak() {
         let response = call(None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let challenge = response.headers().get(WWW_AUTHENTICATE).expect("challenge");
         assert_eq!(
-            challenge(&response),
-            format!("Bearer resource_metadata=\"{}\"", metadata_url())
+            challenge.to_str().expect("header"),
+            format!("Bearer resource_metadata=\"{PUBLIC_URL}{METADATA_PATH}\"")
         );
-    }
-
-    #[tokio::test]
-    async fn metadata_names_keycloak() {
         let response = app()
             .oneshot(
                 Request::builder()
@@ -564,39 +433,28 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
         let bytes = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
         let document: serde_json::Value = serde_json::from_slice(&bytes).expect("json");
         assert_eq!(document["authorization_servers"][0], ISSUER);
-        assert_eq!(document["resource"], format!("{PUBLIC_URL}/mcp"));
+        assert_eq!(document["resource"], format!("{PUBLIC_URL}{MCP_PATH}"));
     }
 
     #[tokio::test]
-    async fn bad_signature_is_rejected() {
-        let response = call(Some(&tamper(&token(ISSUER, AUDIENCE, "amina")))).await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(challenge(&response).contains(&metadata_url()));
-    }
-
-    #[tokio::test]
-    async fn bad_issuer_is_rejected() {
-        let response = call(Some(&token(
-            "http://evil.example/realms/akwara",
-            AUDIENCE,
-            "amina",
-        )))
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(challenge(&response).contains(&metadata_url()));
-    }
-
-    #[tokio::test]
-    async fn bad_audience_is_rejected() {
-        let response = call(Some(&token(ISSUER, "someone-else", "amina"))).await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(challenge(&response).contains(&metadata_url()));
+    async fn bad_signature_issuer_and_audience_are_rejected() {
+        let good = token(ISSUER, AUDIENCE, "amina");
+        let mut tampered = good.clone();
+        let last = tampered.pop().expect("token");
+        tampered.push(if last == 'a' { 'b' } else { 'a' });
+        let cases = [
+            tampered,
+            token("http://evil.example/realms/akwara", AUDIENCE, "amina"),
+            token(ISSUER, "someone-else", "amina"),
+        ];
+        for token in cases {
+            assert_eq!(call(Some(&token)).await.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]

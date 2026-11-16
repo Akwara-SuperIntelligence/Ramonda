@@ -528,13 +528,11 @@ name = "gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "jsonwebtoken",
  "rand 0.8.8",
  "reqwest",
  "rmcp",
  "rsa",
- "schemars",
  "serde",
  "serde_json",
  "tokio",
