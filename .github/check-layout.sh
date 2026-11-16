@@ -32,7 +32,6 @@ TS_SPEC = re.compile(
     r"""(?:\bfrom\s+|\bimport\s*\(|\brequire\s*\(|\bimport\s+)(['"`])(.*?)\1""",
     re.DOTALL,
 )
-INCLUDE = re.compile(r'\binclude!\s*([(\[{])\s*"([^"]*)"\s*([)\]}])')
 PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]*)"\s*\]')
 TOML_PATH = re.compile(r"""path\s*=\s*['"]([^'"]+)['"]""")
 C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
@@ -52,7 +51,7 @@ def at_boundary(text: str, index: int) -> bool:
     return index == 0 or not (text[index - 1].isalnum() or text[index - 1] == "_")
 
 
-def try_raw(text: str, index: int) -> int | None:
+def read_raw(text: str, index: int) -> tuple[int, str] | None:
     if not at_boundary(text, index):
         return None
     matched = re.match(r'(?:br|cr|r)(#*)"', text[index:])
@@ -62,25 +61,29 @@ def try_raw(text: str, index: int) -> int | None:
     start = index + matched.end()
     end = text.find('"' + hashes, start)
     if end == -1:
-        return len(text)
-    return end + 1 + len(hashes)
+        return len(text), text[start:]
+    return end + len(hashes) + 1, text[start:end]
 
 
-def try_cooked(text: str, index: int) -> int | None:
+def read_cooked(text: str, index: int) -> tuple[int, str] | None:
     if text[index] == '"':
         cursor = index + 1
     elif text.startswith(('b"', 'c"'), index) and at_boundary(text, index):
         cursor = index + 2
     else:
         return None
+    chars: list[str] = []
     while cursor < len(text):
         if text[cursor] == "\\":
+            if cursor + 1 < len(text):
+                chars.append(text[cursor + 1])
             cursor += 2
             continue
         if text[cursor] == '"':
-            return cursor + 1
+            return cursor + 1, "".join(chars)
         if text[cursor] == "\n":
             return None
+        chars.append(text[cursor])
         cursor += 1
     return None
 
@@ -127,7 +130,12 @@ def strip_rust(text: str) -> str:
     out: list[str] = []
     index = 0
     while index < len(text):
-        end = try_raw(text, index) or try_cooked(text, index) or try_char(text, index)
+        literal = read_raw(text, index) or read_cooked(text, index)
+        if literal is not None:
+            out.append(text[index : literal[0]])
+            index = literal[0]
+            continue
+        end = try_char(text, index)
         if end is not None:
             out.append(text[index:end])
             index = end
@@ -144,11 +152,53 @@ def strip_rust(text: str) -> str:
     return "".join(out)
 
 
+def parse_include(text: str, index: int) -> tuple[list[str], int]:
+    length = len(text)
+    while index < length and text[index].isspace():
+        index += 1
+    if index >= length or text[index] not in INCLUDE_PAIRS:
+        return [], index
+    closer = INCLUDE_PAIRS[text[index]]
+    index += 1
+    while index < length and text[index].isspace():
+        index += 1
+    literal = read_raw(text, index) or read_cooked(text, index)
+    if literal is None:
+        return [], index
+    end, content = literal
+    cursor = end
+    while cursor < length and text[cursor].isspace():
+        cursor += 1
+    if cursor < length and text[cursor] == closer:
+        return [content], cursor + 1
+    return [], end
+
+
 def include_paths(text: str) -> list[str]:
     paths: list[str] = []
-    for opener, spec, closer in INCLUDE.findall(text):
-        if INCLUDE_PAIRS[opener] == closer:
-            paths.append(spec)
+    index = 0
+    length = len(text)
+    while index < length:
+        if text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = length if newline == -1 else newline + 1
+            continue
+        if text.startswith("/*", index):
+            index = skip_block(text, index + 2)
+            continue
+        if at_boundary(text, index) and text.startswith("include!", index):
+            found, index = parse_include(text, index + len("include!"))
+            paths.extend(found)
+            continue
+        literal = read_raw(text, index) or read_cooked(text, index)
+        if literal is not None:
+            index = literal[0]
+            continue
+        end = try_char(text, index)
+        if end is not None:
+            index = end
+            continue
+        index += 1
     return paths
 
 
@@ -234,12 +284,24 @@ def called_modules(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or call_name(node.func) not in names:
             continue
-        if not node.args or not isinstance(node.args[0], ast.Constant):
-            continue
-        value = node.args[0].value
-        if isinstance(value, str):
+        value = module_argument(node)
+        if value is not None:
             found.append(value)
     return found
+
+
+def module_argument(node: ast.Call) -> str | None:
+    if node.args:
+        value = node.args[0]
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            return value.value
+        return None
+    for keyword in node.keywords:
+        if keyword.arg != "name" or not isinstance(keyword.value, ast.Constant):
+            continue
+        if isinstance(keyword.value.value, str):
+            return keyword.value.value
+    return None
 
 
 def check_py(path: str, errors: list[str]) -> None:
@@ -272,10 +334,10 @@ def check_script(path: str, errors: list[str]) -> None:
 
 
 def check_rs(path: str, errors: list[str]) -> None:
-    text = strip_rust(read(path))
+    text = read(path)
     file_dir = posixpath.dirname(path)
     specs = include_paths(text)
-    specs.extend(PATH_ATTR.findall(text))
+    specs.extend(PATH_ATTR.findall(strip_rust(text)))
     for spec in specs:
         if filesystem_targets(spec, file_dir):
             forbid(path, spec, errors)
@@ -338,15 +400,21 @@ def self_check() -> None:
     braced = 'include! { "../../../packs/rules.inc" }\n'
     bracketed = 'include!["../../../packs/rules.inc"]\n'
     literal = 'include_str!("../../../packs/hospitality/x.toml");\n'
+    raw_include = 'include!(r"../../../packs/rules.inc");\n'
+    raw_text = 'const EXAMPLE: &str = r#"include!("../../../packs/rules.inc");"#;\n'
     alias = 'from importlib import import_module as load\nload("packs")\n'
+    keyword = 'from importlib import import_module as load\nload(name="packs")\n'
     ok = (
-        "../../../packs/rules.inc" in include_paths(strip_rust(hidden))
-        and not include_paths(strip_rust(commented))
-        and "../../../packs/rules.inc" in include_paths(strip_rust(braced))
-        and "../../../packs/rules.inc" in include_paths(strip_rust(bracketed))
-        and not include_paths(strip_rust(literal))
+        "../../../packs/rules.inc" in include_paths(hidden)
+        and not include_paths(commented)
+        and "../../../packs/rules.inc" in include_paths(braced)
+        and "../../../packs/rules.inc" in include_paths(bracketed)
+        and not include_paths(literal)
+        and "../../../packs/rules.inc" in include_paths(raw_include)
+        and not include_paths(raw_text)
         and filesystem_targets("local/../../../../packs/rules.inc", "core/gateway/src")
         and "packs" in called_modules(ast.parse(alias))
+        and "packs" in called_modules(ast.parse(keyword))
     )
     if not ok:
         sys.stderr.write("layout self-check failed\n")
