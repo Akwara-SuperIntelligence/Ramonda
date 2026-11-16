@@ -1,0 +1,67 @@
+{
+  "realm": "akwara-cafe",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "users": [
+    {
+      "username": "amina",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Amina",
+      "lastName": "Hassan",
+      "email": "amina.hassan@akwara-cafe.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "amina",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "brian",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Brian",
+      "lastName": "Otieno",
+      "email": "brian.otieno@akwara-cafe.test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "brian",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "gateway",
+      "name": "Ramonda gateway",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "gateway",
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    },
+    {
+      "clientId": "rakazo",
+      "name": "Rakazo",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "rakazo",
+      "directAccessGrantsEnabled": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false
+    }
+  ]
+}
