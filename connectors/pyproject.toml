@@ -1,0 +1,100 @@
+[project]
+name = "ramonda-connectors"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "daraja",
+    "frappe_hr",
+    "mailpit",
+    "nextcloud",
+    "odoo",
+]
+
+[dependency-groups]
+dev = [
+    "import-linter==2.16",
+    "pyright==1.1.414",
+    "pytest==9.2.0",
+    "ruff==0.17.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["daraja", "frappe_hr", "mailpit", "nextcloud", "odoo"]
+
+[tool.uv.sources]
+daraja = { workspace = true }
+frappe_hr = { workspace = true }
+mailpit = { workspace = true }
+nextcloud = { workspace = true }
+odoo = { workspace = true }
+
+[tool.ruff]
+target-version = "py312"
+src = [
+    "daraja/src",
+    "frappe_hr/src",
+    "mailpit/src",
+    "nextcloud/src",
+    "odoo/src",
+]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+include = [
+    "conftest.py",
+    "daraja/src",
+    "frappe_hr/src",
+    "mailpit/src",
+    "nextcloud/src",
+    "odoo/src",
+]
+
+[tool.pytest.ini_options]
+testpaths = [
+    "daraja",
+    "frappe_hr",
+    "mailpit",
+    "nextcloud",
+    "odoo",
+]
+
+[tool.importlinter]
+root_packages = [
+    "daraja",
+    "frappe_hr",
+    "mailpit",
+    "nextcloud",
+    "odoo",
+]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "A connector does not import another connector"
+type = "independence"
+modules = [
+    "daraja",
+    "frappe_hr",
+    "mailpit",
+    "nextcloud",
+    "odoo",
+]
+broken_contract_guidance = "Go through the gateway."
+
+[[tool.importlinter.contracts]]
+name = "A connector does not import core"
+type = "forbidden"
+source_modules = [
+    "daraja",
+    "frappe_hr",
+    "mailpit",
+    "nextcloud",
+    "odoo",
+]
+forbidden_modules = ["core"]
+broken_contract_guidance = "Go through the gateway."
