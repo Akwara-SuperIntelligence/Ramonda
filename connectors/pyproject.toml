@@ -33,12 +33,14 @@ odoo = { workspace = true }
 
 [tool.ruff]
 target-version = "py312"
+extend-include = ["../scripts/seed_akwara_cafe.py"]
 src = [
     "daraja/src",
     "frappe_hr/src",
     "mailpit/src",
     "nextcloud/src",
     "odoo/src",
+    "../scripts/seed_akwara_cafe.py",
 ]
 
 [tool.pyright]
@@ -53,6 +55,7 @@ include = [
     "mailpit/src",
     "nextcloud/src",
     "odoo/src",
+    "../scripts/seed_akwara_cafe.py",
 ]
 
 [tool.pytest.ini_options]
