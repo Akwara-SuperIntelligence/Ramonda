@@ -1,0 +1,18 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022", "DOM"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"moduleDetection": "force",
+		"strict": true,
+		"noEmit": true,
+		"isolatedModules": true,
+		"skipLibCheck": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
+		"noFallthroughCasesInSwitch": true,
+		"verbatimModuleSyntax": true
+	},
+	"include": ["src", "gateway-api", "vite.config.ts"]
+}

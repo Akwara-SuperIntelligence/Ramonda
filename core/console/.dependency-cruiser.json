@@ -1,0 +1,16 @@
+{
+	"forbidden": [
+		{
+			"name": "core/console imports only its own code and the gateway API types",
+			"severity": "error",
+			"comment": "core/console imports only its own code and the gateway API types (gateway-api).",
+			"from": { "path": "^(src|gateway-api)/" },
+			"to": { "pathNot": ["^src/", "^gateway-api/"] }
+		}
+	],
+	"options": {
+		"doNotFollow": { "path": "node_modules" },
+		"tsPreCompilationDeps": true,
+		"tsConfig": { "fileName": "tsconfig.json" }
+	}
+}

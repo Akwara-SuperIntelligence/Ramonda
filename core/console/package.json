@@ -1,0 +1,18 @@
+{
+	"name": "console",
+	"private": true,
+	"type": "module",
+	"packageManager": "bun@1.4.4",
+	"scripts": {
+		"build": "vite build",
+		"typecheck": "tsc --strict --noEmit",
+		"lint": "biome check .",
+		"depcruise": "depcruise --config .dependency-cruiser.json --output-type err-long src gateway-api"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.6.8",
+		"dependency-cruiser": "18.7.2",
+		"typescript": "6.0.3",
+		"vite": "8.3.8"
+	}
+}
