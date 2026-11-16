@@ -81,17 +81,17 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** A standing agent, woken by a real change, decides the Westlands waste is worth raising and tells Amina and Grace, not Brian.
 
-**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway writes that change and an outbox row. The relay publishes it to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
+**What to build.** The Akwara ops agent: one OpenFGA principal, a role, limits, and Grace as the accountable human. It has its own Keycloak client. The gateway acts as the agent with the token from that client. Odoo notifies the gateway when a sale or a waste sheet is recorded. The gateway writes that change and an outbox row. The relay publishes it to `{tenant}.changes`. A consumer delivers each of those events to the agent and does not classify it. The agent reads `Owns` and `CaresAbout` and decides. It may draft a note. It does not cut the order. That write still waits on slice 3's approval rule.
 
 **Demo path.** A Westlands sale or waste sheet is recorded in Odoo. Odoo notifies the gateway. The gateway writes the change and an outbox row, and the relay publishes `{tenant}.changes`. The ops agent raises it to Amina and to Grace. Brian does not get the figures. The audit row names the ops agent and Grace. No waste rule in our code matches on "croissant".
 
-**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent: the outbox row, then the relay. The alert names the right people. An attempt by the agent to write the replenishment without approval does not change Odoo. A row placed on `{tenant}.changes` with no Odoo record behind it does not pass.
+**Done when.** Before this slice, there is no standing agent and no one is told about a new sale unless a person asks. After it, a sale or waste sheet recorded in Odoo is what wakes the agent: the outbox row, then the relay. The alert names the right people. The gateway acts as the ops agent with a token from that agent's own Keycloak client. A run that acts as the agent with any other credential does not pass. An attempt by the agent to write the replenishment without approval does not change Odoo. A row placed on `{tenant}.changes` with no Odoo record behind it does not pass.
 
 **Blocked by.** 3.
 
 **Requirements.** R8, R20. The paragraph under the nine checks in the demo company doc, not one of the nine rows.
 
-**Decisions.** [5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario), [6](07-decisions.md#6-one-identity-per-standing-agent).
+**Decisions.** [5](07-decisions.md#5-agents-notice-they-are-not-scripted-per-scenario), [6](07-decisions.md#6-one-identity-per-standing-agent), [8](07-decisions.md#8-the-gateway-learns-who-is-calling-from-its-own-oauth-token).
 
 ## 5. A weekly waste report in Akwara's house style
 
