@@ -2,9 +2,9 @@
 
 This is the order of work for the Akwara Cafe demo. It follows the [brief](01-product-brief.md), the [requirements](02-prd.md), the [demo company](03-demo-company.md), the [architecture](04-architecture.md), the [security model](05-security-model.md), the [ontology](06-ontology.md), and the [decisions](07-decisions.md).
 
-Each slice is a thin path through every layer it needs. Hassan can demo it on its own. A fresh coding session that has never seen these docs should be able to finish one slice and stop. Infrastructure is not its own step. Postgres, Keycloak, Rakazo, the gateway, Odoo, HelixDB, OpenFGA, Redpanda, and OpenBao each arrive in the first slice that needs them.
+Slices 1 to 8 are each a thin path through every layer they need. Hassan can demo each of those on its own. Slice 0 is the guarded repo they start from. It is not a demo. A fresh coding session that has never seen these docs should be able to finish one slice and stop. Infrastructure is not its own step. Postgres, Keycloak, Rakazo, the gateway, Odoo, HelixDB, OpenFGA, Redpanda, and OpenBao each arrive in the first slice that needs them. Slice 0 does not start them.
 
-The code a slice builds uses three languages ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). The gateway and the outbox relay are Rust. Connectors are Python 3.12, typed, using the official MCP Python SDK. The admin console is TypeScript, built with Vite, with bun as the package manager.
+The code a slice builds uses three languages ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). The gateway and the outbox relay are Rust. Connectors are Python 3.12, typed, using the official MCP Python SDK. The admin console is TypeScript, built with Vite, with bun as the package manager. [Slice 0](#0-repo-foundations) creates those homes before slice 1 writes any behaviour ([decision 18](07-decisions.md#18-guard-the-repo-before-feature-work)).
 
 We cut this way so the whole path is proven early, not after every layer is finished. After slice 3, two tracks can run at once: slices 4 and 5, and slices 6 and 7. Slice 8 waits for both tracks.
 
@@ -12,6 +12,7 @@ When a slice is approved, it becomes a GitHub issue. Later issues name their blo
 
 ```mermaid
 flowchart LR
+  s0[0 Repo foundations]
   s1[1 Amina reads sales]
   s2[2 Allowed and refused]
   s3[3 Write waits]
@@ -20,7 +21,7 @@ flowchart LR
   s6[6 Watcher]
   s7[7 Nelly approves the map]
   s8[8 All nine checks]
-  s1 --> s2 --> s3
+  s0 --> s1 --> s2 --> s3
   s3 --> s4 --> s5
   s3 --> s6 --> s7
   s5 --> s8
@@ -28,6 +29,75 @@ flowchart LR
 ```
 
 A slice's "Done when" checks must fail on the commit where that slice starts. They must not pass by accident.
+
+## 0. Repo foundations
+
+**Goal.** Before any feature work, the repo is a clean base for an AI coding agent. There is no human team. A mistake is corrected in the structure or in a check.
+
+**What to build.** The directories in [architecture, Reuse](04-architecture.md#reuse), scaffolded and empty of behaviour.
+
+- `core/` is a Cargo workspace. Members are `gateway/`, `relay/`, and `outbox/`. `outbox/` is the shared contract crate for the outbox table. `core/console/` is the admin console: TypeScript, Vite, bun. It is not a Cargo member. The gateway still serves the built console, as [Deployment](04-architecture.md#deployment) describes.
+- `connectors/` is one Python 3.12 package per system: `odoo`, `frappe_hr`, `daraja`, `nextcloud`, `mailpit`. Daraja is a package here. It stays out of the compose file, as Deployment already says.
+- `packs/hospitality/` and `clients/akwara-cafe/` are config only.
+- `deploy/` holds the one compose file for the stamp.
+- `scripts/` is the home of `scripts/seed_akwara_cafe.py` from the [demo company](03-demo-company.md#how-the-data-is-generated-and-reset). This slice does not write that script.
+- `specs/` is the TLA+ directory. This slice does not write a model.
+- `verify/` holds the feature-map stub and the `ramonda` control CLI.
+- `AGENTS.md` is at the repo root.
+
+Boundaries fail in CI. The error names the allowed alternative.
+
+- Cargo: `relay` does not depend on `gateway`. Both may depend on `outbox`. The error says to use `outbox`.
+- import-linter: a connector does not import another connector, and does not import `core`. The error says to go through the gateway.
+- dependency-cruiser: `core/console` imports only its own code and the gateway API types. The error names those types. Biome stays the TypeScript linter.
+- `packs/` and `clients/` have no package manifest. Nothing may import them. The error says to read the files as config.
+
+Warnings are errors. Rust is rustfmt, and clippy with `-D warnings` and pedantic. Python is ruff, pyright strict, and pytest. TypeScript is `tsc` strict and Biome. That is the full set. Pytest is set so a package with no tests yet exits clean. Toolchain versions are pinned in the repo.
+
+A comment may be a license header, a public API doc, or a link that explains an external constraint we cannot change. A public API doc is rustdoc on a public item, a docstring on a public Python function, or TSDoc on an exported TypeScript symbol. Any other comment fails the lint job. The check is a step in that job, beside clippy, ruff, and Biome. The error tells the agent to make it a type, a lint, or a test. A Ponytail `shortcut:` comment fails the same check.
+
+A hot-path source file is named `*.hot.rs`. The name means no blocking call, no allocation added to avoid one, and no timer used as a patch. Clippy denies blocking, allocating, and timer APIs in files of that name, and allows them elsewhere. The error tells the agent to fix the structure.
+
+`AGENTS.md` stays thin. It states the languages and their homes, the Ponytail rule, that folders are the architecture, that comments do not narrate, and that done means the feature-map entry was driven and the evidence captured. The Ponytail rule is one line: write the least new code, and take the first rung of the [Ponytail ladder](https://github.com/DietrichGebert/ponytail/blob/main/skills/ponytail/SKILL.md) that fully works. It points at that skill for the rungs. A table pairs each rule with what enforces it.
+
+| Rule | Enforced by |
+| --- | --- |
+| Languages have homes. Rust is `core/gateway`, `core/relay`, and `core/outbox`. Python 3.12 is one package under `connectors/`. TypeScript is `core/console`. | Cargo, import-linter, and dependency-cruiser. A file outside its home fails CI. |
+| Least new code. Take the first rung of the Ponytail ladder that fully works. | `.cursor/rules/ponytail.mdc` and the Ponytail skill. This row is prose. The rows below are checks. |
+| Folders are the architecture. | The boundary checks. The error names the folder that may do the job. |
+| Comments do not narrate. | The comment check in the lint job. |
+| Done means the feature-map entry was driven and the evidence captured. | `verify/feature-map.md` and the `ramonda` CLI. |
+
+`verify/feature-map.md` lists the nine Akwara Cafe checks in [Demo scenarios](03-demo-company.md#demo-scenarios). Each row links the check to the requirement IDs in that table. R4 and R5 link to [Permissions](02-prd.md#permissions). R8 links to [Gateway and connectors](02-prd.md#gateway-and-connectors). R12 and R13 link to [Approvals](02-prd.md#approvals). R15, R16, and R17 link to [Audit and events](02-prd.md#audit-and-events). R19 links to [App and notifications](02-prd.md#app-and-notifications). R21 links to [Email](02-prd.md#email). R22 through R31 link to [Artifacts](02-prd.md#artifacts). `verify/ramonda` is the control CLI. It runs, and it has no commands yet. [`/create-verification-skill`](https://github.com/cursor/plugins/tree/main/pstack/skills/create-verification-skill) fills this map and this CLI in once the stamp boots. The skill extends `verify/`.
+
+pstack and Ponytail are installed for coding agents from the repo. `.cursor/settings.json` enables the public-marketplace plugin `pstack`, and enables Ponytail from `https://github.com/DietrichGebert/ponytail` at a pinned git ref:
+
+```json
+{
+  "plugins": {
+    "pstack": { "enabled": true },
+    "ponytail": {
+      "enabled": true,
+      "gitUrl": "https://github.com/DietrichGebert/ponytail",
+      "gitRef": "<pinned commit>"
+    }
+  }
+}
+```
+
+The same ref's always-on rule is copied to `.cursor/rules/ponytail.mdc`. Cloud agents do not run Ponytail's `sessionStart` hook, so the rule file is what they read. The ref is a full commit SHA.
+
+TLA+ models land in the same slice as the code they cover. They are not written in slice 0. The outbox and relay recovery model is slice 3. The approval and permission state machine is slice 3 as well: that is the slice where a write is pending, approved, or declined, and where the permission check from slice 2 becomes part of that path. Both models go in `specs/`.
+
+**Demo path.** None. This slice has no staff journey.
+
+**Done when.** On an empty tree there is no CI, a boundary is not checked, a narrating comment is not rejected, and `AGENTS.md` and the feature map are absent. After this slice: CI is green on the empty scaffold, a deliberate boundary violation fails CI, a narrating comment fails lint, and `AGENTS.md`, `verify/feature-map.md`, and `verify/ramonda` exist.
+
+**Blocked by.** None.
+
+**Requirements.** None. The layout is the one R33 and R35 describe. This slice does not close them. The nine checks are listed in the stub. They are not run.
+
+**Decisions.** [13](07-decisions.md#13-assemble-what-is-mature-build-only-what-is-different), [17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript), [18](07-decisions.md#18-guard-the-repo-before-feature-work).
 
 ## 1. Amina reads Westlands sales
 
@@ -39,7 +109,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Done when.** On an empty tree, Amina has no login, the agent cannot read Odoo, and there is no audit row. After the slice: she is a Keycloak user, the answer quotes the seeded Westlands figures, and one audit row names her and the read. Rakazo reached that Rust gateway over MCP with a Keycloak OAuth token issued for Amina.
 
-**Blocked by.** None.
+**Blocked by.** 0.
 
 **Requirements.** R6, R8, R9, R11, R17. Demo check 1, the read half only.
 
@@ -65,11 +135,11 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Goal.** A proposed Odoo change sits pending until a person approves it in Ramonda's own step, then the write and its event are committed together.
 
-**What to build.** Redpanda and the Rust outbox relay, in the same Cargo workspace as the gateway. The action `PlaceReplenishment` on the Odoo connector. The gateway returns pending and does not call Odoo. Grace Mwangi approves or declines in Ramonda's approval step, including from the staff app. A Rakazo card alone does not release the write. On approval, the gateway calls Odoo with an idempotency key, then commits the action and the outbox row. The relay publishes `{tenant}.changes` and `{tenant}.audit`. A decline writes nothing and is still audited.
+**What to build.** Redpanda and the Rust outbox relay, in the same Cargo workspace as the gateway. The action `PlaceReplenishment` on the Odoo connector. The gateway returns pending and does not call Odoo. Grace Mwangi approves or declines in Ramonda's approval step, including from the staff app. A Rakazo card alone does not release the write. On approval, the gateway calls Odoo with an idempotency key, then commits the action and the outbox row. The relay publishes `{tenant}.changes` and `{tenant}.audit`. A decline writes nothing and is still audited. This slice writes the TLA+ model of outbox and relay recovery, and the approval and permission state machine, in `specs/`. Slice 0 only created that directory.
 
 **Demo path.** The agent proposes Westlands 60 and Kilimani 38 weekday butter croissants. Odoo is unchanged. Grace approves. Odoo then shows those quantities. Clicking only Rakazo's card leaves Odoo unchanged.
 
-**Done when.** Before this slice, nothing can propose a write, and Redpanda is not running. After it, an unapproved proposal is absent from Odoo, the approval row is in our log, and the event is on `{tenant}.changes` only after the Postgres commit.
+**Done when.** Before this slice, nothing can propose a write, Redpanda is not running, and `specs/` has no model. After it, an unapproved proposal is absent from Odoo, the approval row is in our log, the event is on `{tenant}.changes` only after the Postgres commit, and `specs/` holds the outbox and relay recovery model and the approval and permission state machine.
 
 **Blocked by.** 2.
 
