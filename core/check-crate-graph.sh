@@ -8,7 +8,7 @@ tmp=$(mktemp -d "$PWD/target/crate-graph.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 tar --exclude=target --exclude=node_modules -cf - . | tar -C "$tmp" -xf -
 
-meta=$(cd "$tmp" && cargo metadata --offline --format-version 1 --quiet --color never)
+meta=$(cd "$tmp" && cargo metadata --all-features --offline --format-version 1 --quiet --color never)
 script=$(cat <<'PY'
 import json
 import sys
