@@ -103,10 +103,12 @@ services:
     profiles: ["gateway"]
     environment:
       KEYCLOAK_ISSUER: https://keycloak:8443/realms/akwara-cafe
-      GATEWAY_AUDIENCE: ramonda-gateway
+      GATEWAY_AUDIENCE: gateway
       GATEWAY_PUBLIC_URL: http://gateway:8080
       GATEWAY_TLS_CA: /certs/ca.crt
     volumes:
       - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
+    ports:
+      - "127.0.0.1:8080:8080"
     depends_on:
       - keycloak

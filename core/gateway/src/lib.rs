@@ -166,7 +166,7 @@ impl TokenCheck {
     fn queued(queue: Arc<Mutex<Queue>>) -> Self {
         Self::new(
             "http://keycloak.example/realms/akwara".to_owned(),
-            "ramonda-gateway".to_owned(),
+            "gateway".to_owned(),
             "http://127.0.0.1:8080".to_owned(),
             Keys::Cached {
                 cache: Arc::new(Mutex::new(None)),
@@ -327,6 +327,7 @@ fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Option<Ca
     }
     let key = DecodingKey::from_jwk(jwk).ok()?;
     let mut validation = Validation::new(Algorithm::RS256);
+    validation.validate_nbf = true;
     validation.set_issuer(&[issuer]);
     validation.set_audience(&[audience]);
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
@@ -510,7 +511,7 @@ mod tests {
     };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
-    const AUDIENCE: &str = "ramonda-gateway";
+    const AUDIENCE: &str = "gateway";
     const PUBLIC_URL: &str = "http://127.0.0.1:8080";
     const WHOAMI: &str = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"whoami","arguments":{"user_id":"brian","tenant_id":"other"}}}"#;
 
@@ -534,6 +535,26 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&set).expect("json")).expect("jwks");
             SigningKey { set, encoding }
         })
+    }
+
+    fn not_before() -> String {
+        let now = jsonwebtoken::get_current_timestamp();
+        let key = signing_key();
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some("test".to_owned());
+        encode(
+            &header,
+            &serde_json::json!({
+                "iss": ISSUER,
+                "aud": AUDIENCE,
+                "sub": "subject-1",
+                "preferred_username": "amina",
+                "exp": now + 7200,
+                "nbf": now + 3600,
+            }),
+            &key.encoding,
+        )
+        .expect("token")
     }
 
     fn token(issuer: &str, audience: &str, username: &str) -> String {
@@ -631,6 +652,7 @@ mod tests {
             tampered,
             token("http://evil.example/realms/akwara", AUDIENCE, "amina"),
             token(ISSUER, "someone-else", "amina"),
+            not_before(),
         ];
         for token in cases {
             assert_eq!(call(Some(&token)).await.status(), StatusCode::UNAUTHORIZED);
