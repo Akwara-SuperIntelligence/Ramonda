@@ -37,7 +37,7 @@ A slice's "Done when" checks must fail on the commit where that slice starts. Th
 
 **Demo path.** Amina asks why croissant waste is up. The answer uses her branch's sales and deliveries. Brian cannot sign in as Amina. WhatsApp is not involved.
 
-**Done when.** On an empty tree, Amina has no login, the agent cannot read Odoo, and there is no audit row. After the slice: she is a Keycloak user, the answer quotes the seeded Westlands figures, and one audit row names her and the read. Rakazo reached that Rust gateway over MCP with a Keycloak OAuth token.
+**Done when.** On an empty tree, Amina has no login, the agent cannot read Odoo, and there is no audit row. After the slice: she is a Keycloak user, the answer quotes the seeded Westlands figures, and one audit row names her and the read. Rakazo reached that Rust gateway over MCP with a Keycloak OAuth token issued for Amina.
 
 **Blocked by.** None.
 
