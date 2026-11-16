@@ -32,7 +32,6 @@ TS_SPEC = re.compile(
     r"""(?:\bfrom\s+|\bimport\s*\(|\brequire\s*\(|\bimport\s+)(['"`])(.*?)\1""",
     re.DOTALL,
 )
-PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]*)"\s*\]')
 TOML_PATH = re.compile(r"""path\s*=\s*['"]([^'"]+)['"]""")
 C_COMMENT = re.compile(r"/\*.*?\*/|//[^\n]*", re.DOTALL)
 INCLUDE_PAIRS = {"(": ")", "[": "]", "{": "}"}
@@ -75,9 +74,8 @@ def read_cooked(text: str, index: int) -> tuple[int, str] | None:
     chars: list[str] = []
     while cursor < len(text):
         if text[cursor] == "\\":
-            if cursor + 1 < len(text):
-                chars.append(text[cursor + 1])
-            cursor += 2
+            decoded, cursor = decode_escape(text, cursor + 1)
+            chars.append(decoded)
             continue
         if text[cursor] == '"':
             return cursor + 1, "".join(chars)
@@ -86,6 +84,41 @@ def read_cooked(text: str, index: int) -> tuple[int, str] | None:
         chars.append(text[cursor])
         cursor += 1
     return None
+
+
+def is_hex(text: str) -> bool:
+    return bool(text) and all(char in "0123456789abcdefABCDEF" for char in text)
+
+
+def decode_escape(text: str, cursor: int) -> tuple[str, int]:
+    if cursor >= len(text):
+        return "", cursor
+    char = text[cursor]
+    simple = {
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "\\": "\\",
+        "0": "\0",
+        "'": "'",
+        '"': '"',
+    }
+    if char in simple:
+        return simple[char], cursor + 1
+    if char == "\n":
+        cursor += 1
+        while cursor < len(text) and text[cursor] in " \t":
+            cursor += 1
+        return "", cursor
+    hexpart = text[cursor + 1 : cursor + 3]
+    if char == "x" and len(hexpart) == 2 and is_hex(hexpart):
+        return chr(int(hexpart, 16)), cursor + 3
+    if char == "u" and text.startswith("{", cursor + 1):
+        end = text.find("}", cursor + 2)
+        hexpart = "" if end == -1 else text[cursor + 2 : end]
+        if end != -1 and is_hex(hexpart) and len(hexpart) <= 6:
+            return chr(int(hexpart, 16)), end + 1
+    return char, cursor + 1
 
 
 def try_char(text: str, index: int) -> int | None:
@@ -126,59 +159,12 @@ def skip_block(text: str, index: int) -> int:
     return index
 
 
-def strip_rust(text: str) -> str:
-    out: list[str] = []
-    index = 0
-    while index < len(text):
-        literal = read_raw(text, index) or read_cooked(text, index)
-        if literal is not None:
-            out.append(text[index : literal[0]])
-            index = literal[0]
-            continue
-        end = try_char(text, index)
-        if end is not None:
-            out.append(text[index:end])
-            index = end
-            continue
-        if text.startswith("//", index):
-            newline = text.find("\n", index)
-            index = len(text) if newline == -1 else newline
-            continue
-        if text.startswith("/*", index):
-            index = skip_block(text, index + 2)
-            continue
-        out.append(text[index])
-        index += 1
-    return "".join(out)
-
-
-def parse_include(text: str, index: int) -> tuple[list[str], int]:
-    length = len(text)
-    while index < length and text[index].isspace():
-        index += 1
-    if index >= length or text[index] not in INCLUDE_PAIRS:
-        return [], index
-    closer = INCLUDE_PAIRS[text[index]]
-    index += 1
-    while index < length and text[index].isspace():
-        index += 1
-    literal = read_raw(text, index) or read_cooked(text, index)
-    if literal is None:
-        return [], index
-    end, content = literal
-    cursor = end
-    while cursor < length and text[cursor].isspace():
-        cursor += 1
-    if cursor < length and text[cursor] == closer:
-        return [content], cursor + 1
-    return [], end
-
-
-def include_paths(text: str) -> list[str]:
-    paths: list[str] = []
-    index = 0
+def skip_ws_comments(text: str, index: int) -> int:
     length = len(text)
     while index < length:
+        if text[index].isspace():
+            index += 1
+            continue
         if text.startswith("//", index):
             newline = text.find("\n", index)
             index = length if newline == -1 else newline + 1
@@ -186,17 +172,104 @@ def include_paths(text: str) -> list[str]:
         if text.startswith("/*", index):
             index = skip_block(text, index + 2)
             continue
-        if at_boundary(text, index) and text.startswith("include!", index):
-            found, index = parse_include(text, index + len("include!"))
+        break
+    return index
+
+
+def skip_noise(text: str, index: int) -> int | None:
+    if text.startswith("//", index):
+        newline = text.find("\n", index)
+        return len(text) if newline == -1 else newline + 1
+    if text.startswith("/*", index):
+        return skip_block(text, index + 2)
+    literal = read_raw(text, index) or read_cooked(text, index)
+    if literal is not None:
+        return literal[0]
+    return try_char(text, index)
+
+
+def ident_continues(text: str, index: int) -> bool:
+    return index < len(text) and (text[index].isalnum() or text[index] == "_")
+
+
+def parse_include(text: str, index: int) -> tuple[list[str], int]:
+    length = len(text)
+    index = skip_ws_comments(text, index)
+    if index >= length or text[index] not in INCLUDE_PAIRS:
+        return [], index
+    closer = INCLUDE_PAIRS[text[index]]
+    index = skip_ws_comments(text, index + 1)
+    literal = read_raw(text, index) or read_cooked(text, index)
+    if literal is None:
+        return [], index
+    end, content = literal
+    cursor = skip_ws_comments(text, end)
+    if cursor < length and text[cursor] == ",":
+        cursor = skip_ws_comments(text, cursor + 1)
+    if cursor < length and text[cursor] == closer:
+        return [content], cursor + 1
+    return [], end
+
+
+def include_bang(text: str, index: int) -> int | None:
+    if not at_boundary(text, index) or not text.startswith("include", index):
+        return None
+    after = index + len("include")
+    if ident_continues(text, after):
+        return None
+    cursor = skip_ws_comments(text, after)
+    if cursor < len(text) and text[cursor] == "!":
+        return cursor + 1
+    return None
+
+
+def include_paths(text: str) -> list[str]:
+    paths: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        skipped = skip_noise(text, index)
+        if skipped is not None:
+            index = skipped
+            continue
+        bang = include_bang(text, index)
+        if bang is not None:
+            found, index = parse_include(text, bang)
             paths.extend(found)
             continue
-        literal = read_raw(text, index) or read_cooked(text, index)
-        if literal is not None:
-            index = literal[0]
+        index += 1
+    return paths
+
+
+def parse_path_attr(text: str, index: int) -> tuple[list[str], int]:
+    cursor = skip_ws_comments(text, index)
+    if not at_boundary(text, cursor) or not text.startswith("path", cursor):
+        return [], cursor
+    after = cursor + len("path")
+    if ident_continues(text, after):
+        return [], after
+    cursor = skip_ws_comments(text, after)
+    if cursor >= len(text) or text[cursor] != "=":
+        return [], cursor
+    cursor = skip_ws_comments(text, cursor + 1)
+    literal = read_raw(text, cursor) or read_cooked(text, cursor)
+    if literal is None:
+        return [], cursor
+    return [literal[1]], literal[0]
+
+
+def path_attrs(text: str) -> list[str]:
+    paths: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        skipped = skip_noise(text, index)
+        if skipped is not None:
+            index = skipped
             continue
-        end = try_char(text, index)
-        if end is not None:
-            index = end
+        if text.startswith("#[", index):
+            found, index = parse_path_attr(text, index + 2)
+            paths.extend(found)
             continue
         index += 1
     return paths
@@ -337,7 +410,7 @@ def check_rs(path: str, errors: list[str]) -> None:
     text = read(path)
     file_dir = posixpath.dirname(path)
     specs = include_paths(text)
-    specs.extend(PATH_ATTR.findall(strip_rust(text)))
+    specs.extend(path_attrs(text))
     for spec in specs:
         if filesystem_targets(spec, file_dir):
             forbid(path, spec, errors)
@@ -402,16 +475,31 @@ def self_check() -> None:
     literal = 'include_str!("../../../packs/hospitality/x.toml");\n'
     raw_include = 'include!(r"../../../packs/rules.inc");\n'
     raw_text = 'const EXAMPLE: &str = r#"include!("../../../packs/rules.inc");"#;\n'
+    spaced = 'include /* c */ !("../../../packs/rules.inc");\n'
+    commented_arg = 'include!(/* config */ "../../../packs/rules.inc");\n'
+    comma = 'include!("../../../packs/rules.inc",);\n'
+    escaped = 'include!("../../../\\x70acks/rules.inc");\n'
+    real_attr = '#[path = "../../../packs/rules.inc"]\n'
+    quoted_attr = (
+        'pub const EXAMPLE: &str = r##"#[path = "../../../packs/rules.inc"]"##;\n'
+    )
     alias = 'from importlib import import_module as load\nload("packs")\n'
     keyword = 'from importlib import import_module as load\nload(name="packs")\n'
+    target = "../../../packs/rules.inc"
     ok = (
-        "../../../packs/rules.inc" in include_paths(hidden)
+        target in include_paths(hidden)
         and not include_paths(commented)
-        and "../../../packs/rules.inc" in include_paths(braced)
-        and "../../../packs/rules.inc" in include_paths(bracketed)
+        and target in include_paths(braced)
+        and target in include_paths(bracketed)
         and not include_paths(literal)
-        and "../../../packs/rules.inc" in include_paths(raw_include)
+        and target in include_paths(raw_include)
         and not include_paths(raw_text)
+        and target in include_paths(spaced)
+        and target in include_paths(commented_arg)
+        and target in include_paths(comma)
+        and target in include_paths(escaped)
+        and target in path_attrs(real_attr)
+        and not path_attrs(quoted_attr)
         and filesystem_targets("local/../../../../packs/rules.inc", "core/gateway/src")
         and "packs" in called_modules(ast.parse(alias))
         and "packs" in called_modules(ast.parse(keyword))
