@@ -23,6 +23,7 @@ const MCP_PATH: &str = "/mcp";
 const METADATA_PATH: &str = "/.well-known/oauth-protected-resource/mcp";
 const JWKS_TTL: Duration = Duration::from_secs(300);
 const JWKS_REFETCH: Duration = Duration::from_secs(30);
+const JWKS_LIMIT: usize = 1_048_576;
 
 /// Settings the process reads before it listens.
 pub struct Config {
@@ -31,17 +32,18 @@ pub struct Config {
 }
 
 impl Config {
-    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, and optional `GATEWAY_BIND`.
+    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required variable is missing or a URL is not http or https.
+    /// Returns an error when a required variable is missing, the issuer is not https, or the CA file cannot be read.
     pub fn from_env() -> Result<Self, String> {
-        let issuer = http_url("KEYCLOAK_ISSUER", &required("KEYCLOAK_ISSUER")?)?;
+        let issuer = issuer_url(&required("KEYCLOAK_ISSUER")?)?;
         let audience = required("GATEWAY_AUDIENCE")?;
         let public_url = http_url("GATEWAY_PUBLIC_URL", &required("GATEWAY_PUBLIC_URL")?)?;
+        let ca_pem = tls_ca()?;
         Ok(Self {
-            check: TokenCheck::remote(issuer, audience, public_url)?,
+            check: TokenCheck::remote(issuer, audience, public_url, ca_pem)?,
             bind: bind_address()?,
         })
     }
@@ -118,9 +120,19 @@ struct TokenCheck {
 }
 
 impl TokenCheck {
-    fn remote(issuer: String, audience: String, public_url: String) -> Result<Self, String> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
+    fn remote(
+        issuer: String,
+        audience: String,
+        public_url: String,
+        ca_pem: Option<Vec<u8>>,
+    ) -> Result<Self, String> {
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
+        if let Some(pem) = ca_pem {
+            let cert = reqwest::Certificate::from_pem(&pem)
+                .map_err(|_| "GATEWAY_TLS_CA is not a PEM certificate".to_owned())?;
+            builder = builder.add_root_certificate(cert);
+        }
+        let client = builder
             .build()
             .map_err(|_| "could not build the JWKS client".to_owned())?;
         let url = format!("{issuer}/protocol/openid-connect/certs");
@@ -248,12 +260,29 @@ fn fresh(cache: &Mutex<Option<CachedKeys>>, force: bool) -> Option<Arc<JwkSet>> 
 async fn fetch_origin(origin: &Origin) -> Option<Arc<JwkSet>> {
     match origin {
         Origin::Remote { url, client } => {
-            let response = client.get(url).send().await.ok()?;
+            let mut response = client.get(url).send().await.ok()?;
             if !response.status().is_success() {
                 return None;
             }
-            let bytes = response.bytes().await.ok()?;
-            serde_json::from_slice(&bytes).ok().map(Arc::new)
+            if response
+                .content_length()
+                .is_some_and(|len| len > u64::try_from(JWKS_LIMIT).unwrap_or(u64::MAX))
+            {
+                return None;
+            }
+            let mut body = Vec::new();
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if !extend_limited(&mut body, &chunk) {
+                            return None;
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(_) => return None,
+                }
+            }
+            serde_json::from_slice(&body).ok().map(Arc::new)
         }
         #[cfg(test)]
         Origin::Queue(queue) => {
@@ -262,6 +291,14 @@ async fn fetch_origin(origin: &Origin) -> Option<Arc<JwkSet>> {
             queue.sets.pop_front()
         }
     }
+}
+
+fn extend_limited(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if body.len().saturating_add(chunk.len()) > JWKS_LIMIT {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -414,6 +451,24 @@ fn bind_address() -> Result<String, String> {
     }
 }
 
+fn issuer_url(raw: &str) -> Result<String, String> {
+    let url = http_url("KEYCLOAK_ISSUER", raw)?;
+    if !url.starts_with("https://") {
+        return Err("KEYCLOAK_ISSUER must be https".to_owned());
+    }
+    Ok(url)
+}
+
+fn tls_ca() -> Result<Option<Vec<u8>>, String> {
+    match std::env::var("GATEWAY_TLS_CA") {
+        Ok(path) if !path.trim().is_empty() => std::fs::read(path.trim())
+            .map(Some)
+            .map_err(|_| format!("could not read {}", path.trim())),
+        Ok(_) => Err("GATEWAY_TLS_CA is empty".to_owned()),
+        Err(_) => Ok(None),
+    }
+}
+
 fn http_url(name: &str, raw: &str) -> Result<String, String> {
     let url = raw.trim().trim_end_matches('/');
     let message = format!("{name} must be an http or https URL");
@@ -446,7 +501,10 @@ mod tests {
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     use tower::ServiceExt;
 
-    use super::{MCP_PATH, METADATA_PATH, Queue, TokenCheck, lock, router};
+    use super::{
+        JWKS_LIMIT, MCP_PATH, METADATA_PATH, Queue, TokenCheck, extend_limited, issuer_url, lock,
+        router,
+    };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
     const AUDIENCE: &str = "ramonda-gateway";
@@ -537,6 +595,20 @@ mod tests {
         .await
         .expect("gateway hung")
         .expect("response")
+    }
+
+    #[test]
+    fn jwks_body_over_one_megabyte_is_rejected() {
+        let mut body = vec![0_u8; JWKS_LIMIT];
+        assert!(!extend_limited(&mut body, b"x"));
+        let mut body = Vec::new();
+        assert!(extend_limited(&mut body, b"{}"));
+    }
+
+    #[test]
+    fn http_issuer_is_rejected() {
+        assert!(issuer_url("http://127.0.0.1:8443/realms/akwara").is_err());
+        assert!(issuer_url("https://keycloak.example/realms/akwara").is_ok());
     }
 
     #[tokio::test]

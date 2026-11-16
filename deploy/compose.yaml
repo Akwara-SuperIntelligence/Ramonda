@@ -20,10 +20,18 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_CERTIFICATE_FILE: /certs/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/tls.key
+      KC_HOSTNAME: keycloak
+      KC_HOSTNAME_PORT: "8443"
+      KC_HOSTNAME_STRICT: "false"
     volumes:
       - ./keycloak/akwara-cafe-realm.json:/opt/keycloak/data/import/akwara-cafe-realm.json:ro
+      - ./keycloak/dev-only-tls.crt:/certs/tls.crt:ro
+      - ./keycloak/dev-only-tls.key:/certs/tls.key:ro
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8443:8443"
     healthcheck:
       test:
         [
@@ -87,3 +95,16 @@ services:
       timeout: 10s
       retries: 40
       start_period: 300s
+
+  gateway:
+    image: ramonda-gateway:dev
+    profiles: ["gateway"]
+    environment:
+      KEYCLOAK_ISSUER: https://keycloak:8443/realms/akwara
+      GATEWAY_AUDIENCE: ramonda-gateway
+      GATEWAY_PUBLIC_URL: http://gateway:8080
+      GATEWAY_TLS_CA: /certs/ca.crt
+    volumes:
+      - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
+    depends_on:
+      - keycloak
