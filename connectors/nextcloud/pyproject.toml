@@ -1,0 +1,9 @@
+[project]
+name = "nextcloud"
+version = "0.0.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["mcp==2.3.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
