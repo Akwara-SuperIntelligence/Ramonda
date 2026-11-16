@@ -24,11 +24,15 @@ if orders:
 """
 
 
+def _week(day: date) -> int:
+    return int((day - START).days / 7)
+
+
 def days() -> list[tuple[date, int, int]]:
     rows: list[tuple[date, int, int]] = []
     day = START
     while day <= END:
-        week = (day - START).days // 7
+        week = _week(day)
         if day.weekday() >= 5:
             rows.append((day, WEEKEND_SOLD, WEEKEND_DELIVERED))
         else:
@@ -39,8 +43,8 @@ def days() -> list[tuple[date, int, int]]:
 
 
 def _check(rows: list[tuple[date, int, int]]) -> None:
-    early = [sold for day, sold, _delivered in rows if (day - rows[0][0]).days // 7 < 5 and day.weekday() < 5]
-    late = [sold for day, sold, _delivered in rows if (day - rows[0][0]).days // 7 >= 5 and day.weekday() < 5]
+    early = [sold for day, sold, _delivered in rows if _week(day) < 5 and day.weekday() < 5]
+    late = [sold for day, sold, _delivered in rows if _week(day) >= 5 and day.weekday() < 5]
     assert rows[0][0] == date(2026, 9, 22) and rows[-1][0] == END and rows[-1][0].weekday() == 0
     assert len(rows) == 56 and len(early) == 25 and len(late) == 15
     assert sum(early) == 74 * len(early) and sum(late) == 58 * len(late)
