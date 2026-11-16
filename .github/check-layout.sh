@@ -4,6 +4,7 @@ unset CDPATH
 cd -- "$(git rev-parse --show-toplevel)"
 exec python3 - "$@" <<'PY'
 import posixpath
+import re
 import subprocess
 import sys
 
@@ -13,6 +14,9 @@ PYTHON_EXCEPTION = "scripts/seed_akwara_cafe.py"
 TYPESCRIPT_HOME = "core/console/"
 CONFIG_ROOTS = ("packs/", "clients/")
 REFERENCES = ("packs/", "clients/")
+IMPORT_REF = re.compile(
+    r"""\b(?:import|from)\s+['\"]?[^'\"\n]*(?:packs|clients)(?:\b|/)"""
+)
 MANIFESTS = {
     "Cargo.toml",
     "Pipfile",
@@ -68,9 +72,17 @@ def check_config(files: list[str], errors: list[str]) -> None:
         if path.startswith(CONFIG_ROOTS) or not is_code(path):
             continue
         text = read(path)
-        for needle in REFERENCES:
-            if needle in text:
-                errors.append(f"{path}: refers to {needle}. Read the files as config.")
+        if posixpath.basename(path) in CODE_NAMES:
+            for needle in REFERENCES:
+                if needle in text:
+                    errors.append(
+                        f"{path}: refers to {needle}. Read the files as config."
+                    )
+            continue
+        if IMPORT_REF.search(text):
+            errors.append(
+                f"{path}: imports packs or clients. Read the files as config."
+            )
 
 
 def main() -> None:
