@@ -49,3 +49,41 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  odoo-db:
+    image: postgres:18.7
+    environment:
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: odoo
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  odoo:
+    image: odoo:20.0-20261112
+    entrypoint: ["bash", "/odoo-init.sh"]
+    environment:
+      HOST: odoo-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: odoo
+      PGPASSWORD: odoo
+      ODOO_DATABASE: akwara
+    volumes:
+      - ./odoo/init.sh:/odoo-init.sh:ro
+      - ./odoo/logins.json:/etc/odoo/logins.json:ro
+    ports:
+      - "127.0.0.1:8069:8069"
+    depends_on:
+      odoo-db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsS http://127.0.0.1:8069/web/health >/dev/null && psql -h "$$HOST" -U "$$USER" -d "$$ODOO_DATABASE" -tAc "SELECT count(*) FROM ir_module_module WHERE name IN ('point_of_sale','stock') AND state = 'installed'" | grep -qx 2
+      interval: 10s
+      timeout: 10s
+      retries: 40
+      start_period: 300s
