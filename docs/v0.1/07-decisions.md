@@ -195,3 +195,15 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **What it costs us.** A client on Infisical needs an adapter we have not built. The demo does not prove that adapter.
 
 **Where it's argued.** [Security model, Secrets](05-security-model.md#secrets). [Architecture, Deployment](04-architecture.md#deployment).
+
+## 17. The gateway and the relay are Rust. Connectors are Python. The console is TypeScript.
+
+**Decision.** The MCP gateway is Rust from day one, with no Python stopgap. Connectors are Python 3.12, typed, using the official MCP Python SDK. The outbox relay is Rust, in the same Cargo workspace as the gateway. It is part of the same write path, the Postgres outbox to Redpanda. The relay's language is the least load-bearing part of this decision and is open to revision. The admin console is TypeScript, built with Vite, with bun as the package manager. It is not Next.js.
+
+**Options turned down.** A Python gateway, rewritten in Rust later. Next.js for the console. One language for every component we build.
+
+**Why.** The gateway is the hot path every agent action goes through. It is a security boundary. It learns the caller from Keycloak, asks OpenFGA, reads the secret from OpenBao, and writes the outbox. Many MCP connections stay open on Streamable HTTP or SSE. Rust keeps tail latency predictable and memory low per connection. Memory safety and a strict type system suit a boundary component. There is no garbage collector. It ships as one small static binary for the per-client Docker Compose stamp. It is the component we would least want to rewrite under load. Connectors are numerous and change often. Odoo, Frappe HR, and similar systems are Python ecosystems, and a connector's speed is bounded by the upstream system. The console is thin. Next.js is too heavy for it. Ramonda is built by AI coding agents, not a human team. Rust's learning curve is not a constraint. The compiler is a safety net for agent-written code. Three languages, each with a narrow, clear job. This supersedes the pre-reset `LANGUAGE.md` ("Python decides, Rust delivers"), now only in the tag `archive/agent-service`. The principle is the same, applied to this design, where Rakazo replaces the old self-built Python agent service.
+
+**What it costs us.** Rust's MCP libraries are less mature than Python's or TypeScript's. Keycloak as the gateway's MCP OAuth server, with Rakazo v0.9.0, is specified and not demonstrated. See decision 8. The first gateway slice has to prove a Rust gateway speaking MCP to Rakazo with Keycloak OAuth before anything is built on it.
+
+**Where it's argued.** [Architecture, MCP gateway](04-architecture.md#mcp-gateway), [Connectors](04-architecture.md#connectors), [Events](04-architecture.md#events), and [App and admin console](04-architecture.md#app-and-admin-console). The first slice that has to show it is [build plan, slice 1](08-build-plan.md#1-amina-reads-westlands-sales).

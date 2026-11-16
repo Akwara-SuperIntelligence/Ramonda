@@ -41,7 +41,7 @@ Email is the readable copy the company keeps. The audit log is the source of tru
 
 **Role.** Staff chat, approve or decline, and receive push alerts in one web app and one mobile app (R19, R20). Client admins manage roles, connected systems, approval rules, the audit log, evals, and template marks in one console (R32). There is no per-client screen and no new business dashboard (R25, R32).
 
-**Chosen tech.** The staff app is Rakazo's own web and mobile clients, pinned to v0.9.0 and themed. We do not write a second chat app and we do not fork those clients. The admin console is a small web UI in our codebase. It edits configuration, shows the log, and can pause an agent. It does not chart sales. A human uses that pause. The watcher cannot.
+**Chosen tech.** The staff app is Rakazo's own web and mobile clients, pinned to v0.9.0 and themed. We do not write a second chat app and we do not fork those clients. The admin console is a small web UI in our codebase, written in TypeScript and built with Vite, with bun as the package manager. It is not Next.js. It edits configuration, shows the log, and can pause an agent. It does not chart sales. A human uses that pause. The watcher cannot.
 
 **Why.** Rakazo already ships the clients and the chat. A fork would be ours to rebase. Its approval cards are a convenience, not our record. The console exists because Rakazo has no place for our roles, connectors, audit, template marks, or the pause.
 
@@ -81,7 +81,7 @@ Approved map changes are config. They are not a code release (R34).
 
 **Role.** The only door from an agent to a client system. For a call a person asked for, it acts as that person (R8). For a call no person asked for, it acts as the standing agent's own principal. It checks OpenFGA (R7), enforces approval on a write to a client system (R12, R14), writes the audit log (R17), takes a secret from OpenBao or Infisical only for the duration of the call (R11), and calls the connector. When the call returns, the secret is dropped.
 
-**Chosen tech.** A service we build. Agents are configured with this URL and no other MCP server for client data.
+**Chosen tech.** A Rust service we build, from day one, with no Python stopgap. Agents are configured with this URL and no other MCP server for client data.
 
 **Why.** This is the enforcement point we can change without forking Rakazo. If the check lived in the prompt, a delivery note could talk the agent out of it (R37).
 
@@ -110,7 +110,7 @@ The gateway is a remote MCP server. Its OAuth authorization server is Keycloak, 
 
 **Role.** One MCP server per client system. It speaks that system's API. Headless browser automation is only for a system with no API and no event feed, and Akwara Cafe has neither gap, so the demo does not use it (R9).
 
-**Chosen tech.** Small MCP servers we build, one codebase per system, reused by the next client on that system (R10).
+**Chosen tech.** Small MCP servers we build in Python 3.12, typed, using the official MCP Python SDK, one codebase per system, reused by the next client on that system (R10).
 
 | System | Process | Connection |
 | --- | --- | --- |
@@ -158,7 +158,7 @@ The client system is not inside that transaction. The gateway stores an approved
 
 If the gateway stops after the connector has applied the write and before that commit, the relay has nothing to publish. On startup, and again on a short interval, the gateway itself picks up approved actions that are still pending. It does not touch an action that is still waiting for a person. For each pending approved action it calls the connector with the same idempotency key, or reads back the result the connector stored for that key. Only when that result says the write is in place does it commit the action and the outbox row. The relay then publishes the event as usual.
 
-**Chosen tech.** Postgres. A small relay we run, reading the outbox with `SKIP LOCKED`. Redpanda from the first deploy, including the Akwara Cafe demo (R15). The outbox table is the contract. Debezium can replace the relay later without a change to writers. We do not run Debezium in the demo. A Connect cluster is more process than one café needs, and the relay still meets R16.
+**Chosen tech.** Postgres. A small Rust relay we run, in the same Cargo workspace as the gateway, reading the outbox with `SKIP LOCKED`. The relay's language is the least load-bearing part of that choice and is open to revision. Redpanda from the first deploy, including the Akwara Cafe demo (R15). The outbox table is the contract. Debezium can replace the relay later without a change to writers. We do not run Debezium in the demo. A Connect cluster is more process than one café needs, and the relay still meets R16.
 
 **Why.** Two writes, one to Postgres and one to Redpanda, can lose one of them. One transaction plus a relay cannot commit the action and drop the event. Redpanda is fixed because more than one consumer needs the same facts: standing agents, schedules and outside webhooks, the audit stream, the watcher, and artifact lineage.
 
@@ -315,4 +315,4 @@ Nothing here is a speed target. The compose file is for correctness of the nine 
 
 Noticing, agent identity, and the watcher's limits are decided above. They will be recorded in `07-decisions.md`. Security consequences belong in `05-security-model.md`. One check is still open. Do not close it by assuming the demo already passed.
 
-**Keycloak as the gateway's OAuth server.** Rakazo documents generic OIDC for its own login, and separate OAuth for each remote MCP server. It does not name Keycloak. We still have to confirm, in the Akwara Cafe demo, that a staff member who signed in through Keycloak can consent once to the gateway and that the gateway then receives a token for that person. The same check applies to the ops agent's own client. Until that run works, do not fork Rakazo to bridge the gap.
+**Keycloak as the gateway's OAuth server.** Rakazo documents generic OIDC for its own login, and separate OAuth for each remote MCP server. It does not name Keycloak. We still have to confirm, in the Akwara Cafe demo, that a staff member who signed in through Keycloak can consent once to the gateway and that the gateway then receives a token for that person. The same check applies to the ops agent's own client. The gateway in that check is the Rust one ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). [Slice 1](08-build-plan.md#1-amina-reads-westlands-sales) has to show it before a later slice builds on the gateway. Until that run works, do not fork Rakazo to bridge the gap.

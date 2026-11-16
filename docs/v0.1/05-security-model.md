@@ -173,6 +173,6 @@ These are not decided. Do not fill them in by guessing.
 
 1. **Model provider and terms.** Which provider Akwara Cafe uses, and whether that provider may retain or train on prompts and tool results, is client config. It is unset.
 2. **Retention.** How long we keep audit rows, Rakazo transcripts, and files in Nextcloud is unset.
-3. **Keycloak and the gateway.** We still have to show, in the demo, that a staff member signed in through Keycloak can consent once to the gateway and that the gateway receives a token for that person. The same check applies to the ops agent's own client. Rakazo's docs do not name Keycloak. Do not fork Rakazo to skip the check.
+3. **Keycloak and the gateway.** We still have to show, in the demo, that a staff member signed in through Keycloak can consent once to the gateway and that the gateway receives a token for that person. The gateway in that check is Rust ([decision 17](07-decisions.md#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript)). The same check applies to the ops agent's own client. Rakazo's docs do not name Keycloak. Do not fork Rakazo to skip the check.
 4. **Volume encryption.** Encryption of disks is required. The mechanism is not chosen.
 5. **How long an operator may keep access** to a client's stamp is not chosen. The access is a named user in that client's identity provider, and it is audited. A timer is not built.
