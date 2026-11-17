@@ -16,7 +16,8 @@ use axum::{Json, Router};
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use rmcp::handler::server::tool::Extension;
-use rmcp::model::JsonObject;
+use rmcp::model::{CallToolRequestParams, JsonObject};
+use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
@@ -34,23 +35,30 @@ pub struct Config {
     check: TokenCheck,
     bind: String,
     database: tokio_postgres::Config,
+    secrets: OpenBao,
+    connector: String,
 }
 
 impl Config {
-    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, `DATABASE_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
+    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, `DATABASE_URL`, `OPENBAO_ADDR`, `OPENBAO_TOKEN`, `ODOO_MCP_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required variable is missing, the issuer is not https, the database URL is not postgres, or the CA file cannot be read.
+    /// Returns an error when a required variable is missing, the issuer is not https, the database URL is not postgres, the `OpenBao` address or token is rejected, the connector URL is not http or https, or the CA file cannot be read.
     pub fn from_env() -> Result<Self, String> {
         let issuer = issuer_url(&required("KEYCLOAK_ISSUER")?)?;
         let audience = required("GATEWAY_AUDIENCE")?;
         let public_url = http_url("GATEWAY_PUBLIC_URL", &required("GATEWAY_PUBLIC_URL")?)?;
         let ca_pem = tls_ca()?;
+        let secrets = OpenBao::new(&required("OPENBAO_ADDR")?, &required("OPENBAO_TOKEN")?)
+            .map_err(|error| error.to_string())?;
+        let connector = http_url("ODOO_MCP_URL", &required("ODOO_MCP_URL")?)?;
         Ok(Self {
             check: TokenCheck::remote(issuer, audience, public_url, ca_pem)?,
             bind: bind_address()?,
             database: database_url(&required("DATABASE_URL")?)?,
+            secrets,
+            connector,
         })
     }
 }
@@ -67,7 +75,11 @@ pub async fn serve(config: Config) -> std::io::Result<()> {
             .map_err(std::io::Error::other)?,
     );
     let listener = TcpListener::bind(&config.bind).await?;
-    axum::serve(listener, router(config.check, audit)).await
+    axum::serve(
+        listener,
+        router(config.check, audit, config.secrets, config.connector),
+    )
+    .await
 }
 
 #[derive(Clone, Serialize)]
@@ -365,11 +377,13 @@ fn bearer_token(header: &str) -> Option<&str> {
     Some(token)
 }
 
-fn router(check: TokenCheck, audit: Audit) -> Router {
+fn router(check: TokenCheck, audit: Audit, secrets: OpenBao, connector: String) -> Router {
     let mcp = StreamableHttpService::new(
         move || {
             Ok(Gateway {
                 audit: audit.clone(),
+                secrets: secrets.clone(),
+                connector: connector.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -500,6 +514,8 @@ impl Audit {
 #[derive(Clone)]
 struct Gateway {
     audit: Audit,
+    secrets: OpenBao,
+    connector: String,
 }
 
 #[tool_router]
@@ -522,6 +538,174 @@ impl Gateway {
             .map_err(|_| ErrorData::internal_error("audit write failed", None))?;
         Ok(caller.username.clone())
     }
+
+    #[tool(
+        description = "Read point-of-sale lines for one branch and date range. A user id in the arguments is ignored."
+    )]
+    async fn odoo_pos_sales(
+        &self,
+        Extension(parts): Extension<Parts>,
+        arguments: JsonObject,
+    ) -> Result<String, ErrorData> {
+        self.odoo_read(&parts, &arguments, "odoo_pos_sales", "pos_sales", "qty")
+            .await
+    }
+
+    #[tool(
+        description = "Read bakery delivery lines for one branch and date range. A user id in the arguments is ignored."
+    )]
+    async fn odoo_bakery_deliveries(
+        &self,
+        Extension(parts): Extension<Parts>,
+        arguments: JsonObject,
+    ) -> Result<String, ErrorData> {
+        self.odoo_read(
+            &parts,
+            &arguments,
+            "odoo_bakery_deliveries",
+            "bakery_deliveries",
+            "qty_delivered",
+        )
+        .await
+    }
+
+    async fn odoo_read(
+        &self,
+        parts: &Parts,
+        arguments: &JsonObject,
+        action: &str,
+        tool: &str,
+        qty_field: &str,
+    ) -> Result<String, ErrorData> {
+        let caller = parts
+            .extensions
+            .get::<Caller>()
+            .ok_or_else(|| ErrorData::internal_error("missing caller", None))?;
+        let Some(window) = read_window(arguments) else {
+            self.audit
+                .record(action, caller, rejected())
+                .await
+                .map_err(|_| ErrorData::internal_error("audit write failed", None))?;
+            return Err(ErrorData::invalid_params(
+                "branch, start, and end are required",
+                None,
+            ));
+        };
+        self.audit
+            .record(action, caller, window.arguments())
+            .await
+            .map_err(|_| ErrorData::internal_error("audit write failed", None))?;
+        let username = &caller.username;
+        let path = format!("odoo/{username}");
+        let login = self
+            .secrets
+            .read(&path, "login")
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let password = self
+            .secrets
+            .read(&path, "password")
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let body = self
+            .connector_rows(tool, &window, login.expose(), password.expose())
+            .await?;
+        let rows = project_rows(&body, qty_field)
+            .ok_or_else(|| ErrorData::internal_error("odoo read failed", None))?;
+        serde_json::to_string(&rows)
+            .map_err(|_| ErrorData::internal_error("odoo read failed", None))
+    }
+
+    async fn connector_rows(
+        &self,
+        tool: &str,
+        window: &Window,
+        login: &str,
+        credential: &str,
+    ) -> Result<serde_json::Value, ErrorData> {
+        let failed = || ErrorData::internal_error("odoo read failed", None);
+        let transport = StreamableHttpClientTransport::from_uri(self.connector.clone());
+        let client = rmcp::serve_client((), transport)
+            .await
+            .map_err(|_| failed())?;
+        let arguments = serde_json::json!({
+            "branch": &window.branch,
+            "start": &window.start,
+            "end": &window.end,
+            "login": login,
+            "credential": credential,
+        });
+        let Some(arguments) = arguments.as_object().cloned() else {
+            return Err(failed());
+        };
+        let result = client
+            .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
+            .await
+            .map_err(|_| failed())?;
+        if result.is_error == Some(true) {
+            return Err(failed());
+        }
+        result.structured_content.ok_or_else(failed)
+    }
+}
+
+struct Window {
+    branch: String,
+    start: String,
+    end: String,
+}
+
+impl Window {
+    fn arguments(&self) -> JsonObject {
+        serde_json::json!({
+            "branch": &self.branch,
+            "start": &self.start,
+            "end": &self.end,
+        })
+        .as_object()
+        .cloned()
+        .expect("window")
+    }
+}
+
+fn read_window(arguments: &JsonObject) -> Option<Window> {
+    let branch = arguments.get("branch")?.as_str()?;
+    let start = arguments.get("start")?.as_str()?;
+    let end = arguments.get("end")?.as_str()?;
+    if branch.is_empty() || branch.len() > 128 || branch.chars().any(char::is_control) {
+        return None;
+    }
+    let start = chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d").ok()?;
+    let end = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d").ok()?;
+    Some(Window {
+        branch: branch.to_owned(),
+        start: start.to_string(),
+        end: end.to_string(),
+    })
+}
+
+fn rejected() -> JsonObject {
+    serde_json::json!({"rejected": true})
+        .as_object()
+        .cloned()
+        .expect("rejected")
+}
+
+fn project_rows(value: &serde_json::Value, qty_field: &str) -> Option<Vec<serde_json::Value>> {
+    let list = value.get("result")?.as_array()?;
+    list.iter()
+        .map(|row| {
+            let row = row.as_object()?;
+            let date = row.get("date")?.as_str()?;
+            let product = row.get("product")?.as_str()?;
+            let qty = row.get(qty_field)?.as_f64()?;
+            Some(serde_json::json!({
+                "date": date,
+                "product": product,
+                qty_field: qty,
+            }))
+        })
+        .collect()
 }
 
 #[allow(clippy::unused_async_trait_impl)]
@@ -573,6 +757,7 @@ fn tls_ca() -> Result<Option<Vec<u8>>, String> {
 const SECRET_LIMIT: usize = 65_536;
 
 /// `OpenBao` key/value v2 reader. The value from [`OpenBao::read`] is not kept on this client.
+#[derive(Clone)]
 pub struct OpenBao {
     base: String,
     token: String,
@@ -802,14 +987,16 @@ mod tests {
     use jsonwebtoken::jwk::JwkSet;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use postgres_types::Json;
-    use rmcp::model::JsonObject;
+    use rmcp::model::{CallToolResult, JsonObject};
+    use rmcp::{ServerHandler, tool, tool_handler, tool_router};
     use rsa::RsaPrivateKey;
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     use tower::ServiceExt;
 
     use super::{
-        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, OpenBao, PostgresAudit, Queue,
-        SecretError, TokenCheck, audit, database_url, extend_limited, issuer_url, lock, router,
+        Audit, Caller, JWKS_LIMIT, LocalSessionManager, MCP_PATH, METADATA_PATH, OpenBao,
+        PostgresAudit, Queue, SecretError, StreamableHttpServerConfig, StreamableHttpService,
+        TokenCheck, audit, database_url, extend_limited, issuer_url, lock, router,
     };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
@@ -878,10 +1065,16 @@ mod tests {
     }
 
     fn app(audit: Audit) -> axum::Router {
+        odoo_app("http://127.0.0.1:9", "http://127.0.0.1:9/mcp", audit)
+    }
+
+    fn odoo_app(bao: &str, connector: &str, audit: Audit) -> axum::Router {
         router(
             TokenCheck::fixed(ISSUER, AUDIENCE, PUBLIC_URL, signing_key().set.clone())
                 .expect("check"),
             audit,
+            OpenBao::new(bao, "local-token").expect("bao"),
+            connector.to_owned(),
         )
     }
 
@@ -1375,5 +1568,287 @@ mod tests {
             let rendered = format!("{stored} {stored:?} {hidden} {hidden:?} {bao:?}");
             assert!(!rendered.contains(password));
         }
+    }
+
+    #[derive(Clone)]
+    struct Probe {
+        calls: Arc<Mutex<Vec<JsonObject>>>,
+    }
+
+    #[tool_router]
+    impl Probe {
+        #[tool(description = "Record one sales read.")]
+        fn pos_sales(&self, arguments: JsonObject) -> CallToolResult {
+            lock(&self.calls).push(arguments);
+            CallToolResult::structured(serde_json::json!({
+                "result": [{
+                    "date": "2026-09-22",
+                    "product": "Butter croissant",
+                    "qty": 74
+                }]
+            }))
+        }
+
+        #[tool(description = "Record one delivery read.")]
+        fn bakery_deliveries(&self, arguments: JsonObject) -> CallToolResult {
+            lock(&self.calls).push(arguments);
+            CallToolResult::structured(serde_json::json!({
+                "result": [{
+                    "date": "2026-09-22",
+                    "product": "Butter croissant",
+                    "qty_delivered": 80
+                }]
+            }))
+        }
+    }
+
+    #[allow(clippy::unused_async_trait_impl)]
+    #[tool_handler]
+    impl ServerHandler for Probe {}
+
+    async fn spawn_probe(calls: Arc<Mutex<Vec<JsonObject>>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let service = StreamableHttpService::new(
+            move || {
+                Ok(Probe {
+                    calls: Arc::clone(&calls),
+                })
+            },
+            Arc::new(LocalSessionManager::default()),
+            StreamableHttpServerConfig::default()
+                .with_legacy_session_mode(false)
+                .with_json_response(true),
+        );
+        let app = axum::Router::new().nest_service("/mcp", service);
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("probe");
+        });
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "probe did not listen"
+            );
+            tokio::task::yield_now().await;
+        }
+        format!("http://127.0.0.1:{port}/mcp")
+    }
+
+    fn odoo_body(name: &str, start: &str, secret: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{{"branch":"Westlands","start":"{start}","end":"2026-11-16","user_id":"brian","credential":"{secret}"}}}}}}"#
+        )
+    }
+
+    async fn post(app: axum::Router, token: &str, body: &str) -> axum::response::Response {
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(HOST, "127.0.0.1")
+                    .header(CONTENT_TYPE, "application/json")
+                    .header(ACCEPT, "application/json, text/event-stream")
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(body.to_owned()))
+                    .expect("request"),
+            ),
+        )
+        .await
+        .expect("gateway hung")
+        .expect("response")
+    }
+
+    fn assert_hidden(body: &str, secret: &str, needle: &str) {
+        assert!(body.contains(needle), "missing {needle}");
+        assert!(!body.contains(secret), "response leaked the credential");
+    }
+
+    fn assert_window(arguments: &JsonObject) {
+        assert_eq!(
+            serde_json::Value::Object(arguments.clone()),
+            serde_json::json!({
+                "branch": "Westlands",
+                "start": "2026-09-22",
+                "end": "2026-11-16"
+            })
+        );
+    }
+
+    async fn tool_text(
+        app: axum::Router,
+        token: &str,
+        name: &str,
+        start: &str,
+        secret: &str,
+    ) -> serde_json::Value {
+        json(post(app, token, &odoo_body(name, start, secret)).await).await
+    }
+
+    fn assert_rows(payload: &serde_json::Value, secret: &str, expected: &serde_json::Value) {
+        let text = payload["result"]["content"][0]["text"]
+            .as_str()
+            .expect("text");
+        assert_hidden(text, secret, "Butter croissant");
+        assert_eq!(
+            &serde_json::from_str::<serde_json::Value>(text).expect("rows"),
+            expected
+        );
+    }
+
+    fn assert_recorded(calls: &Mutex<Vec<JsonObject>>, secret: &str, count: usize) {
+        let recorded = lock(calls);
+        assert_eq!(recorded.len(), count);
+        for arguments in recorded.iter().skip(recorded.len().saturating_sub(2)) {
+            assert_eq!(
+                arguments.get("login").and_then(|value| value.as_str()),
+                Some("amina")
+            );
+            assert!(arguments.get("user_id").is_none(), "forwarded user_id");
+            let credential = arguments
+                .get("credential")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            assert!(credential == secret, "credential mismatch");
+        }
+    }
+
+    fn assert_chain(rows: &Mutex<Vec<audit::Row>>, actions: &[&str]) {
+        let stored = lock(rows);
+        assert_eq!(stored.len(), actions.len());
+        assert_eq!(audit::verify(&stored), Ok(()));
+        for (row, action) in stored.iter().zip(actions) {
+            assert_eq!(row.entry.action, *action);
+            assert_eq!(row.entry.actor_subject, "subject-1");
+            assert_eq!(row.entry.actor_username, "amina");
+            assert_window(&row.entry.arguments);
+        }
+    }
+
+    #[tokio::test]
+    async fn odoo_tools_use_the_token_user_and_audit_the_read() {
+        let secret = "probe-secret-9f3c2a";
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let connector = spawn_probe(Arc::clone(&calls)).await;
+        let bao = serve(vec![
+            http_response(500, &format!(r#"{{"errors":["{secret}"]}}"#)),
+            http_response(200, r#"{"data":{"data":{"login":"amina"}}}"#),
+            http_response(
+                200,
+                &format!(r#"{{"data":{{"data":{{"password":"{secret}"}}}}}}"#),
+            ),
+            http_response(200, r#"{"data":{"data":{"login":"amina"}}}"#),
+            http_response(
+                200,
+                &format!(r#"{{"data":{{"data":{{"password":"{secret}"}}}}}}"#),
+            ),
+        ]);
+        let rows = Arc::default();
+        let app = odoo_app(
+            &format!("http://127.0.0.1:{bao}"),
+            &connector,
+            Audit::Memory(Arc::clone(&rows)),
+        );
+        let signed_in = token(ISSUER, AUDIENCE, "amina");
+        let denied = tool_text(
+            app.clone(),
+            &signed_in,
+            "odoo_pos_sales",
+            "2026-09-22",
+            secret,
+        )
+        .await;
+        assert_hidden(&denied.to_string(), secret, "secret store unavailable");
+        assert!(lock(&calls).is_empty(), "connector ran without a secret");
+        let sales = tool_text(
+            app.clone(),
+            &signed_in,
+            "odoo_pos_sales",
+            "2026-09-22",
+            secret,
+        )
+        .await;
+        assert_rows(
+            &sales,
+            secret,
+            &serde_json::json!([{
+                "date": "2026-09-22",
+                "product": "Butter croissant",
+                "qty": 74.0
+            }]),
+        );
+        let deliveries = tool_text(
+            app.clone(),
+            &signed_in,
+            "odoo_bakery_deliveries",
+            "2026-09-22",
+            secret,
+        )
+        .await;
+        assert_rows(
+            &deliveries,
+            secret,
+            &serde_json::json!([{
+                "date": "2026-09-22",
+                "product": "Butter croissant",
+                "qty_delivered": 80.0
+            }]),
+        );
+        assert_recorded(&calls, secret, 2);
+        assert_chain(
+            &rows,
+            &["odoo_pos_sales", "odoo_pos_sales", "odoo_bakery_deliveries"],
+        );
+        assert_rejections(app, &connector, &signed_in, secret, &calls, &rows).await;
+    }
+
+    async fn assert_rejections(
+        app: axum::Router,
+        connector: &str,
+        signed_in: &str,
+        secret: &str,
+        calls: &Mutex<Vec<JsonObject>>,
+        rows: &Mutex<Vec<audit::Row>>,
+    ) {
+        let rejected = tool_text(app, signed_in, "odoo_pos_sales", "not-a-date", secret).await;
+        let rejected_body = rejected.to_string();
+        assert_hidden(
+            &rejected_body,
+            secret,
+            "branch, start, and end are required",
+        );
+        assert!(!rejected_body.contains("not-a-date"), "echoed the argument");
+        assert_eq!(lock(calls).len(), 2, "connector ran on a bad date");
+        {
+            let stored = lock(rows);
+            assert_eq!(stored.len(), 4);
+            assert_eq!(audit::verify(&stored), Ok(()));
+            assert_eq!(
+                serde_json::Value::Object(stored[3].entry.arguments.clone()),
+                serde_json::json!({"rejected": true})
+            );
+        }
+        let failed = tool_text(
+            odoo_app("http://127.0.0.1:9", connector, Audit::Failing),
+            signed_in,
+            "odoo_pos_sales",
+            "2026-09-22",
+            secret,
+        )
+        .await;
+        let failed_body = failed.to_string();
+        assert_hidden(&failed_body, secret, "audit write failed");
+        assert!(!failed_body.contains("amina"), "error named the caller");
+        assert_eq!(lock(calls).len(), 2, "connector ran without an audit row");
     }
 }

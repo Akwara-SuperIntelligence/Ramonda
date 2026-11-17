@@ -12,6 +12,9 @@ COPY core/outbox outbox
 RUN cargo build --release --locked -p gateway
 
 FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --user-group --home-dir / --no-create-home --shell /usr/sbin/nologin gateway
 COPY --from=build /src/target/release/gateway /usr/local/bin/gateway
 USER gateway
