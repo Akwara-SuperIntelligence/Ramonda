@@ -1,3 +1,6 @@
+#[path = "audit.hot.rs"]
+mod audit;
+
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -13,6 +16,7 @@ use axum::{Json, Router};
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet, KeyAlgorithm};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use rmcp::handler::server::tool::Extension;
+use rmcp::model::JsonObject;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
@@ -29,14 +33,15 @@ const JWKS_LIMIT: usize = 1_048_576;
 pub struct Config {
     check: TokenCheck,
     bind: String,
+    database: tokio_postgres::Config,
 }
 
 impl Config {
-    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
+    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, `DATABASE_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required variable is missing, the issuer is not https, or the CA file cannot be read.
+    /// Returns an error when a required variable is missing, the issuer is not https, the database URL is not postgres, or the CA file cannot be read.
     pub fn from_env() -> Result<Self, String> {
         let issuer = issuer_url(&required("KEYCLOAK_ISSUER")?)?;
         let audience = required("GATEWAY_AUDIENCE")?;
@@ -45,18 +50,23 @@ impl Config {
         Ok(Self {
             check: TokenCheck::remote(issuer, audience, public_url, ca_pem)?,
             bind: bind_address()?,
+            database: database_url(&required("DATABASE_URL")?)?,
         })
     }
 }
 
-/// Listens for Streamable HTTP MCP calls.
+/// Connects to Postgres, then listens for Streamable HTTP MCP calls.
 ///
 /// # Errors
 ///
-/// Returns an error when the socket cannot bind or the server stops.
+/// Returns an error when Postgres refuses the connection, the socket cannot bind, or the server stops.
 pub async fn serve(config: Config) -> std::io::Result<()> {
+    let client = audit::connect(&config.database)
+        .await
+        .map_err(std::io::Error::other)?;
     let listener = TcpListener::bind(&config.bind).await?;
-    axum::serve(listener, router(config.check)).await
+    let audit = Audit::Postgres(Arc::new(tokio::sync::Mutex::new(client)));
+    axum::serve(listener, router(config.check, audit)).await
 }
 
 #[derive(Clone, Serialize)]
@@ -67,6 +77,7 @@ struct ResourceMetadata {
 
 #[derive(Clone)]
 struct Caller {
+    subject: String,
     username: String,
 }
 
@@ -336,6 +347,7 @@ fn verify(issuer: &str, audience: &str, keys: &JwkSet, token: &str) -> Option<Ca
         return None;
     }
     Some(Caller {
+        subject: data.claims.sub,
         username: data.claims.preferred_username,
     })
 }
@@ -352,9 +364,13 @@ fn bearer_token(header: &str) -> Option<&str> {
     Some(token)
 }
 
-fn router(check: TokenCheck) -> Router {
+fn router(check: TokenCheck, audit: Audit) -> Router {
     let mcp = StreamableHttpService::new(
-        || Ok(Gateway),
+        move || {
+            Ok(Gateway {
+                audit: audit.clone(),
+            })
+        },
         Arc::new(LocalSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
@@ -419,20 +435,67 @@ async fn require_token(
 }
 
 #[derive(Clone)]
-struct Gateway;
+enum Audit {
+    Postgres(Arc<tokio::sync::Mutex<tokio_postgres::Client>>),
+    #[cfg(test)]
+    Memory(Arc<Mutex<Vec<audit::Row>>>),
+    #[cfg(test)]
+    Failing,
+}
+
+impl Audit {
+    async fn record(
+        &self,
+        action: &str,
+        caller: &Caller,
+        arguments: JsonObject,
+    ) -> Result<(), audit::Failure> {
+        let entry = audit::Entry {
+            action: action.to_owned(),
+            actor_subject: caller.subject.clone(),
+            actor_username: caller.username.clone(),
+            arguments,
+            recorded_at: audit::now(),
+        };
+        match self {
+            Self::Postgres(client) => audit::insert(&mut *client.lock().await, entry).await,
+            #[cfg(test)]
+            Self::Memory(rows) => {
+                let mut rows = lock(rows);
+                let row = entry.link(rows.last().map_or(audit::GENESIS, |row| &row.hash))?;
+                rows.push(row);
+                Ok(())
+            }
+            #[cfg(test)]
+            Self::Failing => Err("insert failed".into()),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Gateway {
+    audit: Audit,
+}
 
 #[tool_router]
 impl Gateway {
-    #[allow(clippy::unused_self)]
     #[tool(
         description = "Return the signed-in username. A user or tenant id in the arguments is ignored."
     )]
-    fn whoami(&self, Extension(parts): Extension<Parts>) -> Result<String, ErrorData> {
-        parts
+    async fn whoami(
+        &self,
+        Extension(parts): Extension<Parts>,
+        arguments: JsonObject,
+    ) -> Result<String, ErrorData> {
+        let caller = parts
             .extensions
             .get::<Caller>()
-            .map(|caller| caller.username.clone())
-            .ok_or_else(|| ErrorData::internal_error("missing caller", None))
+            .ok_or_else(|| ErrorData::internal_error("missing caller", None))?;
+        self.audit
+            .record("whoami", caller, arguments)
+            .await
+            .map_err(|_| ErrorData::internal_error("audit write failed", None))?;
+        Ok(caller.username.clone())
     }
 }
 
@@ -461,6 +524,15 @@ fn issuer_url(raw: &str) -> Result<String, String> {
         return Err("KEYCLOAK_ISSUER must be https".to_owned());
     }
     Ok(url)
+}
+
+fn database_url(raw: &str) -> Result<tokio_postgres::Config, String> {
+    let url = raw.trim();
+    let message = "DATABASE_URL must be a postgres:// or postgresql:// URL".to_owned();
+    if !url.starts_with("postgres://") && !url.starts_with("postgresql://") {
+        return Err(message);
+    }
+    url.parse().map_err(|_| message)
 }
 
 fn tls_ca() -> Result<Option<Vec<u8>>, String> {
@@ -501,13 +573,15 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use jsonwebtoken::jwk::JwkSet;
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+    use postgres_types::Json;
+    use rmcp::model::JsonObject;
     use rsa::RsaPrivateKey;
     use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
     use tower::ServiceExt;
 
     use super::{
-        JWKS_LIMIT, MCP_PATH, METADATA_PATH, Queue, TokenCheck, extend_limited, issuer_url, lock,
-        router,
+        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, Queue, TokenCheck, audit, database_url,
+        extend_limited, issuer_url, lock, router,
     };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
@@ -575,14 +649,19 @@ mod tests {
         .expect("token")
     }
 
-    fn app() -> axum::Router {
+    fn app(audit: Audit) -> axum::Router {
         router(
             TokenCheck::fixed(ISSUER, AUDIENCE, PUBLIC_URL, signing_key().set.clone())
                 .expect("check"),
+            audit,
         )
     }
 
-    async fn call(token: Option<&str>) -> axum::response::Response {
+    fn memory() -> Audit {
+        Audit::Memory(Arc::default())
+    }
+
+    async fn call(audit: Audit, token: Option<&str>) -> axum::response::Response {
         let mut builder = Request::builder()
             .method("POST")
             .uri("/mcp")
@@ -594,11 +673,34 @@ mod tests {
         }
         tokio::time::timeout(
             Duration::from_secs(5),
-            app().oneshot(builder.body(Body::from(WHOAMI)).expect("request")),
+            app(audit).oneshot(builder.body(Body::from(WHOAMI)).expect("request")),
         )
         .await
         .expect("gateway hung")
         .expect("response")
+    }
+
+    async fn json(response: axum::response::Response) -> serde_json::Value {
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!("{error}: {}", String::from_utf8_lossy(&bytes));
+        })
+    }
+
+    fn assert_amina_recorded(rows: &[audit::Row]) {
+        assert_eq!(rows.len(), 1);
+        let entry = &rows[0].entry;
+        assert_eq!(entry.action, "whoami");
+        assert_eq!(entry.actor_subject, "subject-1");
+        assert_eq!(entry.actor_username, "amina");
+        assert_eq!(
+            serde_json::Value::Object(entry.arguments.clone()),
+            serde_json::json!({"user_id": "brian", "tenant_id": "other"})
+        );
+        assert_eq!(audit::verify(rows), Ok(()));
     }
 
     #[test]
@@ -615,16 +717,24 @@ mod tests {
         assert!(issuer_url("https://keycloak.example/realms/akwara").is_ok());
     }
 
+    #[test]
+    fn non_postgres_database_url_is_rejected() {
+        assert!(database_url("mysql://ramonda_app@postgres/ramonda").is_err());
+        assert!(database_url("host=postgres user=ramonda_app").is_err());
+        assert!(database_url("postgres://ramonda_app:ramonda_app@postgres:5432/ramonda").is_ok());
+        assert!(database_url("postgresql://ramonda_app@postgres/ramonda").is_ok());
+    }
+
     #[tokio::test]
     async fn missing_token_points_at_keycloak() {
-        let response = call(None).await;
+        let response = call(memory(), None).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let challenge = response.headers().get(WWW_AUTHENTICATE).expect("challenge");
         assert_eq!(
             challenge.to_str().expect("header"),
             format!("Bearer resource_metadata=\"{PUBLIC_URL}{METADATA_PATH}\"")
         );
-        let response = app()
+        let response = app(memory())
             .oneshot(
                 Request::builder()
                     .uri(METADATA_PATH)
@@ -655,7 +765,10 @@ mod tests {
             not_before(),
         ];
         for token in cases {
-            assert_eq!(call(Some(&token)).await.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                call(memory(), Some(&token)).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
         }
     }
 
@@ -703,14 +816,156 @@ mod tests {
 
     #[tokio::test]
     async fn whoami_uses_the_token_not_the_argument() {
-        let response = call(Some(&token(ISSUER, AUDIENCE, "amina"))).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let bytes = to_bytes(response.into_body(), usize::MAX)
+        let rows = Arc::default();
+        let response = call(
+            Audit::Memory(Arc::clone(&rows)),
+            Some(&token(ISSUER, AUDIENCE, "amina")),
+        )
+        .await;
+        assert_eq!(
+            json(response).await["result"]["content"][0]["text"],
+            "amina"
+        );
+        assert_amina_recorded(&lock(&rows));
+    }
+
+    #[tokio::test]
+    async fn whoami_fails_without_the_username_when_the_audit_insert_fails() {
+        let response = call(Audit::Failing, Some(&token(ISSUER, AUDIENCE, "amina"))).await;
+        let payload = json(response).await;
+        assert_eq!(payload["error"]["code"], -32603);
+        assert!(!payload.to_string().contains("amina"), "{payload}");
+    }
+
+    async fn postgres(url: &str) -> tokio_postgres::Client {
+        audit::connect(&url.parse().expect("url"))
             .await
-            .expect("body");
-        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-            panic!("{error}: {}", String::from_utf8_lossy(&bytes));
-        });
-        assert_eq!(payload["result"]["content"][0]["text"], "amina");
+            .expect("postgres")
+    }
+
+    fn writer(client: tokio_postgres::Client) -> Audit {
+        Audit::Postgres(Arc::new(tokio::sync::Mutex::new(client)))
+    }
+
+    async fn stored(owner: &tokio_postgres::Client) -> Vec<audit::Row> {
+        owner
+            .query(
+                "SELECT recorded_at, actor_subject, actor_username, action, arguments, \
+                 previous_hash, hash FROM audit_log ORDER BY id",
+                &[],
+            )
+            .await
+            .expect("rows")
+            .iter()
+            .map(|row| audit::Row {
+                entry: audit::Entry {
+                    recorded_at: row.get(0),
+                    actor_subject: row.get(1),
+                    actor_username: row.get(2),
+                    action: row.get(3),
+                    arguments: row.get::<_, Json<JsonObject>>(4).0,
+                },
+                previous_hash: row.get(5),
+                hash: row.get(6),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "set RAMONDA_TEST_DATABASE_URL to the owner role"]
+    async fn postgres_log_is_append_only_and_chained() {
+        let owner_url =
+            std::env::var("RAMONDA_TEST_DATABASE_URL").expect("RAMONDA_TEST_DATABASE_URL");
+        let app_url = "postgres://ramonda_app:ramonda_app@127.0.0.1:5432/ramonda";
+        let owner = postgres(&owner_url).await;
+        let migration = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../deploy/postgres/001_audit_log.sql"),
+        )
+        .expect("migration");
+        owner.batch_execute(&migration).await.expect("migrate");
+        owner
+            .batch_execute("TRUNCATE audit_log")
+            .await
+            .expect("truncate");
+
+        let audit = writer(postgres(app_url).await);
+        let response = call(audit.clone(), Some(&token(ISSUER, AUDIENCE, "amina"))).await;
+        assert_eq!(
+            json(response).await["result"]["content"][0]["text"],
+            "amina"
+        );
+        let rows = stored(&owner).await;
+        assert_amina_recorded(&rows);
+
+        let app = postgres(app_url).await;
+        app.batch_execute("SELECT count(*) FROM audit_log")
+            .await
+            .expect("app role selects");
+        for statement in [
+            "UPDATE audit_log SET actor_username = 'brian'",
+            "DELETE FROM audit_log",
+            "TRUNCATE audit_log",
+        ] {
+            let error = app.batch_execute(statement).await.expect_err(statement);
+            assert_eq!(
+                error.code().map(tokio_postgres::error::SqlState::code),
+                Some("42501"),
+                "{error}"
+            );
+        }
+        assert_eq!(stored(&owner).await, rows);
+
+        owner
+            .batch_execute("UPDATE audit_log SET actor_username = 'brian'")
+            .await
+            .expect("owner update");
+        assert_eq!(audit::verify(&stored(&owner).await), Err(0));
+
+        owner
+            .batch_execute("TRUNCATE audit_log")
+            .await
+            .expect("truncate");
+        let caller = Caller {
+            subject: "subject-1".to_owned(),
+            username: "amina".to_owned(),
+        };
+        for _ in 0..2 {
+            audit
+                .record("whoami", &caller, JsonObject::new())
+                .await
+                .expect("record");
+        }
+        owner
+            .batch_execute("DELETE FROM audit_log WHERE id = (SELECT min(id) FROM audit_log)")
+            .await
+            .expect("owner delete");
+        let rows = stored(&owner).await;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(audit::verify(&rows), Err(0));
+
+        owner
+            .batch_execute("TRUNCATE audit_log")
+            .await
+            .expect("truncate");
+        let writers = [audit, writer(postgres(app_url).await)];
+        let tasks: Vec<_> = (0..8)
+            .map(|index| {
+                let audit = writers[index % 2].clone();
+                let caller = caller.clone();
+                tokio::spawn(async move {
+                    audit
+                        .record("whoami", &caller, JsonObject::new())
+                        .await
+                        .map_err(|error| error.to_string())
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.expect("join").expect("record");
+        }
+        let rows = stored(&owner).await;
+        assert_eq!(rows.len(), 8);
+        assert_eq!(audit::verify(&rows), Ok(()));
     }
 }
