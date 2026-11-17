@@ -1873,10 +1873,9 @@ mod tests {
             .expect("bind");
         let port = listener.local_addr().expect("addr").port();
         tokio::spawn(async move {
-            loop {
-                if listener.accept().await.is_err() {
-                    break;
-                }
+            let mut open = Vec::new();
+            while let Ok((stream, _)) = listener.accept().await {
+                open.push(stream);
             }
         });
         let gateway = super::Gateway {
@@ -1889,20 +1888,18 @@ mod tests {
             start: "2026-09-22".to_owned(),
             end: "2026-11-16".to_owned(),
         };
+        let deadline = Duration::from_millis(200);
         let started = tokio::time::Instant::now();
-        let error = gateway
-            .connector_rows(
-                "pos_sales",
-                &window,
-                "amina",
-                secret,
-                Duration::from_millis(200),
-            )
-            .await
-            .expect_err("hung");
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            gateway.connector_rows("pos_sales", &window, "amina", secret, deadline),
+        )
+        .await
+        .expect("deadline did not fire")
+        .expect_err("hung");
         assert!(
-            started.elapsed() < Duration::from_secs(2),
-            "deadline did not fire"
+            started.elapsed() >= deadline,
+            "returned before the deadline"
         );
         let rendered = format!("{error}");
         assert!(
