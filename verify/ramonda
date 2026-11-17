@@ -1,2 +1,576 @@
 #!/bin/sh
-exit 0
+set -eu
+cd -- "$(dirname -- "$0")/.."
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 - "$@" <<'PY'
+import hashlib
+import html as html_lib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.parse
+from pathlib import Path
+
+ROOT = Path.cwd()
+GENESIS = "0" * 64
+FIRST = "dc31db64976a7032a269167fa2e95fe00a11067ed0959dec63213c2074bfdf06"
+SECOND = "0dca4c020679143765e04b90f28d2265631fb16ea2d97d8dfc10319d3219348f"
+KEYCLOAK = os.environ.get("KEYCLOAK_URL", "https://keycloak:8443")
+GATEWAY = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8080")
+DATABASE = os.environ.get("DATABASE_URL", "postgres://ramonda:ramonda@127.0.0.1:5432/ramonda")
+WEB = os.environ.get("RAKAZO_WEB", "http://127.0.0.1:5173")
+CA = ROOT / "deploy/keycloak/dev-only-ca.crt"
+
+
+def digest(previous, body):
+    return hashlib.sha256((previous + body).encode()).hexdigest()
+
+
+def canonical(action, subject, username, arguments, recorded_at):
+    if isinstance(arguments, str):
+        arguments = json.loads(arguments)
+    body = {
+        "action": action,
+        "actor_subject": subject,
+        "actor_username": username,
+        "arguments": arguments,
+        "recorded_at": recorded_at,
+    }
+    return json.dumps(body, separators=(",", ":"), sort_keys=True)
+
+
+def self_check():
+    first_body = canonical(
+        "whoami",
+        "subject-1",
+        "amina",
+        {"user_id": "brian", "tenant_id": "other"},
+        "2026-11-17T08:59:00.000000000Z",
+    )
+    if first_body != (
+        '{"action":"whoami","actor_subject":"subject-1","actor_username":"amina",'
+        '"arguments":{"tenant_id":"other","user_id":"brian"},'
+        '"recorded_at":"2026-11-17T08:59:00.000000000Z"}'
+    ):
+        raise SystemExit("audit payload drifted")
+    first = digest(GENESIS, first_body)
+    second = digest(
+        first,
+        canonical(
+            "whoami",
+            "subject-1",
+            "amina",
+            {"user_id": "brian", "tenant_id": "other"},
+            "2026-11-17T08:59:01.000000000Z",
+        ),
+    )
+    if (first, second) != (FIRST, SECOND):
+        raise SystemExit("audit hash drifted")
+
+
+def chain(rows):
+    previous = GENESIS
+    for row in rows:
+        body = canonical(
+            row["action"],
+            row["actor_subject"],
+            row["actor_username"],
+            row["arguments"],
+            row["recorded_at"],
+        )
+        expect = digest(previous, body)
+        if row["previous_hash"] != previous or row["hash"] != expect:
+            raise SystemExit(f"audit chain broke at {row['id']}")
+        previous = row["hash"]
+
+
+def psql(sql):
+    if shutil.which("psql"):
+        cmd = ["psql", DATABASE, "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql]
+    else:
+        cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(ROOT / "deploy/compose.yaml"),
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            "ramonda",
+            "-d",
+            "ramonda",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-tA",
+            "-c",
+            sql,
+        ]
+    try:
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE).strip()
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "postgres unreachable").strip()
+        raise SystemExit(detail.splitlines()[-1]) from error
+
+
+def audit_rows():
+    raw = psql(
+        "SELECT coalesce(json_agg(row_to_json(q) ORDER BY q.id)::text, '[]') "
+        "FROM (SELECT id, recorded_at, actor_subject, actor_username, action, "
+        "arguments, previous_hash, hash FROM audit_log) q"
+    )
+    rows = json.loads(raw or "[]")
+    return sorted(rows, key=lambda row: row["id"])
+
+
+def curl(jar, method, url, body=None, headers=None, form=False, max_time=30):
+    cmd = [
+        "curl",
+        "-sS",
+        "-D",
+        "-",
+        "--max-time",
+        str(max_time),
+        "--max-redirs",
+        "0",
+        "--cacert",
+        str(CA),
+        "--resolve",
+        "keycloak:8443:127.0.0.1",
+        "-c",
+        jar,
+        "-b",
+        jar,
+        "-X",
+        method,
+        "-w",
+        "\n%{http_code}",
+    ]
+    for key, value in (headers or {}).items():
+        cmd.extend(["-H", f"{key}: {value}"])
+    if body is not None:
+        if form:
+            cmd.extend(
+                [
+                    "-H",
+                    "content-type: application/x-www-form-urlencoded",
+                    "--data",
+                    urllib.parse.urlencode(body),
+                ]
+            )
+        else:
+            cmd.extend(["-H", "content-type: application/json", "--data", json.dumps(body)])
+    cmd.append(url)
+    try:
+        raw = subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "request failed").strip()
+        raise SystemExit(detail.splitlines()[-1]) from error
+    head, _, status = raw.rpartition("\n")
+    header_text, _, payload = head.partition("\r\n\r\n")
+    if not payload and "\n\n" in head:
+        header_text, _, payload = head.partition("\n\n")
+    headers_out = {}
+    for line in header_text.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers_out[key.strip().lower()] = value.strip()
+    return int(status.strip() or "0"), headers_out, payload
+
+
+def parse_rpc(payload):
+    text = payload.strip()
+    if text.startswith("{") or text.startswith("["):
+        return json.loads(text)
+    data = None
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            chunk = line[5:].strip()
+            if chunk and chunk != "[DONE]":
+                data = chunk
+    if data is None:
+        raise SystemExit(text[:300] or "empty gateway response")
+    return json.loads(data)
+
+
+def token(username, password):
+    jar = tempfile.mktemp(prefix=f"gateway-{username}-")
+    Path(jar).write_text("")
+    status, _, body = curl(
+        jar,
+        "POST",
+        f"{KEYCLOAK}/realms/akwara-cafe/protocol/openid-connect/token",
+        {
+            "grant_type": "password",
+            "client_id": "gateway",
+            "client_secret": "gateway",
+            "username": username,
+            "password": password,
+        },
+        form=True,
+    )
+    parsed = json.loads(body) if body.startswith("{") else {}
+    access = parsed.get("access_token")
+    if status != 200 or not access:
+        raise SystemExit(f"token {username} status {status}")
+    return access
+
+
+def tool_call(access, name, arguments):
+    jar = tempfile.mktemp(prefix="gateway-mcp-")
+    Path(jar).write_text("")
+    status, _, body = curl(
+        jar,
+        "POST",
+        f"{GATEWAY}/mcp",
+        {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
+        {
+            "authorization": f"Bearer {access}",
+            "accept": "application/json, text/event-stream",
+            "content-type": "application/json",
+        },
+        max_time=120,
+    )
+    parsed = parse_rpc(body)
+    if status >= 400 or parsed.get("error"):
+        raise SystemExit(f"{name} status {status}")
+    result = parsed.get("result") or {}
+    if result.get("isError"):
+        raise SystemExit(f"{name} failed")
+    content = result.get("content") or []
+    if not content or "text" not in content[0]:
+        raise SystemExit(f"{name} returned no text")
+    return content[0]["text"]
+
+
+def whole(value, label):
+    number = float(value)
+    if not number.is_integer():
+        raise SystemExit(f"{label} {value}")
+    return int(number)
+
+
+def by_day(rows, field):
+    found = {}
+    for row in rows:
+        if row.get("product") != "Butter croissant":
+            continue
+        day = row.get("date")
+        if day in found:
+            raise SystemExit(f"duplicate {field} {day}")
+        found[day] = whole(row[field], field)
+    return found
+
+
+def load_seed():
+    spec = importlib.util.spec_from_file_location("seed", ROOT / "scripts/seed_akwara_cafe.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def quote_figures(seed, sales, deliveries):
+    rows = seed.days()
+    early = [sold for day, sold, _delivered in rows if seed._week(day) < 5 and day.weekday() < 5]
+    late = [sold for day, sold, _delivered in rows if seed._week(day) >= 5 and day.weekday() < 5]
+    weekday = {delivered for day, _sold, delivered in rows if day.weekday() < 5}
+    if len(weekday) != 1:
+        raise SystemExit(f"weekday deliveries {sorted(weekday)}")
+    sold_total = sum(sold for _day, sold, _delivered in rows)
+    delivered_total = sum(delivered for _day, _sold, delivered in rows)
+    for day, sold, delivered in rows:
+        key = day.isoformat()
+        if sales.get(key) != sold or deliveries.get(key) != delivered:
+            raise SystemExit(f"seed mismatch {key}")
+    if set(sales) != {day.isoformat() for day, _sold, _delivered in rows}:
+        raise SystemExit("sales days != seed")
+    if set(deliveries) != {day.isoformat() for day, _sold, _delivered in rows}:
+        raise SystemExit("delivery days != seed")
+    early_mean = sum(early) // len(early)
+    late_mean = sum(late) // len(late)
+    print(
+        f"{seed.BRANCH} {seed.START.isoformat()} {seed.END.isoformat()} "
+        f"sold {sold_total} delivered {delivered_total} "
+        f"weekday {next(iter(weekday))} early {early_mean} late {late_mean}"
+    )
+    return sold_total, delivered_total
+
+
+def assert_amina(rows, snapshot, seed):
+    fresh = [row for row in rows if row["id"] > snapshot]
+    actions = [row["action"] for row in fresh]
+    if actions != ["odoo_pos_sales", "odoo_bakery_deliveries"]:
+        raise SystemExit(f"new audit rows {actions}")
+    window = {
+        "branch": seed.BRANCH,
+        "start": seed.START.isoformat(),
+        "end": seed.END.isoformat(),
+    }
+    for row in fresh:
+        if row["actor_username"] != "amina" or row["arguments"] != window:
+            raise SystemExit(f"audit row {row['id']} is not Amina's read")
+        print(f"audit amina {row['action']}")
+
+
+def form_fields(page):
+    match = re.search(r'<form[^>]*action="([^"]+)"', page, re.I)
+    if not match:
+        return None, {}
+    fields = {}
+    for tag in re.findall(r"<input\b[^>]*>", page, re.I):
+        name = re.search(r'name="([^"]+)"', tag)
+        if not name:
+            continue
+        value = re.search(r'value="([^"]*)"', tag)
+        fields[html_lib.unescape(name.group(1))] = html_lib.unescape(value.group(1)) if value else ""
+    return html_lib.unescape(match.group(1)), fields
+
+
+def walk(jar, url, username, password, stop_path):
+    for _ in range(15):
+        status, headers, payload = curl(jar, "GET", url, headers={"accept": "text/html,application/json"})
+        location = headers.get("location")
+        if location:
+            url = urllib.parse.urljoin(url, location)
+            if stop_path in url:
+                return url
+            continue
+        if stop_path in url:
+            return url
+        action, fields = form_fields(payload)
+        if not action:
+            raise SystemExit(f"no form at status {status}")
+        target = urllib.parse.urljoin(url, action)
+        if "username" in fields:
+            fields["username"] = username
+            fields["password"] = password
+        else:
+            fields["accept"] = fields.get("accept") or "Yes"
+        status, headers, payload = curl(jar, "POST", target, fields, form=True)
+        location = headers.get("location")
+        if not location:
+            raise SystemExit(f"form post stayed status {status}")
+        url = urllib.parse.urljoin(target, location)
+        if stop_path in url:
+            return url
+    raise SystemExit("too many redirects")
+
+
+def rpc(jar, path, payload):
+    status, _, body = curl(
+        jar,
+        "POST",
+        f"{WEB}/rpc/{path}",
+        {"json": payload},
+        {"origin": WEB, "accept": "application/json"},
+    )
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise SystemExit(f"{path} status {status}") from error
+    if status >= 400 or "json" not in parsed:
+        raise SystemExit(f"{path} status {status}")
+    return parsed["json"]
+
+
+def sign_in(username, password):
+    jar = tempfile.mktemp(prefix=f"rakazo-{username}-")
+    Path(jar).write_text("")
+    status, _, body = curl(
+        jar,
+        "POST",
+        f"{WEB}/api/auth/sign-in/social",
+        {
+            "provider": "oidc",
+            "callbackURL": f"{WEB}/",
+            "errorCallbackURL": f"{WEB}/sign-in",
+            "disableRedirect": True,
+        },
+        {"origin": WEB, "accept": "application/json"},
+    )
+    if status != 200:
+        raise SystemExit(f"sign-in start {username} status {status}")
+    callback = walk(jar, json.loads(body)["url"], username, password, "/api/auth/callback/oidc")
+    if "error=" in callback:
+        raise SystemExit(f"oidc callback {username} refused")
+    status, headers, body = curl(jar, "GET", callback, headers={"origin": WEB, "accept": "text/html"})
+    if "error=" in (headers.get("location") or ""):
+        raise SystemExit(f"oidc callback {username} refused")
+    if headers.get("location"):
+        status, _, body = curl(
+            jar,
+            "GET",
+            urllib.parse.urljoin(callback, headers["location"]),
+            headers={"origin": WEB},
+        )
+    if status >= 400:
+        raise SystemExit(f"oidc callback {username} status {status}")
+    return jar
+
+
+def connect(jar, server_id, username, password):
+    begun = rpc(jar, "mcp/oauth/begin", {"serverId": server_id})
+    if begun.get("status") == "already_connected":
+        return
+    if begun.get("status") != "authorization_required":
+        raise SystemExit(f"oauth begin {username} {begun.get('status')}")
+    callback = walk(jar, begun["authorizationUrl"], username, password, "/mcp/oauth/callback")
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(callback).query)
+    code = (query.get("code") or [""])[0]
+    state = (query.get("state") or [""])[0]
+    if not code or not state:
+        raise SystemExit(f"oauth callback missing code for {username}")
+    rpc(jar, "mcp/oauth/complete", {"sessionId": begun["sessionId"], "code": code, "state": state})
+
+
+def reply_since_last_user(snapshot):
+    messages = snapshot.get("messages") or []
+    last_user = -1
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            last_user = index
+    parts = []
+    for message in messages[last_user + 1 :]:
+        if message.get("role") != "bot":
+            continue
+        for block in message.get("blocks") or []:
+            if block.get("kind") == "text" and block.get("text"):
+                parts.append(block["text"].strip())
+    return parts[-1] if parts else ""
+
+
+def quotes(answer, numbers):
+    return all(re.search(rf"(?<!\d){number}(?!\d)", answer) for number in numbers)
+
+
+def rakazo_answer(seed, sold_total, delivered_total):
+    jar = sign_in("amina", "amina")
+    servers = rpc(jar, "mcp/servers/list", {})
+    if not isinstance(servers, list):
+        raise SystemExit("mcp server list")
+    if not servers:
+        config = json.loads((ROOT / "clients/akwara-cafe/gateway-mcp.json").read_text())
+        rpc(jar, "mcp/servers/create", config)
+        servers = rpc(jar, "mcp/servers/list", {})
+    gateway = [row for row in servers if row.get("endpoint") == "http://gateway:8080/mcp"]
+    if len(servers) != 1 or not gateway:
+        raise SystemExit("rakazo mcp servers are not only the gateway")
+    server_id = gateway[0]["id"]
+    connect(jar, server_id, "amina", "amina")
+    rpc(jar, "mcp/servers/agents", {"id": server_id, "allBots": True, "botIds": []})
+    rpc(jar, "autoReview/set", {"mode": "never"})
+    start = seed.START.isoformat()
+    end = seed.END.isoformat()
+    rows = seed.days()
+    first_sold, first_delivered = rows[0][1], rows[0][2]
+    last_sold = rows[-1][1]
+    bots = rpc(jar, "bots/list", {})
+    for row in bots:
+        if row.get("name") == "Akwara check 1":
+            rpc(jar, "bots/remove", {"botId": row["id"], "deleteMemories": True})
+    bot = rpc(
+        jar,
+        "bots/create",
+        {
+            "name": "Akwara check 1",
+            "spawnKey": "check-1",
+            "instructions": (
+                "You have no computer. Never call the shell. When asked about Westlands "
+                "croissant waste, call odoo_pos_sales and odoo_bakery_deliveries once each "
+                f"with branch Westlands, start {start}, end {end}. Reply with one sentence "
+                f"that copies the Butter croissant qty and qty_delivered for {start} and the "
+                f"qty for {end} from those rows."
+            ),
+        },
+    )
+    question = (
+        "Why is croissant waste up at Westlands? Call odoo_pos_sales and "
+        f"odoo_bakery_deliveries for branch Westlands from {start} to {end}. "
+        f"Do not use the shell. Quote the Butter croissant qty and qty_delivered on {start} "
+        f"and the qty on {end}."
+    )
+    sent = rpc(
+        jar,
+        "threads/send",
+        {"botId": bot["id"], "text": question, "clientNonce": f"check-1-{int(time.time())}"},
+    )
+    run_id = sent["runId"]
+    deadline = time.time() + 300
+    wanted = (str(first_sold), str(first_delivered), str(last_sold))
+    snapshot = {}
+    while time.time() < deadline:
+        snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
+        answer = reply_since_last_user(snapshot)
+        if quotes(answer, wanted) or quotes(answer, (str(sold_total), str(delivered_total))):
+            print(f"rakazo: {' '.join(answer.split())}")
+            return
+        active = (rpc(jar, "runs/list", {"filter": "active"}).get("runs")) or []
+        row = next((item for item in active if item.get("runId") == run_id), None)
+        if row and row.get("status") in ("failed", "cancelled"):
+            raise SystemExit(f"rakazo run {row.get('status')}")
+        recent = (rpc(jar, "runs/list", {"filter": "recent"}).get("runs")) or []
+        done = next((item for item in recent if item.get("runId") == run_id), None)
+        if done and done.get("status") in ("failed", "cancelled"):
+            raise SystemExit(f"rakazo run {done.get('status')}")
+        if done and done.get("status") == "completed":
+            flat = " ".join(answer.split())
+            raise SystemExit(f"rakazo reply missed the seeded figures: {flat[:240]}")
+        time.sleep(3)
+    raise SystemExit("rakazo reply missed the seeded figures")
+
+
+def check():
+    seed = load_seed()
+    access = token("amina", "amina")
+    snapshot = int(psql("SELECT coalesce(max(id), 0) FROM audit_log"))
+    window = {
+        "branch": seed.BRANCH,
+        "start": seed.START.isoformat(),
+        "end": seed.END.isoformat(),
+        "user_id": "brian",
+    }
+    sales = by_day(json.loads(tool_call(access, "odoo_pos_sales", window)), "qty")
+    deliveries = by_day(json.loads(tool_call(access, "odoo_bakery_deliveries", window)), "qty_delivered")
+    sold_total, delivered_total = quote_figures(seed, sales, deliveries)
+    rows = audit_rows()
+    chain(rows)
+    assert_amina(rows, snapshot, seed)
+    print("chain ok")
+    brian = token("brian", "brian")
+    who = tool_call(
+        brian,
+        "whoami",
+        {"user_id": "amina", "tenant_id": "other"},
+    )
+    if who != "brian":
+        raise SystemExit(f"whoami brian: {who}")
+    print("whoami brian: brian")
+    chain(audit_rows())
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        rakazo_answer(seed, sold_total, delivered_total)
+        return
+    print("DEEPSEEK_API_KEY is unset")
+
+
+def main():
+    self_check()
+    args = sys.argv[1:]
+    if not args:
+        return 0
+    if args != ["check", "1"]:
+        print("unknown command", file=sys.stderr)
+        return 1
+    check()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
