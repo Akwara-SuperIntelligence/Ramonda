@@ -597,22 +597,17 @@ impl Gateway {
             .map_err(|_| ErrorData::internal_error("audit write failed", None))?;
         let username = &caller.username;
         let path = format!("odoo/{username}");
-        let login = self
+        let odoo = self
             .secrets
-            .read(&path, "login")
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let password = self
-            .secrets
-            .read(&path, "password")
+            .read_odoo(&path)
             .await
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         let body = self
             .connector_rows(
                 tool,
                 &window,
-                login.expose(),
-                password.expose(),
+                odoo.login.expose(),
+                odoo.password.expose(),
                 Duration::from_secs(30),
             )
             .await?;
@@ -780,6 +775,12 @@ pub struct OpenBao {
 /// One field of one named secret. Formatting it does not reveal the value.
 pub struct Secret(String);
 
+#[derive(Debug)]
+struct OdooSecret {
+    login: Secret,
+    password: Secret,
+}
+
 /// Why a secret read did not return a value. The text is fixed and has no response body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecretError {
@@ -826,7 +827,22 @@ impl OpenBao {
     /// Returns [`SecretError::Denied`], [`SecretError::Missing`], [`SecretError::Malformed`], or
     /// [`SecretError::Unavailable`] for the store's answer.
     pub async fn read(&self, name: &str, field: &str) -> Result<Secret, SecretError> {
-        if !valid_secret_name(name) || !valid_field(field) {
+        if !valid_field(field) {
+            return Err(SecretError::Rejected);
+        }
+        field_secret(&self.fetch(name).await?, field)
+    }
+
+    async fn read_odoo(&self, name: &str) -> Result<OdooSecret, SecretError> {
+        let value = self.fetch(name).await?;
+        Ok(OdooSecret {
+            login: field_secret(&value, "login")?,
+            password: field_secret(&value, "password")?,
+        })
+    }
+
+    async fn fetch(&self, name: &str) -> Result<serde_json::Value, SecretError> {
+        if !valid_secret_name(name) {
             return Err(SecretError::Rejected);
         }
         let url = format!("{}/v1/secret/data/{name}", self.base);
@@ -844,16 +860,18 @@ impl OpenBao {
             _ => return Err(SecretError::Unavailable),
         }
         let body = limited_body(response, SECRET_LIMIT).await?;
-        let value: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|_| SecretError::Malformed)?;
-        let text = value
-            .get("data")
-            .and_then(|data| data.get("data"))
-            .and_then(|data| data.get(field))
-            .and_then(serde_json::Value::as_str)
-            .ok_or(SecretError::Malformed)?;
-        Ok(Secret(text.to_owned()))
+        serde_json::from_slice(&body).map_err(|_| SecretError::Malformed)
     }
+}
+
+fn field_secret(value: &serde_json::Value, field: &str) -> Result<Secret, SecretError> {
+    value
+        .get("data")
+        .and_then(|data| data.get("data"))
+        .and_then(|data| data.get(field))
+        .and_then(serde_json::Value::as_str)
+        .map(|text| Secret(text.to_owned()))
+        .ok_or(SecretError::Malformed)
 }
 
 impl Secret {
@@ -1462,6 +1480,21 @@ mod tests {
         port
     }
 
+    fn serve_recorded(response: Vec<u8>) -> (u16, Arc<Mutex<Vec<u8>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let record = Arc::clone(&seen);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut buf = [0_u8; 4096];
+            let n = std::io::Read::read(&mut sock, &mut buf).unwrap_or(0);
+            record.lock().expect("record").extend_from_slice(&buf[..n]);
+            let _ = std::io::Write::write_all(&mut sock, &response);
+        });
+        (port, seen)
+    }
+
     fn rendered_error(error: SecretError) -> String {
         format!("{error} {error:?}")
     }
@@ -1499,6 +1532,61 @@ mod tests {
         let missing_field = bao.read("odoo/amina", "password").await.expect_err("field");
         assert_eq!(missing_field, SecretError::Malformed);
         assert!(!rendered_error(missing_field).contains(secret));
+    }
+
+    #[tokio::test]
+    async fn one_read_returns_both_odoo_fields() {
+        let login = "probe-login-9f3c2a";
+        let password = "probe-password-9f3c2a";
+        let both =
+            format!(r#"{{"data":{{"data":{{"login":"{login}","password":"{password}"}}}}}}"#);
+        let (port, seen) = serve_recorded(http_response(200, &both));
+        let bao = OpenBao::new(
+            &format!("http://127.0.0.1:{port}"),
+            "token-do-not-leak-77ab",
+        )
+        .expect("client");
+        let got = bao.read_odoo("odoo/amina").await.expect("both");
+        assert_eq!(got.login.expose(), login);
+        assert_eq!(got.password.expose(), password);
+        let rendered = format!(
+            "{} {:?} {} {:?}",
+            got.login, got.login, got.password, got.password
+        );
+        assert!(!rendered.contains(login));
+        assert!(!rendered.contains(password));
+        assert_one_get(&seen, "odoo/amina");
+
+        let missing_password = format!(r#"{{"data":{{"data":{{"login":"{login}"}}}}}}"#);
+        assert_missing_odoo_field(&missing_password, login).await;
+        let missing_login = format!(r#"{{"data":{{"data":{{"password":"{password}"}}}}}}"#);
+        assert_missing_odoo_field(&missing_login, password).await;
+
+        let closed = OpenBao::new("http://127.0.0.1:9", "local-token").expect("client");
+        assert_eq!(
+            closed
+                .read_odoo("odoo/../amina")
+                .await
+                .expect_err("rejected"),
+            SecretError::Rejected
+        );
+    }
+
+    async fn assert_missing_odoo_field(body: &str, present: &str) {
+        let (port, seen) = serve_recorded(http_response(200, body));
+        let bao = OpenBao::new(&format!("http://127.0.0.1:{port}"), "local-token").expect("client");
+        let error = bao.read_odoo("odoo/amina").await.expect_err("field");
+        assert_eq!(error, SecretError::Malformed);
+        assert!(!rendered_error(error).contains(present));
+        assert_one_get(&seen, "odoo/amina");
+    }
+
+    fn assert_one_get(seen: &Mutex<Vec<u8>>, name: &str) {
+        let request = String::from_utf8(seen.lock().expect("record").clone()).expect("utf8");
+        let gets = request.matches("GET ").count();
+        let path = request.starts_with(&format!("GET /v1/secret/data/{name} "));
+        assert_eq!(gets, 1);
+        assert!(path);
     }
 
     #[tokio::test]
@@ -1753,18 +1841,11 @@ mod tests {
         let secret = "probe-secret-9f3c2a";
         let calls = Arc::new(Mutex::new(Vec::new()));
         let connector = spawn_probe(Arc::clone(&calls)).await;
+        let both = format!(r#"{{"data":{{"data":{{"login":"amina","password":"{secret}"}}}}}}"#);
         let bao = serve(vec![
             http_response(500, &format!(r#"{{"errors":["{secret}"]}}"#)),
-            http_response(200, r#"{"data":{"data":{"login":"amina"}}}"#),
-            http_response(
-                200,
-                &format!(r#"{{"data":{{"data":{{"password":"{secret}"}}}}}}"#),
-            ),
-            http_response(200, r#"{"data":{"data":{"login":"amina"}}}"#),
-            http_response(
-                200,
-                &format!(r#"{{"data":{{"data":{{"password":"{secret}"}}}}}}"#),
-            ),
+            http_response(200, &both),
+            http_response(200, &both),
         ]);
         let rows = Arc::default();
         let app = odoo_app(
