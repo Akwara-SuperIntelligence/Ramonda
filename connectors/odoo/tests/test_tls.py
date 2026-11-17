@@ -38,7 +38,7 @@ def assert_rejected(
 ) -> None:
     try:
         body = _handshake(port, ca, cert, key)
-    except ssl.SSLError:
+    except (ssl.SSLError, BrokenPipeError, ConnectionResetError):
         return
     if body.startswith(b"HTTP/"):
         raise AssertionError(f"accepted a {who}")

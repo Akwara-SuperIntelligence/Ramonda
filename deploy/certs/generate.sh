@@ -2,10 +2,20 @@
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${1:-"$here/out"}
-if [ -f "$out/ca.crt" ]; then
+files="ca.crt ca.key keycloak.crt keycloak.key odoo-connector.crt odoo-connector.key gateway.crt gateway.key"
+complete=1
+for name in $files; do
+  if [ ! -f "$out/$name" ]; then
+    complete=0
+  fi
+done
+if [ "$complete" -eq 1 ]; then
   exit 0
 fi
 mkdir -p "$out"
+for name in $files ca.srl openssl.err; do
+  rm -f "$out/$name"
+done
 # shortcut: mounted dev keys are mode 644 because the image uids are not the host user; a non-local deploy mounts secrets as the service user
 ext=$(mktemp)
 trap 'rm -f "$ext"' EXIT
