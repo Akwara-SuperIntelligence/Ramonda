@@ -1,5 +1,7 @@
 #!/bin/sh
 # Drive Amina and Brian through Rakazo v0.9.0, Keycloak, and the gateway.
+# Curl uses --resolve for keycloak and deploy/keycloak/dev-only-ca.crt.
+# A browser needs `127.0.0.1 keycloak` in the hosts file and trust of that CA.
 # A chat turn that calls whoami needs the deployment model key. This script
 # stops and names that variable when it is unset.
 set -eu
@@ -29,12 +31,14 @@ WHOAMI = {
 }
 
 
-def curl(jar, method, url, body=None, headers=None, form=False):
+def curl(jar, method, url, body=None, headers=None, form=False, max_time=30):
     cmd = [
         "curl",
         "-sS",
         "-D",
         "-",
+        "--max-time",
+        str(max_time),
         "--max-redirs",
         "0",
         "--cacert",
@@ -77,7 +81,8 @@ def wait(url, seconds=240):
     last = ""
     while time.time() < deadline:
         try:
-            status, _, payload = curl(jar, "GET", url)
+            remaining = max(1, int(deadline - time.time()))
+            status, _, payload = curl(jar, "GET", url, max_time=min(10, remaining))
             if status and status < 500:
                 return
             last = payload[:200]
@@ -261,7 +266,10 @@ def main():
             raise SystemExit(f"{username} mcp servers are not only the gateway: {servers}")
         connect(jar, servers[0]["id"], username, password)
         tested = rpc(jar, "mcp/servers/test", {"id": servers[0]["id"]})
-        print(f"mcp test {username}: {json.dumps(tested.get('health'))} oauth={tested.get('oauthStatus')}")
+        health = tested.get("health") or {}
+        print(f"mcp test {username}: {json.dumps(health)} oauth={tested.get('oauthStatus')}")
+        if health.get("status") != "ok" or health.get("toolCount") != 1:
+            raise SystemExit(f"mcp test {username} failed: {json.dumps(health)}")
     if os.environ.get("OPENROUTER_API_KEY"):
         print("OPENROUTER_API_KEY is set on this host. Pass it through to rakazo-api and rakazo-worker, then send a chat turn. This script stops before that turn.")
         return 2

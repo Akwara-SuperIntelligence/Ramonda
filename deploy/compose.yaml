@@ -28,6 +28,7 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.2
+    # Import skips an existing realm. No data volume, so recreate the container to apply realm changes.
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -38,6 +39,7 @@ services:
       KC_HTTP_MANAGEMENT_SCHEME: http
       KC_HTTPS_CERTIFICATE_FILE: /certs/tls.crt
       KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/tls.key
+      # A browser needs `127.0.0.1 keycloak` in the host hosts file and trust of deploy/keycloak/dev-only-ca.crt. The issuer host stays keycloak so tokens match KEYCLOAK_ISSUER.
       KC_HOSTNAME: keycloak
       KC_HOSTNAME_PORT: "8443"
       KC_HOSTNAME_STRICT: "false"
