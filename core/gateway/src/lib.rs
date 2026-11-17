@@ -570,6 +570,209 @@ fn tls_ca() -> Result<Option<Vec<u8>>, String> {
     }
 }
 
+const SECRET_LIMIT: usize = 65_536;
+
+/// `OpenBao` key/value v2 reader. The value from [`OpenBao::read`] is not kept on this client.
+pub struct OpenBao {
+    base: String,
+    token: String,
+    client: reqwest::Client,
+}
+
+/// One field of one named secret. Formatting it does not reveal the value.
+pub struct Secret(String);
+
+/// Why a secret read did not return a value. The text is fixed and has no response body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SecretError {
+    Rejected,
+    Unavailable,
+    Denied,
+    Missing,
+    Malformed,
+}
+
+impl OpenBao {
+    /// Builds a client for `base_url` (for example `http://127.0.0.1:8200`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretError::Rejected`] when the address is not a bare http or https origin or
+    /// the token cannot be sent as a header.
+    /// Returns [`SecretError::Unavailable`] when the HTTP client cannot be built.
+    #[must_use = "the client is the only way to read a secret"]
+    pub fn new(base_url: &str, token: &str) -> Result<Self, SecretError> {
+        let base = base_url.trim().trim_end_matches('/');
+        if !valid_openbao_base(base) || !valid_token(token) {
+            return Err(SecretError::Rejected);
+        }
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| SecretError::Unavailable)?;
+        Ok(Self {
+            base: base.to_owned(),
+            token: token.to_owned(),
+            client,
+        })
+    }
+
+    /// Reads one field of the named key/value v2 secret.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretError::Rejected`] when `name` is not `/`-separated segments of ASCII
+    /// letters, digits, `-`, or `_`, when `field` is not one such segment, or when either is
+    /// too long.
+    /// Returns [`SecretError::Denied`], [`SecretError::Missing`], [`SecretError::Malformed`], or
+    /// [`SecretError::Unavailable`] for the store's answer.
+    pub async fn read(&self, name: &str, field: &str) -> Result<Secret, SecretError> {
+        if !valid_secret_name(name) || !valid_field(field) {
+            return Err(SecretError::Rejected);
+        }
+        let url = format!("{}/v1/secret/data/{name}", self.base);
+        let response = self
+            .client
+            .get(url)
+            .header("X-Vault-Token", &self.token)
+            .send()
+            .await
+            .map_err(|_| SecretError::Unavailable)?;
+        match response.status().as_u16() {
+            401 | 403 => return Err(SecretError::Denied),
+            404 => return Err(SecretError::Missing),
+            200 => {}
+            _ => return Err(SecretError::Unavailable),
+        }
+        let body = limited_body(response, SECRET_LIMIT).await?;
+        let value: serde_json::Value =
+            serde_json::from_slice(&body).map_err(|_| SecretError::Malformed)?;
+        let text = value
+            .get("data")
+            .and_then(|data| data.get("data"))
+            .and_then(|data| data.get(field))
+            .and_then(serde_json::Value::as_str)
+            .ok_or(SecretError::Malformed)?;
+        Ok(Secret(text.to_owned()))
+    }
+}
+
+impl Secret {
+    /// The secret value.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for OpenBao {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OpenBao")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_tuple("Secret").finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Display for Secret {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Secret")
+    }
+}
+
+impl std::fmt::Display for SecretError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Rejected => "secret request rejected",
+            Self::Unavailable => "secret store unavailable",
+            Self::Denied => "secret read denied",
+            Self::Missing => "secret missing",
+            Self::Malformed => "secret response malformed",
+        })
+    }
+}
+
+impl std::error::Error for SecretError {}
+
+fn valid_openbao_base(base: &str) -> bool {
+    let Some(rest) = base
+        .strip_prefix("https://")
+        .or_else(|| base.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    !rest.is_empty()
+        && !rest.contains('/')
+        && !rest.contains('?')
+        && !rest.contains('#')
+        && !rest.contains('@')
+        && rest.bytes().all(|byte| byte.is_ascii_graphic())
+}
+
+fn valid_token(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 512
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_graphic() && *byte != b'"' && *byte != b'\\')
+}
+
+fn valid_secret_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 256
+        && !name.starts_with('/')
+        && !name.ends_with('/')
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && part != "."
+                && part != ".."
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+}
+
+fn valid_field(field: &str) -> bool {
+    !field.is_empty()
+        && field.len() <= 128
+        && field
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+async fn limited_body(
+    mut response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, SecretError> {
+    if response
+        .content_length()
+        .is_some_and(|len| len > u64::try_from(limit).unwrap_or(u64::MAX))
+    {
+        return Err(SecretError::Malformed);
+    }
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len().saturating_add(chunk.len()) > limit {
+                    return Err(SecretError::Malformed);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Ok(body),
+            Err(_) => return Err(SecretError::Unavailable),
+        }
+    }
+}
+
 fn http_url(name: &str, raw: &str) -> Result<String, String> {
     let url = raw.trim().trim_end_matches('/');
     let message = format!("{name} must be an http or https URL");
@@ -605,8 +808,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, PostgresAudit, Queue, TokenCheck,
-        audit, database_url, extend_limited, issuer_url, lock, router,
+        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, OpenBao, PostgresAudit, Queue,
+        SecretError, TokenCheck, audit, database_url, extend_limited, issuer_url, lock, router,
     };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
@@ -1029,5 +1232,148 @@ mod tests {
         let rows = stored(&owner).await;
         assert_eq!(rows.len(), 9);
         assert_eq!(audit::verify(&rows), Ok(()));
+    }
+
+    fn http_response(status: u16, body: &str) -> Vec<u8> {
+        format!(
+            "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .into_bytes()
+    }
+
+    fn serve(responses: Vec<Vec<u8>>) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            for response in responses {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut buf = [0_u8; 4096];
+                let _ = std::io::Read::read(&mut sock, &mut buf);
+                let _ = std::io::Write::write_all(&mut sock, &response);
+            }
+        });
+        port
+    }
+
+    fn rendered_error(error: SecretError) -> String {
+        format!("{error} {error:?}")
+    }
+
+    #[tokio::test]
+    async fn read_returns_the_field_and_hides_it() {
+        let secret = "probe-secret-9f3c2a";
+        let token = "token-do-not-leak-77ab";
+        let leaked = format!(r#"{{"errors":["{secret} {token}"]}}"#);
+        let good = format!(r#"{{"data":{{"data":{{"password":"{secret}"}}}}}}"#);
+        let changed = format!(r#"{{"data":{{"data":{{"password":"{secret}-next"}}}}}}"#);
+        let port = serve(vec![
+            http_response(500, &leaked),
+            http_response(200, &good),
+            http_response(200, &changed),
+            http_response(
+                200,
+                &format!(r#"{{"data":{{"data":{{"login":"{secret}"}}}}}}"#),
+            ),
+        ]);
+        let bao = OpenBao::new(&format!("http://127.0.0.1:{port}"), token).expect("client");
+        let error = bao
+            .read("odoo/amina", "password")
+            .await
+            .expect_err("status");
+        assert_eq!(error, SecretError::Unavailable);
+        assert!(!rendered_error(error).contains(secret));
+        assert!(!rendered_error(error).contains(token));
+        let first = bao.read("odoo/amina", "password").await.expect("read");
+        assert_eq!(first.expose(), secret);
+        assert!(!format!("{first} {first:?} {bao:?}").contains(secret));
+        assert!(!format!("{bao:?}").contains(token));
+        let second = bao.read("odoo/amina", "password").await.expect("reread");
+        assert_eq!(second.expose(), format!("{secret}-next"));
+        let missing_field = bao.read("odoo/amina", "password").await.expect_err("field");
+        assert_eq!(missing_field, SecretError::Malformed);
+        assert!(!rendered_error(missing_field).contains(secret));
+    }
+
+    #[tokio::test]
+    async fn rejected_names_do_not_call_openbao() {
+        let bao = OpenBao::new("http://127.0.0.1:9", "local-token").expect("client");
+        let doubled = ["odoo", "", "amina"].join("/");
+        for (name, field) in [
+            ("../sys/policy", "password"),
+            ("odoo/../amina", "password"),
+            (doubled.as_str(), "password"),
+            ("odoo/amina", "pass/word"),
+            ("", "password"),
+            ("odoo/amina\r\nX-Other: 1", "password"),
+        ] {
+            assert_eq!(
+                bao.read(name, field).await.expect_err("rejected"),
+                SecretError::Rejected
+            );
+        }
+        assert!(OpenBao::new("http://127.0.0.1:8200", "bad token").is_err());
+        assert!(OpenBao::new("file:///tmp/openbao", "token").is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "needs compose OpenBao with the demo Odoo logins"]
+    async fn reads_known_secret_from_openbao() {
+        let base =
+            std::env::var("OPENBAO_ADDR").unwrap_or_else(|_| "http://127.0.0.1:8200".to_owned());
+        let token = std::env::var("OPENBAO_TOKEN").expect("OPENBAO_TOKEN");
+        let bao = OpenBao::new(&base, &token).expect("client");
+        let probe = "probe-openbao-9f3c2a";
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client");
+        let planted = client
+            .post(format!("{base}/v1/secret/data/ramonda/probe"))
+            .header("X-Vault-Token", &token)
+            .header("Content-Type", "application/json")
+            .body(format!(r#"{{"data":{{"value":"{probe}"}}}}"#))
+            .send()
+            .await
+            .expect("plant");
+        assert!(planted.status().is_success());
+        let got = bao.read("ramonda/probe", "value").await.expect("probe");
+        assert_eq!(got.expose(), probe);
+        assert!(!format!("{got} {got:?}").contains(probe));
+        let missing = bao
+            .read("ramonda/missing", "value")
+            .await
+            .expect_err("missing");
+        assert_eq!(missing, SecretError::Missing);
+        assert!(!rendered_error(missing).contains(probe));
+        let logins = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../deploy/odoo/logins.json"
+        ))
+        .expect("logins");
+        let rows: Vec<serde_json::Value> = serde_json::from_str(&logins).expect("json");
+        assert!(rows.len() >= 2);
+        for row in rows {
+            let login = row["login"].as_str().expect("login");
+            let password = row["password"].as_str().expect("password");
+            let stored = bao
+                .read(&format!("odoo/{login}"), "password")
+                .await
+                .expect("seeded");
+            assert_eq!(stored.expose(), password);
+            let login_field = bao
+                .read(&format!("odoo/{login}"), "login")
+                .await
+                .expect("login field");
+            assert_eq!(login_field.expose(), login);
+            let hidden = bao
+                .read(&format!("odoo/{login}"), "absent")
+                .await
+                .expect_err("absent field");
+            assert_eq!(hidden, SecretError::Malformed);
+            let rendered = format!("{stored} {stored:?} {hidden} {hidden:?} {bao:?}");
+            assert!(!rendered.contains(password));
+        }
     }
 }
