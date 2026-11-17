@@ -4,7 +4,7 @@ Local Compose uses a dev CA. Anything else supplies certificates you operate. Th
 
 ## Local Compose
 
-Run `deploy/certs/generate.sh` before `docker compose up`. The script writes `deploy/certs/out/` and does nothing if `ca.crt` is already there. Delete that directory to replace the dev certificates. They expire after 825 days. The private keys stay in that directory. Do not commit them.
+Run `deploy/certs/generate.sh` before `docker compose up`. The script writes `deploy/certs/out/` and does nothing when the CA and the service certificates are already there. A partial directory is deleted and written again. Delete that directory to replace the dev certificates. They expire after 825 days. The private keys stay in that directory. Do not commit them.
 
 `deploy/compose.yaml` sets `RAMONDA_STAMP=local`. That value is the laptop stamp. It trusts the dev CA, whose subject is `CN=Ramonda Dev CA`.
 
