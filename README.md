@@ -14,3 +14,7 @@ Ramonda is a governed AI workforce for organisations: always-on agents that work
 | [06-ontology.md](docs/v0.1/06-ontology.md) | written |
 | [07-decisions.md](docs/v0.1/07-decisions.md) | written |
 | [08-build-plan.md](docs/v0.1/08-build-plan.md) | written |
+
+## Local stamp
+
+Run `deploy/certs/generate.sh` before Compose. It writes the dev CA and the service certificates under `deploy/certs/out/`. Those private keys are not committed. `deploy/certs/README.md` lists the files a non-local stamp supplies instead. Leave `RAMONDA_STAMP` unset there. The gateway refuses to start when that stamp would use the dev CA or plain HTTP for the connector or OpenBao.

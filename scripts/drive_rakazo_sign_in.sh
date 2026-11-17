@@ -1,7 +1,6 @@
 #!/bin/sh
 # Drive Amina and Brian through Rakazo v0.9.0, Keycloak, and the gateway.
-# Curl uses --resolve for keycloak and deploy/keycloak/dev-only-ca.crt.
-# A browser needs `127.0.0.1 keycloak` in the hosts file and trust of that CA.
+# A browser needs `127.0.0.1 keycloak` in the hosts file and trust of deploy/certs/out/ca.crt.
 # A chat turn that calls whoami needs DEEPSEEK_API_KEY. This script stops and
 # names that variable when it is unset.
 set -eu
@@ -20,7 +19,7 @@ ROOT = Path.cwd()
 WEB = os.environ.get("RAKAZO_WEB", "http://127.0.0.1:5173")
 KEYCLOAK = os.environ.get("KEYCLOAK_URL", "https://keycloak:8443")
 GATEWAY = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8080")
-CA = ROOT / "deploy/keycloak/dev-only-ca.crt"
+CA = ROOT / "deploy/certs/out/ca.crt"
 CONFIG = json.loads((ROOT / "clients/akwara-cafe/gateway-mcp.json").read_text())
 USERS = (("amina", "amina"), ("brian", "brian"))
 WHOAMI = {
