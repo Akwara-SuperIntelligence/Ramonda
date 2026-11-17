@@ -1339,7 +1339,7 @@ mod tests {
             .expect("plant");
         assert!(planted.status().is_success());
         let got = bao.read("ramonda/probe", "value").await.expect("probe");
-        assert_eq!(got.expose(), probe);
+        assert!(got.expose() == probe, "probe mismatch");
         assert!(!format!("{got} {got:?}").contains(probe));
         let missing = bao
             .read("ramonda/missing", "value")
@@ -1361,12 +1361,12 @@ mod tests {
                 .read(&format!("odoo/{login}"), "password")
                 .await
                 .expect("seeded");
-            assert_eq!(stored.expose(), password);
+            assert!(stored.expose() == password, "seeded password mismatch");
             let login_field = bao
                 .read(&format!("odoo/{login}"), "login")
                 .await
                 .expect("login field");
-            assert_eq!(login_field.expose(), login);
+            assert!(login_field.expose() == login, "seeded login mismatch");
             let hidden = bao
                 .read(&format!("odoo/{login}"), "absent")
                 .await

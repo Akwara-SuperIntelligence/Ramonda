@@ -77,6 +77,7 @@ services:
     volumes:
       - ./openbao/seed.sh:/seed.sh:ro
       - ./odoo/logins.json:/logins.json:ro
+    # Dev mode drops these secrets on restart. Recreate this service to write them again.
     restart: "no"
 
   odoo-db:
