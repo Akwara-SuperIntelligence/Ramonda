@@ -61,11 +61,12 @@ impl Config {
 ///
 /// Returns an error when Postgres refuses the connection, the socket cannot bind, or the server stops.
 pub async fn serve(config: Config) -> std::io::Result<()> {
-    let client = audit::connect(&config.database)
-        .await
-        .map_err(std::io::Error::other)?;
+    let audit = Audit::Postgres(
+        PostgresAudit::open(config.database)
+            .await
+            .map_err(std::io::Error::other)?,
+    );
     let listener = TcpListener::bind(&config.bind).await?;
-    let audit = Audit::Postgres(Arc::new(tokio::sync::Mutex::new(client)));
     axum::serve(listener, router(config.check, audit)).await
 }
 
@@ -434,9 +435,33 @@ async fn require_token(
     response
 }
 
+struct PostgresAudit {
+    config: tokio_postgres::Config,
+    client: tokio::sync::Mutex<tokio_postgres::Client>,
+}
+
+impl PostgresAudit {
+    async fn open(config: tokio_postgres::Config) -> Result<Arc<Self>, tokio_postgres::Error> {
+        let client = audit::connect(&config).await?;
+        Ok(Arc::new(Self {
+            config,
+            client: tokio::sync::Mutex::new(client),
+        }))
+    }
+
+    async fn insert(&self, entry: audit::Entry) -> Result<(), audit::Failure> {
+        let mut client = self.client.lock().await;
+        if client.is_closed() {
+            let fresh = audit::connect(&self.config).await?;
+            *client = fresh;
+        }
+        audit::insert(&mut client, entry).await
+    }
+}
+
 #[derive(Clone)]
 enum Audit {
-    Postgres(Arc<tokio::sync::Mutex<tokio_postgres::Client>>),
+    Postgres(Arc<PostgresAudit>),
     #[cfg(test)]
     Memory(Arc<Mutex<Vec<audit::Row>>>),
     #[cfg(test)]
@@ -458,7 +483,7 @@ impl Audit {
             recorded_at: audit::now(),
         };
         match self {
-            Self::Postgres(client) => audit::insert(&mut *client.lock().await, entry).await,
+            Self::Postgres(postgres) => postgres.insert(entry).await,
             #[cfg(test)]
             Self::Memory(rows) => {
                 let mut rows = lock(rows);
@@ -580,8 +605,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, Queue, TokenCheck, audit, database_url,
-        extend_limited, issuer_url, lock, router,
+        Audit, Caller, JWKS_LIMIT, MCP_PATH, METADATA_PATH, PostgresAudit, Queue, TokenCheck,
+        audit, database_url, extend_limited, issuer_url, lock, router,
     };
 
     const ISSUER: &str = "http://keycloak.example/realms/akwara";
@@ -837,14 +862,51 @@ mod tests {
         assert!(!payload.to_string().contains("amina"), "{payload}");
     }
 
-    async fn postgres(url: &str) -> tokio_postgres::Client {
-        audit::connect(&url.parse().expect("url"))
-            .await
-            .expect("postgres")
+    async fn postgres(config: &tokio_postgres::Config) -> tokio_postgres::Client {
+        audit::connect(config).await.expect("postgres")
     }
 
-    fn writer(client: tokio_postgres::Client) -> Audit {
-        Audit::Postgres(Arc::new(tokio::sync::Mutex::new(client)))
+    fn app_role(owner: &tokio_postgres::Config) -> tokio_postgres::Config {
+        let mut config = owner.clone();
+        config.user("ramonda_app");
+        config.password("ramonda_app");
+        config
+    }
+
+    async fn app_cannot_change(app: &tokio_postgres::Client) {
+        app.batch_execute("SELECT count(*) FROM audit_log")
+            .await
+            .expect("app role selects");
+        for statement in [
+            "UPDATE audit_log SET actor_username = 'brian'",
+            "DELETE FROM audit_log",
+            "TRUNCATE audit_log",
+        ] {
+            let error = app.batch_execute(statement).await.expect_err(statement);
+            assert_eq!(
+                error.code().map(tokio_postgres::error::SqlState::code),
+                Some("42501"),
+                "{error}"
+            );
+        }
+    }
+
+    async fn writer(config: &tokio_postgres::Config) -> Audit {
+        Audit::Postgres(PostgresAudit::open(config.clone()).await.expect("writer"))
+    }
+
+    async fn closed_client(config: &tokio_postgres::Config) -> tokio_postgres::Client {
+        let (closed, connection) = config.connect(tokio_postgres::NoTls).await.expect("pair");
+        tokio::spawn(async move {
+            let _ = connection.await;
+        })
+        .abort();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while !closed.is_closed() {
+            assert!(tokio::time::Instant::now() < deadline, "client stayed open");
+            tokio::task::yield_now().await;
+        }
+        closed
     }
 
     async fn stored(owner: &tokio_postgres::Client) -> Vec<audit::Row> {
@@ -876,8 +938,11 @@ mod tests {
     async fn postgres_log_is_append_only_and_chained() {
         let owner_url =
             std::env::var("RAMONDA_TEST_DATABASE_URL").expect("RAMONDA_TEST_DATABASE_URL");
-        let app_url = "postgres://ramonda_app:ramonda_app@127.0.0.1:5432/ramonda";
-        let owner = postgres(&owner_url).await;
+        let owner_config = owner_url
+            .parse::<tokio_postgres::Config>()
+            .expect("owner url");
+        let app_config = app_role(&owner_config);
+        let owner = postgres(&owner_config).await;
         let migration = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../deploy/postgres/001_audit_log.sql"),
@@ -889,7 +954,7 @@ mod tests {
             .await
             .expect("truncate");
 
-        let audit = writer(postgres(app_url).await);
+        let audit = writer(&app_config).await;
         let response = call(audit.clone(), Some(&token(ISSUER, AUDIENCE, "amina"))).await;
         assert_eq!(
             json(response).await["result"]["content"][0]["text"],
@@ -898,22 +963,7 @@ mod tests {
         let rows = stored(&owner).await;
         assert_amina_recorded(&rows);
 
-        let app = postgres(app_url).await;
-        app.batch_execute("SELECT count(*) FROM audit_log")
-            .await
-            .expect("app role selects");
-        for statement in [
-            "UPDATE audit_log SET actor_username = 'brian'",
-            "DELETE FROM audit_log",
-            "TRUNCATE audit_log",
-        ] {
-            let error = app.batch_execute(statement).await.expect_err(statement);
-            assert_eq!(
-                error.code().map(tokio_postgres::error::SqlState::code),
-                Some("42501"),
-                "{error}"
-            );
-        }
+        app_cannot_change(&postgres(&app_config).await).await;
         assert_eq!(stored(&owner).await, rows);
 
         owner
@@ -948,7 +998,7 @@ mod tests {
             .batch_execute("TRUNCATE audit_log")
             .await
             .expect("truncate");
-        let writers = [audit, writer(postgres(app_url).await)];
+        let writers = [audit.clone(), writer(&app_config).await];
         let tasks: Vec<_> = (0..8)
             .map(|index| {
                 let audit = writers[index % 2].clone();
@@ -966,6 +1016,18 @@ mod tests {
         }
         let rows = stored(&owner).await;
         assert_eq!(rows.len(), 8);
+        assert_eq!(audit::verify(&rows), Ok(()));
+
+        let Audit::Postgres(postgres_audit) = &audit else {
+            panic!("writer");
+        };
+        *postgres_audit.client.lock().await = closed_client(&app_config).await;
+        audit
+            .record("whoami", &caller, JsonObject::new())
+            .await
+            .expect("reconnect");
+        let rows = stored(&owner).await;
+        assert_eq!(rows.len(), 9);
         assert_eq!(audit::verify(&rows), Ok(()));
     }
 }
