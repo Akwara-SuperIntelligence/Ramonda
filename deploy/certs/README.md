@@ -8,6 +8,8 @@ Run `deploy/certs/generate.sh` before `docker compose up`. The script writes `de
 
 `deploy/compose.yaml` sets `RAMONDA_STAMP=local`. That value is the laptop stamp. It trusts the dev CA, whose subject is `CN=Ramonda Dev CA`.
 
+Remove `RAMONDA_STAMP: local` from `deploy/compose.yaml` before any server deploy. A server that still has that line stays on the laptop stamp and trusts the dev CA.
+
 Trust `deploy/certs/out/ca.crt` in a browser that signs in through Keycloak. Add `127.0.0.1 keycloak` to the hosts file. The issuer host stays `keycloak`.
 
 ## Non-local stamp
