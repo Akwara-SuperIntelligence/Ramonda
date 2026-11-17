@@ -99,6 +99,9 @@ services:
       start_period: 300s
 
   gateway:
+    build:
+      context: ../core
+      dockerfile: gateway/Dockerfile
     image: ramonda-gateway:dev
     profiles: ["gateway"]
     environment:
