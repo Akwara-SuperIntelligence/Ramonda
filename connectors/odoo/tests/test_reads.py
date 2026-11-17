@@ -50,7 +50,7 @@ def _rows(result: CallToolResult | Any) -> Any:
     return result.structured_content
 
 
-def test_reads_return_row_shapes() -> None:
+def test_reads_return_row_shapes(capsys: pytest.CaptureFixture[str]) -> None:
     orders = [
         {"id": 1, "date_order": "2026-09-01 09:00:00"},
         {"id": 2, "date_order": "2026-09-08 09:00:00"},
@@ -114,6 +114,17 @@ def test_reads_return_row_shapes() -> None:
     assert client is not None
     assert set(client.__dict__) == {"_transport", "_database"}
 
+    out = capsys.readouterr().out
+    leaked = _SECRET in out or _OTHER in out
+    assert not leaked, "stdout leaked the credential"
+    lines = [_fields(line) for line in out.splitlines() if line.startswith("odoo-call")]
+    assert all(
+        line["method"] == "authenticate" or line["operation"] == "search_read" for line in lines
+    )
+    logins = [line["login"] for line in lines if line["method"] == "authenticate"]
+    assert logins == ["amina", "amina", "amina", "brian"]
+    assert len(lines) == 8
+
 
 def test_failed_call_does_not_echo_the_credential() -> None:
     _bind([_SECRET], error=True)
@@ -143,6 +154,10 @@ def test_module_has_no_odoo_write_call() -> None:
                 raise AssertionError(f"{path.name} has Odoo write call {node.attr}")
     tools = asyncio.run(mcp.list_tools())
     assert {tool.name for tool in tools} == {"pos_sales", "bakery_deliveries"}
+
+
+def _fields(line: str) -> dict[str, str]:
+    return dict(part.split("=", 1) for part in line.split()[1:])
 
 
 def _calls(fake: FakeTransport) -> list[tuple[str, str, list[Any]]]:

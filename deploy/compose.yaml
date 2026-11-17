@@ -134,6 +134,26 @@ services:
       retries: 40
       start_period: 300s
 
+  odoo-connector:
+    build:
+      context: ..
+      dockerfile: connectors/odoo/Dockerfile
+    image: ramonda-odoo-connector:dev
+    profiles: ["gateway"]
+    environment:
+      ODOO_URL: http://odoo:8069/jsonrpc
+      ODOO_DATABASE: akwara
+      ODOO_MCP_HOST: 0.0.0.0
+      ODOO_MCP_PORT: "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      odoo:
+        condition: service_healthy
+
   gateway:
     build:
       context: ..
@@ -146,6 +166,9 @@ services:
       GATEWAY_PUBLIC_URL: http://gateway:8080
       GATEWAY_TLS_CA: /certs/ca.crt
       DATABASE_URL: postgres://ramonda_app:ramonda_app@postgres:5432/ramonda
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: ramonda-dev
+      ODOO_MCP_URL: http://odoo-connector:8000/mcp
     volumes:
       - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
     ports:
@@ -165,6 +188,12 @@ services:
       keycloak:
         condition: service_started
       postgres:
+        condition: service_healthy
+      openbao:
+        condition: service_healthy
+      openbao-seed:
+        condition: service_completed_successfully
+      odoo-connector:
         condition: service_healthy
 
   rakazo-db:

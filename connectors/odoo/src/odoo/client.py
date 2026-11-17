@@ -70,6 +70,16 @@ class Odoo:
         return uid
 
     def _rpc(self, service: str, method: str, args: list[Any]) -> Any:
+        login = _text(args, 1) if method == "authenticate" else ""
+        if any(char.isspace() for char in login):
+            login = ""
+        model = _text(args, 3) if method == "execute_kw" else ""
+        operation = _text(args, 4) if method == "execute_kw" else ""
+        print(
+            f"odoo-call service={service} method={method} model={model} "
+            f"operation={operation} login={login}",
+            flush=True,
+        )
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": "call",
@@ -80,6 +90,11 @@ class Odoo:
         if body.get("error") is not None or "result" not in body:
             raise OdooError("Odoo call failed")
         return body["result"]
+
+
+def _text(args: list[Any], index: int) -> str:
+    value = args[index] if len(args) > index else None
+    return value if isinstance(value, str) else ""
 
 
 def _records(value: object) -> list[dict[str, Any]]:
