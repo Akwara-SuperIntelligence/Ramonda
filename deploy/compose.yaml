@@ -1,3 +1,17 @@
+x-rakazo-environment: &rakazo-environment
+  NODE_ENV: production
+  DATABASE_URL: postgres://rakazo_app:rakazo-app@rakazo-db:5432/rakazo
+  DATA_DIR: /data
+  ENCRYPTION_KEY: ramonda-dev-rakazo-encryption-key-32b
+  CONTENT_ENCRYPTION: "off"
+  SANDBOX_PROVIDER: none
+  AGENT_RUNTIME: pi
+  API_URL: http://127.0.0.1:5173
+  MCP_ALLOW_PRIVATE_ENDPOINT: "true"
+  NODE_EXTRA_CA_CERTS: /certs/ca.crt
+  PI_DEFAULT_PROVIDER: ${PI_DEFAULT_PROVIDER:-deepseek}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+
 services:
   postgres:
     image: postgres:18.7
@@ -17,6 +31,7 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.2
+    # Import skips an existing realm. No data volume, so recreate the container to apply realm changes.
     command: ["start-dev", "--import-realm"]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
@@ -27,6 +42,7 @@ services:
       KC_HTTP_MANAGEMENT_SCHEME: http
       KC_HTTPS_CERTIFICATE_FILE: /certs/tls.crt
       KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/tls.key
+      # A browser needs `127.0.0.1 keycloak` in the host hosts file and trust of deploy/keycloak/dev-only-ca.crt. The issuer host stays keycloak so tokens match KEYCLOAK_ISSUER.
       KC_HOSTNAME: keycloak
       KC_HOSTNAME_PORT: "8443"
       KC_HOSTNAME_STRICT: "false"
@@ -150,3 +166,117 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+
+  rakazo-db:
+    image: postgres:18.7
+    environment:
+      POSTGRES_USER: rakazo
+      POSTGRES_PASSWORD: rakazo
+      POSTGRES_DB: rakazo
+    volumes:
+      - rakazo-db:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rakazo -d rakazo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rakazo-data:
+    image: busybox:1
+    command: ["chown", "-R", "1000:1000", "/data"]
+    volumes:
+      - rakazo-data:/data
+    restart: "no"
+
+  rakazo-migrate:
+    image: ghcr.io/elie222/rakazo/app:v0.9.0
+    working_dir: /app/apps/api
+    command: ["pnpm", "db:deploy"]
+    environment:
+      DATABASE_URL: postgres://rakazo_app:rakazo-app@rakazo-db:5432/rakazo
+      DATABASE_MIGRATION_URL: postgres://rakazo:rakazo@rakazo-db:5432/rakazo
+    restart: "no"
+    depends_on:
+      rakazo-db:
+        condition: service_healthy
+
+  rakazo-api:
+    image: ghcr.io/elie222/rakazo/app:v0.9.0
+    working_dir: /app/apps/api
+    command: ["node", "--enable-source-maps", "dist/index.js"]
+    environment:
+      <<: *rakazo-environment
+      API_HOST: 0.0.0.0
+      BETTER_AUTH_SECRET: ramonda-dev-rakazo-auth-secret-32bx
+      BETTER_AUTH_URL: http://127.0.0.1:5173
+      WEB_ORIGIN: http://127.0.0.1:5173
+      AUTH_PASSWORD_ENABLED: "false"
+      OIDC_ISSUER: https://keycloak:8443/realms/akwara-cafe
+      OIDC_CLIENT_ID: rakazo
+      OIDC_CLIENT_SECRET: rakazo
+      OIDC_NAME: Keycloak
+      OIDC_SCOPES: openid email profile
+      OIDC_ALLOW_SIGNUP_BYPASS: "true"
+      SIGNUPS_ENABLED: "true"
+      SCREEN_PROXY_SECRET: ramonda-dev-rakazo-screen-proxy-32b
+    volumes:
+      - rakazo-data:/data
+      - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
+    depends_on:
+      rakazo-db:
+        condition: service_healthy
+      rakazo-data:
+        condition: service_completed_successfully
+      rakazo-migrate:
+        condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  rakazo-worker:
+    image: ghcr.io/elie222/rakazo/app:v0.9.0
+    working_dir: /app/apps/worker
+    command: ["node", "--enable-source-maps", "dist/index.js"]
+    environment:
+      <<: *rakazo-environment
+    volumes:
+      - rakazo-data:/data
+      - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
+    depends_on:
+      rakazo-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "dist/health-check.js"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  rakazo-web:
+    image: ghcr.io/elie222/rakazo/app:v0.9.0
+    working_dir: /app/apps/web
+    command: ["node_modules/.bin/vite", "preview", "--host", "0.0.0.0", "--port", "5173"]
+    environment:
+      NODE_ENV: production
+      RAYON_NUM_THREADS: "4"
+      API_PROXY_TARGET: http://rakazo-api:3100
+      RAKAZO_HOST: 127.0.0.1
+      SCREEN_PROXY_SECRET: ramonda-dev-rakazo-screen-proxy-32b
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      rakazo-api:
+        condition: service_healthy
+
+volumes:
+  rakazo-db:
+  rakazo-data:

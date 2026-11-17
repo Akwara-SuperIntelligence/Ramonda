@@ -1,0 +1,11 @@
+{
+  "transport": "streamable_http",
+  "slug": "gateway",
+  "name": "Ramonda gateway",
+  "description": "",
+  "endpoint": "http://gateway:8080/mcp",
+  "oauthClient": {
+    "clientId": "gateway-mcp",
+    "clientSecret": "gateway-mcp"
+  }
+}
