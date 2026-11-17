@@ -134,6 +134,26 @@ services:
       retries: 40
       start_period: 300s
 
+  odoo-connector:
+    build:
+      context: ..
+      dockerfile: connectors/odoo/Dockerfile
+    image: ramonda-odoo-connector:dev
+    profiles: ["gateway"]
+    environment:
+      ODOO_URL: http://odoo:8069/jsonrpc
+      ODOO_DATABASE: akwara
+      ODOO_MCP_HOST: 0.0.0.0
+      ODOO_MCP_PORT: "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      odoo:
+        condition: service_healthy
+
   gateway:
     build:
       context: ..
