@@ -608,7 +608,13 @@ impl Gateway {
             .await
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         let body = self
-            .connector_rows(tool, &window, login.expose(), password.expose())
+            .connector_rows(
+                tool,
+                &window,
+                login.expose(),
+                password.expose(),
+                Duration::from_secs(30),
+            )
             .await?;
         let rows = project_rows(&body, qty_field)
             .ok_or_else(|| ErrorData::internal_error("odoo read failed", None))?;
@@ -622,30 +628,37 @@ impl Gateway {
         window: &Window,
         login: &str,
         credential: &str,
+        deadline: Duration,
     ) -> Result<serde_json::Value, ErrorData> {
         let failed = || ErrorData::internal_error("odoo read failed", None);
-        let transport = StreamableHttpClientTransport::from_uri(self.connector.clone());
-        let client = rmcp::serve_client((), transport)
-            .await
-            .map_err(|_| failed())?;
-        let arguments = serde_json::json!({
-            "branch": &window.branch,
-            "start": &window.start,
-            "end": &window.end,
-            "login": login,
-            "credential": credential,
-        });
-        let Some(arguments) = arguments.as_object().cloned() else {
-            return Err(failed());
+        let fetch = async {
+            let transport = StreamableHttpClientTransport::from_uri(self.connector.clone());
+            let client = rmcp::serve_client((), transport)
+                .await
+                .map_err(|_| failed())?;
+            let arguments = serde_json::json!({
+                "branch": &window.branch,
+                "start": &window.start,
+                "end": &window.end,
+                "login": login,
+                "credential": credential,
+            });
+            let Some(arguments) = arguments.as_object().cloned() else {
+                return Err(failed());
+            };
+            let result = client
+                .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
+                .await
+                .map_err(|_| failed())?;
+            if result.is_error == Some(true) {
+                return Err(failed());
+            }
+            result.structured_content.ok_or_else(failed)
         };
-        let result = client
-            .call_tool(CallToolRequestParams::new(tool.to_owned()).with_arguments(arguments))
-            .await
-            .map_err(|_| failed())?;
-        if result.is_error == Some(true) {
-            return Err(failed());
+        match tokio::time::timeout(deadline, fetch).await {
+            Ok(result) => result,
+            Err(_) => Err(failed()),
         }
-        result.structured_content.ok_or_else(failed)
     }
 }
 
@@ -1850,5 +1863,52 @@ mod tests {
         assert_hidden(&failed_body, secret, "audit write failed");
         assert!(!failed_body.contains("amina"), "error named the caller");
         assert_eq!(lock(calls).len(), 2, "connector ran without an audit row");
+    }
+
+    #[tokio::test]
+    async fn connector_call_stops_when_the_peer_never_answers() {
+        let secret = "probe-secret-9f3c2a";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        tokio::spawn(async move {
+            loop {
+                if listener.accept().await.is_err() {
+                    break;
+                }
+            }
+        });
+        let gateway = super::Gateway {
+            audit: Audit::Failing,
+            secrets: OpenBao::new("http://127.0.0.1:9", "local-token").expect("bao"),
+            connector: format!("http://127.0.0.1:{port}/mcp"),
+        };
+        let window = super::Window {
+            branch: "Westlands".to_owned(),
+            start: "2026-09-22".to_owned(),
+            end: "2026-11-16".to_owned(),
+        };
+        let started = tokio::time::Instant::now();
+        let error = gateway
+            .connector_rows(
+                "pos_sales",
+                &window,
+                "amina",
+                secret,
+                Duration::from_millis(200),
+            )
+            .await
+            .expect_err("hung");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "deadline did not fire"
+        );
+        let rendered = format!("{error}");
+        assert!(
+            rendered.contains("odoo read failed"),
+            "missing deadline error"
+        );
+        assert!(!rendered.contains(secret), "response leaked the credential");
     }
 }
