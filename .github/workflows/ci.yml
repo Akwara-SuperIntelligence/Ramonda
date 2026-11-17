@@ -52,7 +52,7 @@ jobs:
         run: uv sync --frozen
       - name: ruff
         working-directory: connectors
-        run: uv run --frozen ruff check
+        run: uv run --frozen ruff check . ../scripts/seed_akwara_cafe.py
       - name: comments
         run: .github/check-lint.sh
       - name: pyright
