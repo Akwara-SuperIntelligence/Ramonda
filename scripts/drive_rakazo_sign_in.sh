@@ -251,12 +251,44 @@ def bot_reply(snapshot):
     for message in snapshot.get("messages") or []:
         if message.get("role") != "bot":
             continue
-        for block in message.get("blocks") or []:
-            if block.get("kind") == "text" and block.get("text"):
-                parts.append(block["text"].strip())
-            if block.get("kind") == "app" and block.get("tool") == "whoami":
-                parts.append(json.dumps(block.get("toolResult")))
+        parts.extend(text_parts(message))
     return parts[-1] if parts else ""
+
+
+def text_parts(message):
+    parts = []
+    for block in message.get("blocks") or []:
+        if block.get("kind") == "text" and block.get("text"):
+            parts.append(block["text"].strip())
+        if block.get("kind") == "app" and block.get("tool") == "whoami":
+            parts.append(json.dumps(block.get("toolResult")))
+    return parts
+
+
+def reply_since_last_user(snapshot):
+    messages = snapshot.get("messages") or []
+    last_user = -1
+    for index, message in enumerate(messages):
+        if message.get("role") == "user":
+            last_user = index
+    parts = []
+    for message in messages[last_user + 1 :]:
+        if message.get("role") == "bot":
+            parts.extend(text_parts(message))
+    return parts[-1] if parts else ""
+
+
+assert reply_since_last_user(
+    {
+        "messages": [
+            {"role": "bot", "blocks": [{"kind": "text", "text": "amina"}]},
+            {"role": "user", "blocks": [{"kind": "text", "text": "now"}]},
+            {"role": "bot", "blocks": [{"kind": "ask", "text": "Hi", "status": "pending"}]},
+            {"role": "bot", "blocks": [{"kind": "text", "text": "brian"}]},
+        ]
+    }
+) == "brian"
+assert reply_since_last_user({"messages": [{"role": "user", "blocks": []}]}) == ""
 
 
 def chat_whoami(jar, server_id, username):
@@ -288,25 +320,31 @@ def chat_whoami(jar, server_id, username):
     run_id = sent["runId"]
     deadline = time.time() + 180
     terminal = None
+    snapshot = {}
     while time.time() < deadline:
+        snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
+        # The create-time intro run stays on waiting_input. The steering follow-up calls whoami.
+        answer = reply_since_last_user(snapshot)
+        if answer.strip().lower() == username:
+            print(f"whoami through Rakazo {username}: {answer}")
+            return answer
         active = (rpc(jar, "runs/list", {"filter": "active"}).get("runs")) or []
         row = next((item for item in active if item.get("runId") == run_id), None)
-        if row and row.get("status") in ("failed", "cancelled", "waiting_input"):
+        if row and row.get("status") in ("failed", "cancelled"):
             terminal = row
             break
         recent = (rpc(jar, "runs/list", {"filter": "recent"}).get("runs")) or []
         done = next((item for item in recent if item.get("runId") == run_id), None)
-        if done:
+        if done and done.get("status") in ("failed", "cancelled", "completed"):
             terminal = done
             break
         time.sleep(3)
     else:
         raise SystemExit(f"whoami {username} did not finish")
-    snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
-    if terminal.get("status") != "completed":
+    if not terminal or terminal.get("status") != "completed":
         error = (snapshot.get("run") or {}).get("error")
-        raise SystemExit(f"whoami {username} run {terminal.get('status')}: {error}")
-    answer = bot_reply(snapshot)
+        raise SystemExit(f"whoami {username} run {terminal.get('status') if terminal else 'missing'}: {error}")
+    answer = reply_since_last_user(snapshot) or bot_reply(snapshot)
     print(f"whoami through Rakazo {username}: {answer}")
     if answer.strip().lower() != username:
         raise SystemExit(f"whoami through Rakazo for {username} returned {answer!r}")
