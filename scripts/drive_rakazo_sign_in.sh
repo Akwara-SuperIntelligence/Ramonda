@@ -276,7 +276,7 @@ def chat_whoami(jar, server_id, username):
             },
         )
     rpc(jar, "mcp/servers/agents", {"id": server_id, "allBots": True, "botIds": []})
-    rpc(
+    sent = rpc(
         jar,
         "threads/send",
         {
@@ -285,19 +285,27 @@ def chat_whoami(jar, server_id, username):
             "clientNonce": f"whoami-{username}-{int(time.time())}",
         },
     )
+    run_id = sent["runId"]
     deadline = time.time() + 180
-    snapshot = {}
+    terminal = None
     while time.time() < deadline:
-        snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
-        status = (snapshot.get("run") or {}).get("status")
-        if status in ("completed", "failed", "cancelled", "waiting_input"):
+        active = (rpc(jar, "runs/list", {"filter": "active"}).get("runs")) or []
+        row = next((item for item in active if item.get("runId") == run_id), None)
+        if row and row.get("status") in ("failed", "cancelled", "waiting_input"):
+            terminal = row
+            break
+        recent = (rpc(jar, "runs/list", {"filter": "recent"}).get("runs")) or []
+        done = next((item for item in recent if item.get("runId") == run_id), None)
+        if done:
+            terminal = done
             break
         time.sleep(3)
     else:
         raise SystemExit(f"whoami {username} did not finish")
-    run = snapshot.get("run") or {}
-    if run.get("status") != "completed":
-        raise SystemExit(f"whoami {username} run {run.get('status')}: {run.get('error')}")
+    snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
+    if terminal.get("status") != "completed":
+        error = (snapshot.get("run") or {}).get("error")
+        raise SystemExit(f"whoami {username} run {terminal.get('status')}: {error}")
     answer = bot_reply(snapshot)
     print(f"whoami through Rakazo {username}: {answer}")
     if answer.strip().lower() != username:
