@@ -1,13 +1,14 @@
-# shortcut: tag tracks rust-toolchain.toml, bump both together
-FROM rust:1.100.0-bookworm AS build
+FROM rust:bookworm AS build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends cmake \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
-COPY gateway gateway
-COPY relay relay
-COPY outbox outbox
+COPY rust-toolchain.toml ./
+RUN rustup show
+COPY core/Cargo.toml core/Cargo.lock ./
+COPY core/gateway gateway
+COPY core/relay relay
+COPY core/outbox outbox
 RUN cargo build --release --locked -p gateway
 
 FROM debian:bookworm-slim

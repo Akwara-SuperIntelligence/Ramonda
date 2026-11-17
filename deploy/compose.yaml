@@ -100,8 +100,8 @@ services:
 
   gateway:
     build:
-      context: ../core
-      dockerfile: gateway/Dockerfile
+      context: ..
+      dockerfile: core/gateway/Dockerfile
     image: ramonda-gateway:dev
     profiles: ["gateway"]
     environment:
@@ -113,5 +113,16 @@ services:
       - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bash",
+          "-c",
+          "{ printf 'GET /.well-known/oauth-protected-resource/mcp HTTP/1.0\\r\\nHost: 127.0.0.1\\r\\n\\r\\n' >&0; grep -q 'HTTP/1.0 200'; } 0<>/dev/tcp/127.0.0.1/8080",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     depends_on:
       - keycloak
