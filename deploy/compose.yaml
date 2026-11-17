@@ -9,7 +9,8 @@ x-rakazo-environment: &rakazo-environment
   API_URL: http://127.0.0.1:5173
   MCP_ALLOW_PRIVATE_ENDPOINT: "true"
   NODE_EXTRA_CA_CERTS: /certs/ca.crt
-  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+  PI_DEFAULT_PROVIDER: ${PI_DEFAULT_PROVIDER:-deepseek}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
 
 services:
   postgres:
@@ -20,6 +21,8 @@ services:
       POSTGRES_DB: ramonda
     ports:
       - "127.0.0.1:5432:5432"
+    volumes:
+      - ./postgres/001_audit_log.sql:/docker-entrypoint-initdb.d/001_audit_log.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ramonda -d ramonda"]
       interval: 5s
@@ -124,6 +127,7 @@ services:
       GATEWAY_AUDIENCE: gateway
       GATEWAY_PUBLIC_URL: http://gateway:8080
       GATEWAY_TLS_CA: /certs/ca.crt
+      DATABASE_URL: postgres://ramonda_app:ramonda_app@postgres:5432/ramonda
     volumes:
       - ./keycloak/dev-only-ca.crt:/certs/ca.crt:ro
     ports:
@@ -140,7 +144,10 @@ services:
       timeout: 5s
       retries: 10
     depends_on:
-      - keycloak
+      keycloak:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   rakazo-db:
     image: postgres:18.7

@@ -2,8 +2,8 @@
 # Drive Amina and Brian through Rakazo v0.9.0, Keycloak, and the gateway.
 # Curl uses --resolve for keycloak and deploy/keycloak/dev-only-ca.crt.
 # A browser needs `127.0.0.1 keycloak` in the hosts file and trust of that CA.
-# A chat turn that calls whoami needs the deployment model key. This script
-# stops and names that variable when it is unset.
+# A chat turn that calls whoami needs DEEPSEEK_API_KEY. This script stops and
+# names that variable when it is unset.
 set -eu
 cd -- "$(dirname -- "$0")/.."
 exec python3 - "$@" <<'PY'
@@ -246,6 +246,65 @@ def connect(jar, server_id, username, password):
     print(f"oauth complete {username}: {done}")
 
 
+def bot_reply(snapshot):
+    parts = []
+    for message in snapshot.get("messages") or []:
+        if message.get("role") != "bot":
+            continue
+        for block in message.get("blocks") or []:
+            if block.get("kind") == "text" and block.get("text"):
+                parts.append(block["text"].strip())
+            if block.get("kind") == "app" and block.get("tool") == "whoami":
+                parts.append(json.dumps(block.get("toolResult")))
+    return parts[-1] if parts else ""
+
+
+def chat_whoami(jar, server_id, username):
+    rpc(jar, "autoReview/set", {"mode": "never"})
+    bots = rpc(jar, "bots/list", {})
+    if not isinstance(bots, list):
+        raise SystemExit(f"bot list {username}: {bots}")
+    bot = next((row for row in bots if row.get("name") == "Akwara"), None)
+    if bot is None:
+        bot = rpc(
+            jar,
+            "bots/create",
+            {
+                "name": "Akwara",
+                "spawnKey": "gateway-whoami",
+                "instructions": "When asked who is signed in, call the whoami tool and reply with only its result.",
+            },
+        )
+    rpc(jar, "mcp/servers/agents", {"id": server_id, "allBots": True, "botIds": []})
+    rpc(
+        jar,
+        "threads/send",
+        {
+            "botId": bot["id"],
+            "text": "Call the whoami tool now. Reply with only the tool result.",
+            "clientNonce": f"whoami-{username}-{int(time.time())}",
+        },
+    )
+    deadline = time.time() + 180
+    snapshot = {}
+    while time.time() < deadline:
+        snapshot = rpc(jar, "threads/get", {"botId": bot["id"]})
+        status = (snapshot.get("run") or {}).get("status")
+        if status in ("completed", "failed", "cancelled", "waiting_input"):
+            break
+        time.sleep(3)
+    else:
+        raise SystemExit(f"whoami {username} did not finish")
+    run = snapshot.get("run") or {}
+    if run.get("status") != "completed":
+        raise SystemExit(f"whoami {username} run {run.get('status')}: {run.get('error')}")
+    answer = bot_reply(snapshot)
+    print(f"whoami through Rakazo {username}: {answer}")
+    if answer.strip().lower() != username:
+        raise SystemExit(f"whoami through Rakazo for {username} returned {answer!r}")
+    return answer
+
+
 def main():
     wait(f"{KEYCLOAK}/realms/akwara-cafe/.well-known/openid-configuration")
     wait(f"{WEB}/")
@@ -270,12 +329,13 @@ def main():
         print(f"mcp test {username}: {json.dumps(health)} oauth={tested.get('oauthStatus')}")
         if health.get("status") != "ok" or health.get("toolCount") != 1:
             raise SystemExit(f"mcp test {username} failed: {json.dumps(health)}")
-    if os.environ.get("OPENROUTER_API_KEY"):
-        print("OPENROUTER_API_KEY is set on this host. Pass it through to rakazo-api and rakazo-worker, then send a chat turn. This script stops before that turn.")
-        return 2
-    print("OPENROUTER_API_KEY is unset.")
-    print("Rakazo v0.9.0 defaults PI_DEFAULT_PROVIDER to openrouter.")
-    print("A chat turn that calls whoami needs OPENROUTER_API_KEY on rakazo-api and rakazo-worker.")
+        if os.environ.get("DEEPSEEK_API_KEY"):
+            chat_whoami(jar, servers[0]["id"], username)
+    if os.environ.get("DEEPSEEK_API_KEY"):
+        return 0
+    print("DEEPSEEK_API_KEY is unset.")
+    print("Rakazo defaults PI_DEFAULT_PROVIDER to deepseek.")
+    print("A chat turn that calls whoami needs DEEPSEEK_API_KEY on rakazo-api and rakazo-worker.")
     return 2
 
 
