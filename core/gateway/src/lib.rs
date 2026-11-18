@@ -18,6 +18,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 use rmcp::handler::server::tool::Extension;
 use rmcp::model::{CallToolRequestParams, JsonObject};
 use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
@@ -37,27 +38,53 @@ pub struct Config {
     database: tokio_postgres::Config,
     secrets: OpenBao,
     connector: String,
+    connector_http: reqwest::Client,
 }
 
 impl Config {
-    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, `DATABASE_URL`, `OPENBAO_ADDR`, `OPENBAO_TOKEN`, `ODOO_MCP_URL`, optional `GATEWAY_BIND`, and optional `GATEWAY_TLS_CA`.
+    /// Reads `KEYCLOAK_ISSUER`, `GATEWAY_AUDIENCE`, `GATEWAY_PUBLIC_URL`, `DATABASE_URL`, `OPENBAO_ADDR`, `OPENBAO_TOKEN`, `ODOO_MCP_URL`, optional `GATEWAY_BIND`, optional `RAMONDA_STAMP`, and optional `GATEWAY_TLS_CA`, `GATEWAY_TLS_CERT`, and `GATEWAY_TLS_KEY`.
     ///
     /// # Errors
     ///
-    /// Returns an error when a required variable is missing, the issuer is not https, the database URL is not postgres, the `OpenBao` address or token is rejected, the connector URL is not http or https, or the CA file cannot be read.
+    /// Returns an error when a required variable is missing, the issuer is not https, the database URL is not postgres, the `OpenBao` address or token is rejected, the connector URL is not http or https, a certificate file cannot be read, or a non-local stamp is missing TLS material or is using the dev CA.
     pub fn from_env() -> Result<Self, String> {
         let issuer = issuer_url(&required("KEYCLOAK_ISSUER")?)?;
         let audience = required("GATEWAY_AUDIENCE")?;
         let public_url = http_url("GATEWAY_PUBLIC_URL", &required("GATEWAY_PUBLIC_URL")?)?;
-        let ca_pem = tls_ca()?;
-        let secrets = OpenBao::new(&required("OPENBAO_ADDR")?, &required("OPENBAO_TOKEN")?)
-            .map_err(|error| error.to_string())?;
+        let ca_pem = optional_pem("GATEWAY_TLS_CA")?;
+        let client_cert = optional_pem("GATEWAY_TLS_CERT")?;
+        let client_key = optional_pem("GATEWAY_TLS_KEY")?;
         let connector = http_url("ODOO_MCP_URL", &required("ODOO_MCP_URL")?)?;
+        let openbao = required("OPENBAO_ADDR")?;
+        if client_cert.is_some() != client_key.is_some() {
+            return Err("GATEWAY_TLS_CERT and GATEWAY_TLS_KEY are set together".to_owned());
+        }
+        let local = std::env::var("RAMONDA_STAMP").ok().as_deref() == Some("local");
+        stamp_error(
+            local,
+            ca_pem.as_deref(),
+            client_cert.is_some(),
+            &connector,
+            openbao.trim(),
+        )?;
+        let identity = match (&client_cert, &client_key) {
+            (Some(cert), Some(key)) if connector.starts_with("https://") => {
+                Some(concat_pem(cert, key))
+            }
+            _ => None,
+        };
+        let connector_ca = connector
+            .starts_with("https://")
+            .then_some(ca_pem.as_deref())
+            .flatten();
+        let secrets = OpenBao::with_ca(&openbao, &required("OPENBAO_TOKEN")?, ca_pem.as_deref())
+            .map_err(|error| error.to_string())?;
         Ok(Self {
-            check: TokenCheck::remote(issuer, audience, public_url, ca_pem)?,
+            check: TokenCheck::remote(issuer, audience, public_url, ca_pem.as_deref())?,
             bind: bind_address()?,
             database: database_url(&required("DATABASE_URL")?)?,
             secrets,
+            connector_http: connector_client(connector_ca, identity.as_deref())?,
             connector,
         })
     }
@@ -77,7 +104,13 @@ pub async fn serve(config: Config) -> std::io::Result<()> {
     let listener = TcpListener::bind(&config.bind).await?;
     axum::serve(
         listener,
-        router(config.check, audit, config.secrets, config.connector),
+        router(
+            config.check,
+            audit,
+            config.secrets,
+            config.connector,
+            config.connector_http,
+        ),
     )
     .await
 }
@@ -148,13 +181,11 @@ impl TokenCheck {
         issuer: String,
         audience: String,
         public_url: String,
-        ca_pem: Option<Vec<u8>>,
+        ca_pem: Option<&[u8]>,
     ) -> Result<Self, String> {
         let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(5));
         if let Some(pem) = ca_pem {
-            let cert = reqwest::Certificate::from_pem(&pem)
-                .map_err(|_| "GATEWAY_TLS_CA is not a PEM certificate".to_owned())?;
-            builder = builder.add_root_certificate(cert);
+            builder = add_root_certificates(builder, pem)?;
         }
         let client = builder
             .build()
@@ -377,13 +408,20 @@ fn bearer_token(header: &str) -> Option<&str> {
     Some(token)
 }
 
-fn router(check: TokenCheck, audit: Audit, secrets: OpenBao, connector: String) -> Router {
+fn router(
+    check: TokenCheck,
+    audit: Audit,
+    secrets: OpenBao,
+    connector: String,
+    connector_http: reqwest::Client,
+) -> Router {
     let mcp = StreamableHttpService::new(
         move || {
             Ok(Gateway {
                 audit: audit.clone(),
                 secrets: secrets.clone(),
                 connector: connector.clone(),
+                connector_http: connector_http.clone(),
             })
         },
         Arc::new(LocalSessionManager::default()),
@@ -516,6 +554,7 @@ struct Gateway {
     audit: Audit,
     secrets: OpenBao,
     connector: String,
+    connector_http: reqwest::Client,
 }
 
 #[tool_router]
@@ -627,7 +666,10 @@ impl Gateway {
     ) -> Result<serde_json::Value, ErrorData> {
         let failed = || ErrorData::internal_error("odoo read failed", None);
         let fetch = async {
-            let transport = StreamableHttpClientTransport::from_uri(self.connector.clone());
+            let transport = StreamableHttpClientTransport::with_client(
+                self.connector_http.clone(),
+                StreamableHttpClientTransportConfig::with_uri(self.connector.clone()),
+            );
             let client = rmcp::serve_client((), transport)
                 .await
                 .map_err(|_| failed())?;
@@ -752,14 +794,112 @@ fn database_url(raw: &str) -> Result<tokio_postgres::Config, String> {
     url.parse().map_err(|_| message)
 }
 
-fn tls_ca() -> Result<Option<Vec<u8>>, String> {
-    match std::env::var("GATEWAY_TLS_CA") {
+fn optional_pem(name: &str) -> Result<Option<Vec<u8>>, String> {
+    match std::env::var(name) {
         Ok(path) if !path.trim().is_empty() => std::fs::read(path.trim())
             .map(Some)
             .map_err(|_| format!("could not read {}", path.trim())),
-        Ok(_) => Err("GATEWAY_TLS_CA is empty".to_owned()),
+        Ok(_) => Err(format!("{name} is empty")),
         Err(_) => Ok(None),
     }
+}
+
+const DEV_CA_SUBJECT: &[u8] = b"Ramonda Dev CA";
+
+fn stamp_error(
+    local: bool,
+    ca_pem: Option<&[u8]>,
+    client_ready: bool,
+    connector: &str,
+    openbao: &str,
+) -> Result<(), String> {
+    let https_connector = connector.starts_with("https://");
+    let https_openbao = openbao.starts_with("https://");
+    if !local {
+        if !https_connector {
+            return Err("ODOO_MCP_URL must be https".to_owned());
+        }
+        if !https_openbao {
+            return Err("OPENBAO_ADDR must be https".to_owned());
+        }
+        if ca_pem.is_none() {
+            return Err("GATEWAY_TLS_CA is required".to_owned());
+        }
+        if !client_ready {
+            return Err("GATEWAY_TLS_CERT and GATEWAY_TLS_KEY are required".to_owned());
+        }
+        if ca_pem.is_some_and(pem_is_dev_ca) {
+            return Err(
+                "GATEWAY_TLS_CA is the dev CA. A non-local stamp needs a certificate you operate."
+                    .to_owned(),
+            );
+        }
+    }
+    if https_connector && (ca_pem.is_none() || !client_ready) {
+        return Err(
+            "https ODOO_MCP_URL needs GATEWAY_TLS_CA, GATEWAY_TLS_CERT, and GATEWAY_TLS_KEY"
+                .to_owned(),
+        );
+    }
+    if https_openbao && ca_pem.is_none() {
+        return Err("https OPENBAO_ADDR needs GATEWAY_TLS_CA".to_owned());
+    }
+    Ok(())
+}
+
+fn pem_is_dev_ca(pem_bytes: &[u8]) -> bool {
+    let Ok(items) = pem::parse_many(pem_bytes) else {
+        return false;
+    };
+    items.iter().any(|item| {
+        item.contents()
+            .windows(DEV_CA_SUBJECT.len())
+            .any(|window| window == DEV_CA_SUBJECT)
+    })
+}
+
+fn concat_pem(cert: &[u8], key: &[u8]) -> Vec<u8> {
+    let mut pem = Vec::with_capacity(cert.len() + key.len() + 1);
+    pem.extend_from_slice(cert);
+    if !cert.ends_with(b"\n") {
+        pem.push(b'\n');
+    }
+    pem.extend_from_slice(key);
+    pem
+}
+
+fn add_root_certificates(
+    mut builder: reqwest::ClientBuilder,
+    pem: &[u8],
+) -> Result<reqwest::ClientBuilder, String> {
+    let certs = reqwest::Certificate::from_pem_bundle(pem)
+        .map_err(|_| "GATEWAY_TLS_CA is not a PEM certificate".to_owned())?;
+    if certs.is_empty() {
+        return Err("GATEWAY_TLS_CA is not a PEM certificate".to_owned());
+    }
+    for cert in certs {
+        builder = builder.add_root_certificate(cert);
+    }
+    Ok(builder)
+}
+
+fn connector_client(
+    ca_pem: Option<&[u8]>,
+    identity: Option<&[u8]>,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    if let Some(pem) = ca_pem {
+        builder = add_root_certificates(builder, pem)?;
+    }
+    if let Some(pem) = identity {
+        let id = reqwest::Identity::from_pem(pem).map_err(|_| {
+            "GATEWAY_TLS_CERT or GATEWAY_TLS_KEY is not a PEM client certificate".to_owned()
+        })?;
+        builder = builder.identity(id);
+    }
+    builder
+        .build()
+        .map_err(|_| "could not build the connector client".to_owned())
 }
 
 const SECRET_LIMIT: usize = 65_536;
@@ -801,15 +941,43 @@ impl OpenBao {
     /// Returns [`SecretError::Unavailable`] when the HTTP client cannot be built.
     #[must_use = "the client is the only way to read a secret"]
     pub fn new(base_url: &str, token: &str) -> Result<Self, SecretError> {
+        Self::with_ca(base_url, token, None)
+    }
+
+    /// Builds a client that verifies an `https` address with `ca_pem`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SecretError::Rejected`] when the address or token is rejected, or the address is
+    /// `https` and `ca_pem` is missing or not a PEM bundle.
+    /// Returns [`SecretError::Unavailable`] when the HTTP client cannot be built.
+    #[must_use = "the client is the only way to read a secret"]
+    pub fn with_ca(
+        base_url: &str,
+        token: &str,
+        ca_pem: Option<&[u8]>,
+    ) -> Result<Self, SecretError> {
         let base = base_url.trim().trim_end_matches('/');
         if !valid_openbao_base(base) || !valid_token(token) {
             return Err(SecretError::Rejected);
         }
-        let client = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| SecretError::Unavailable)?;
+            .redirect(reqwest::redirect::Policy::none());
+        if base.starts_with("https://") {
+            let Some(pem) = ca_pem else {
+                return Err(SecretError::Rejected);
+            };
+            let certs =
+                reqwest::Certificate::from_pem_bundle(pem).map_err(|_| SecretError::Rejected)?;
+            if certs.is_empty() {
+                return Err(SecretError::Rejected);
+            }
+            for cert in certs {
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+        let client = builder.build().map_err(|_| SecretError::Unavailable)?;
         Ok(Self {
             base: base.to_owned(),
             token: token.to_owned(),
@@ -1099,6 +1267,13 @@ mod tests {
         odoo_app("http://127.0.0.1:9", "http://127.0.0.1:9/mcp", audit)
     }
 
+    fn plain_connector_client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("client")
+    }
+
     fn odoo_app(bao: &str, connector: &str, audit: Audit) -> axum::Router {
         router(
             TokenCheck::fixed(ISSUER, AUDIENCE, PUBLIC_URL, signing_key().set.clone())
@@ -1106,6 +1281,7 @@ mod tests {
             audit,
             OpenBao::new(bao, "local-token").expect("bao"),
             connector.to_owned(),
+            plain_connector_client(),
         )
     }
 
@@ -1963,6 +2139,7 @@ mod tests {
             audit: Audit::Failing,
             secrets: OpenBao::new("http://127.0.0.1:9", "local-token").expect("bao"),
             connector: format!("http://127.0.0.1:{port}/mcp"),
+            connector_http: plain_connector_client(),
         };
         let window = super::Window {
             branch: "Westlands".to_owned(),
@@ -1988,5 +2165,119 @@ mod tests {
             "missing deadline error"
         );
         assert!(!rendered.contains(secret), "response leaked the credential");
+    }
+
+    #[test]
+    fn local_stamp_allows_http_and_remote_stamp_requires_https() {
+        assert!(
+            super::stamp_error(
+                true,
+                None,
+                false,
+                "http://odoo-connector:8000/mcp",
+                "http://openbao:8200",
+            )
+            .is_ok()
+        );
+        let connector = super::stamp_error(
+            false,
+            None,
+            false,
+            "http://odoo-connector:8000/mcp",
+            "http://openbao:8200",
+        )
+        .expect_err("http connector");
+        assert!(
+            connector.contains("ODOO_MCP_URL must be https"),
+            "{connector}"
+        );
+        let openbao = super::stamp_error(
+            false,
+            None,
+            false,
+            "https://odoo-connector:8000/mcp",
+            "http://openbao:8200",
+        )
+        .expect_err("http openbao");
+        assert!(openbao.contains("OPENBAO_ADDR must be https"), "{openbao}");
+        let missing = super::stamp_error(
+            true,
+            None,
+            false,
+            "https://odoo-connector:8000/mcp",
+            "http://openbao:8200",
+        )
+        .expect_err("https connector without a client certificate");
+        assert!(missing.contains("GATEWAY_TLS_CERT"), "{missing}");
+    }
+
+    #[test]
+    fn remote_stamp_rejects_the_generated_dev_ca() {
+        let dir = std::env::temp_dir().join(format!("ramonda-certs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let script =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/certs/generate.sh");
+        let status = std::process::Command::new("sh")
+            .arg(&script)
+            .arg(&dir)
+            .status()
+            .expect("generate");
+        assert!(status.success(), "dev cert script failed");
+        let ca = std::fs::read(dir.join("ca.crt")).expect("ca");
+        let identity = super::concat_pem(
+            &std::fs::read(dir.join("gateway.crt")).expect("cert"),
+            &std::fs::read(dir.join("gateway.key")).expect("key"),
+        );
+        super::connector_client(Some(&ca), Some(&identity)).expect("client certificate");
+        let error = super::stamp_error(
+            false,
+            Some(&ca),
+            true,
+            "https://odoo-connector:8000/mcp",
+            "https://openbao:8200",
+        )
+        .expect_err("dev ca");
+        assert!(error.contains("dev CA"), "{error}");
+        let other_status = std::process::Command::new("openssl")
+            .args([
+                "req",
+                "-new",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:P-256",
+                "-nodes",
+                "-keyout",
+            ])
+            .arg(dir.join("other.key"))
+            .arg("-out")
+            .arg(dir.join("other.crt"))
+            .args(["-days", "1", "-subj", "/CN=Example CA"])
+            .status()
+            .expect("openssl");
+        assert!(other_status.success(), "example CA");
+        let other = std::fs::read(dir.join("other.crt")).expect("other");
+        assert!(
+            super::stamp_error(
+                false,
+                Some(&other),
+                true,
+                "https://odoo-connector:8000/mcp",
+                "https://openbao:8200",
+            )
+            .is_ok()
+        );
+        assert!(
+            super::stamp_error(
+                true,
+                Some(&ca),
+                true,
+                "https://odoo-connector:8000/mcp",
+                "http://openbao:8200",
+            )
+            .is_ok()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

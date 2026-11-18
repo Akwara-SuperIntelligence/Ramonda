@@ -132,7 +132,7 @@ The demo cannot show a cross-tenant read yet. There is no second stamp.
 
 ## Data handling
 
-Traffic between the stamp's parts, and from the stamp to client systems and to the model provider, must use TLS. That is a requirement on the deployment. It is not yet verified, because the compose file is not written.
+Traffic between the stamp's parts, and from the stamp to client systems and to the model provider, must use TLS. Local Compose uses the dev CA from `deploy/certs/generate.sh`. A non-local stamp leaves `RAMONDA_STAMP` unset and supplies the certificates in [deploy/certs/README.md](../../deploy/certs/README.md). The gateway refuses to start if that stamp would use the dev CA or plain HTTP to the Odoo connector or OpenBao. The Odoo connector requires the gateway's client certificate on the TLS handshake.
 
 Data at rest is a stamp requirement we still have to apply. OpenBao is the secrets store. We do not claim that Rakazo encrypts its own data directory. Volume encryption for Postgres, HelixDB, Nextcloud, and Rakazo's disk is required and not yet chosen or checked.
 
@@ -151,7 +151,7 @@ This is readiness for an assessment, not a certificate (R38). A reviewer can loo
 | Access control | OIDC, OpenFGA from the approved map, agent principals, gateway ignores tool-argument identity. | Keycloak consent to the gateway, end to end. |
 | Change control | Client-system writes wait for Ramonda's approval step. Rakazo cards do not count. | The approval screen in the demo. |
 | Logging | Append-only hash-chained log, copy on `{tenant}.audit`, watcher alerts only. | Chain recomputation on a real log. |
-| Cryptography | TLS in transit. Secrets in OpenBao, just in time. | TLS on the compose network. Volume encryption. |
+| Cryptography | TLS in transit. Secrets in OpenBao, just in time. The Odoo connector accepts only a gateway client certificate. | OpenBao TLS off the laptop stamp. Volume encryption. |
 | Operations | One stamp per client. Pinned images. Idempotent retries. | The compose file and a second stamp. |
 | Supplier relationships | Rakazo v0.9.0 unmodified. Model provider chosen per client, with that client's terms. | The provider contract. |
 | Incident handling | Watcher alert, human pause, tuple revoke, secret rotation, audit row. | A written drill. It has not been run. |

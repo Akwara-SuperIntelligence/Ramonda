@@ -25,7 +25,7 @@ KEYCLOAK = os.environ.get("KEYCLOAK_URL", "https://keycloak:8443")
 GATEWAY = os.environ.get("GATEWAY_URL", "http://127.0.0.1:8080")
 DATABASE = os.environ.get("DATABASE_URL", "postgres://ramonda:ramonda@127.0.0.1:5432/ramonda")
 WEB = os.environ.get("RAKAZO_WEB", "http://127.0.0.1:5173")
-CA = ROOT / "deploy/keycloak/dev-only-ca.crt"
+CA = ROOT / "deploy/certs/out/ca.crt"
 
 
 def digest(previous, body):

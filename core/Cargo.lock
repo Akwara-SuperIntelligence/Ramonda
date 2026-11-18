@@ -558,6 +558,7 @@ dependencies = [
  "axum",
  "chrono",
  "jsonwebtoken",
+ "pem",
  "postgres-types",
  "rand 0.8.8",
  "reqwest",
