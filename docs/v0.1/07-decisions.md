@@ -30,6 +30,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 3. The map goes live only after a person approves it
 
+**Superseded by [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The map steward writes the live map. A person is asked only when sources disagree, or when the change is sensitive. Foundry still must not write the live HelixDB. The text below is the old decision.
+
 **Decision.** HelixDB stores the approved map (R1, R3). Helix Foundry drafts a version. Versions do not change. Nothing in the live database changes until Nelly Achieng approves it. In Foundry that step is Make current. An automatic Foundry load must not write this stamp's live HelixDB. A refresh that would change who owns something, who cares, a role, who may read a type, or who is accountable stays a proposal.
 
 **Options turned down.** Hand-building every node. Letting Foundry's scheduled refresh write the live graph. Treating a draft as the map staff rely on.
@@ -41,6 +43,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **Where it's argued.** [Ontology, How the map is built and changed](06-ontology.md#how-the-map-is-built-and-changed). [Architecture, The map](04-architecture.md#the-map).
 
 ## 4. Permissions switch with the map, as one pair
+
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The live map and its OpenFGA tuples still change as one pair. The steward writes routine updates. A person is not required for every version. The person alerted on a failure is whoever holds the position for that decision. The text below is the older wording.
 
 **Decision.** OpenFGA tuples are rebuilt only from an approved map (R3, R7). A request uses one pair: a map version and the tuples written from that version. The gateway switches only after the new tuples commit. If that write fails, the previous pair stays current. The new Helix load is not served. There is no extra grace period after the new tuples commit.
 
@@ -54,6 +58,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 5. Agents notice. They are not scripted per scenario
 
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** Agents still notice from events. They are not scripted per scenario. The names in the text below are the old demo. Responsibility sits on a position.
+
 **Decision.** An always-on agent is woken by `{tenant}.changes` and decides what matters (R20). Who would care is read from the map: `Owns` and `CaresAbout`. Amina owns Westlands. Waste cost matters to her and to Grace. Memory may inform the decision. It does not grant authority. `{tenant}.triggers` is only for schedules and outside webhooks.
 
 **Options turned down.** A hand-written rule per scenario, such as a waste threshold that raises the alert itself.
@@ -65,6 +71,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **Where it's argued.** [Architecture, Agent runtime](04-architecture.md#agent-runtime). [Ontology, Responsibility and interest](06-ontology.md#responsibility-and-interest).
 
 ## 6. One identity per standing agent
+
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** One agent is still one principal, with limits. The accountable human is whoever holds the approving position. Do not key the agent to a named person. The text below names people from the old demo.
 
 **Decision.** Each standing agent is one principal, like a new hire, not one identity per scenario (R8). The Akwara ops agent has a role, explicit limits, and a named human manager. When nobody asked, the gateway acts as that agent. It never uses a shared credential. It may read within its role. It may take a small reversible step that does not change a client system, such as drafting a note. It asks a human when it is unsure, when the step is irreversible, or when the step is outside its role. A write to a client system still follows the approval rules (R12, R14). The audit row names the agent and the accountable human. When a person asked, the gateway acts as that person.
 
@@ -78,6 +86,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 7. The watcher records and alerts. A human pauses
 
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** An alerting agent still cannot pause a run or edit the map. The person it alerts holds the position for that decision. The map steward writes routine map updates. A separate watcher is not a stage in the current plan. The name in the text below is the old demo.
+
 **Decision.** The watcher reads `{tenant}.audit` and `{tenant}.changes` (R18). It may record a finding and alert the client admin. For Akwara Cafe that person is Nelly, including when a change suggests the map is behind, such as a new manager, branch, or supplier. It cannot stop a run, pause an agent, edit the map, or write tuples. Pause is a control on the admin console. A human uses it (R32).
 
 **Options turned down.** A watcher that blocks a later action, or that applies a map change itself.
@@ -89,6 +99,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **Where it's argued.** [Architecture, Audit](04-architecture.md#audit). [Ontology, How the map is built and changed](06-ontology.md#how-the-map-is-built-and-changed). [PRD, R18](02-prd.md#audit-and-events) and [R32](02-prd.md#admin-console).
 
 ## 8. The gateway learns who is calling from its own OAuth token
+
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The local stamp signs a person in through Keycloak, and the gateway acts as that person. `verify/ramonda check 1` exercises that path. Do not fork Rakazo. The sentence below that says the flow is not demonstrated describes the state before slice 1.
 
 **Decision.** Rakazo v0.9.0 does not forward the signed-in user's session or ID token to MCP servers. The gateway is a remote MCP server. Its OAuth authorization server is Keycloak, or the client's Entra ID or Okta. A staff member who is already signed in consents once. The gateway then receives a token for that person and acts as them (R6, R8). The standing agent has its own client and its own token. The gateway ignores a tenant or user id written in a tool argument.
 
@@ -126,6 +138,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 11. A job is not the same link as access
 
+**Superseded by [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** Access comes from the position on the live map. OpenFGA is filled from that position. There is no per-person permission table. A stray title in HR is not itself a grant. The text below is the old split.
+
 **Decision.** `HasRole` is the job. `MayRead` is permission to read a type. David's job is finance analyst. His access to margins is `MayRead` on `BranchMargin`. They are not one link.
 
 **Options turned down.** One link that means both "this is their job" and "they may read this type".
@@ -138,6 +152,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 12. Foundry sees real client data only with the client's approval
 
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** This rule still holds. Foundry may see a client's real data only with that client's own model key, or with written approval. v0.1 uses simulated data only. The agreed install is self-hosted and may use any model, including a local one. The hosted Anthropic default in the text below is not the v0.1 path.
+
 **Decision.** Helix Foundry, by default, sends synced tables and up to five documents per set to Anthropic models hosted through Helix. A Pro or Max workspace can use its own Anthropic key instead. Foundry may run on a client's real data only with that client's own model key, or a provider the client approved in writing. Until then it drafts from Akwara Cafe's fake data only.
 
 **Options turned down.** Pointing Foundry at a real client's Odoo or HR data while the hosted default model is still in use.
@@ -149,6 +165,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **Where it's argued.** [Security model, Threats](05-security-model.md#threats) and [Data handling](05-security-model.md#data-handling). [Ontology, Where it lives](06-ontology.md#where-it-lives).
 
 ## 13. Assemble what is mature. Build only what is different
+
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The split between what we assemble and what we build still holds. The map is produced by the steward from a Foundry draft. It is not a hand-written pack or a hand-written client file.
 
 **Decision.** We assemble Rakazo, HelixDB, Helix Foundry, OpenFGA, Keycloak, OpenBao, Postgres, Redpanda, OpenTelemetry, and the Akwara Cafe systems. We build the MCP gateway, the admin console, the connectors, artifact versions and the style filter, the outbox relay, the OpenFGA tuples derived from an approved map, and the hospitality pack plus client config.
 
@@ -198,6 +216,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 17. The gateway and the relay are Rust. Connectors are Python. The console is TypeScript.
 
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The language split still holds. Slice 1 already runs the Rust gateway with Keycloak on the local stamp. The sentence below that says this is not demonstrated describes the state before that slice.
+
 **Decision.** The MCP gateway is Rust from day one, with no Python stopgap. Connectors are Python 3.12, typed, using the official MCP Python SDK. The outbox relay is Rust, in the same Cargo workspace as the gateway. It is part of the same write path, the Postgres outbox to Redpanda. The relay's language is the least load-bearing part of this decision and is open to revision. The admin console is TypeScript, built with Vite, with bun as the package manager. It is not Next.js.
 
 **Options turned down.** A Python gateway, rewritten in Rust later. Next.js for the console. One language for every component we build.
@@ -210,6 +230,8 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 18. Guard the repo before feature work
 
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The repo guards still hold. The nine scripted checks are not the product test. `verify/ramonda check 1` is a safety net for the plumbing. The sentence below that says the CLI has no commands describes slice 0. The command exists now. That is not a reason to add more checks.
+
 **Decision.** Feature work starts from a guarded repo ([slice 0](08-build-plan.md#0-repo-foundations)). The layout is the one in [architecture, Reuse](04-architecture.md#reuse) and [decision 17](#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript): `core/` holds the Cargo workspace (`gateway/`, `relay/`, the shared `outbox/` contract) and the TypeScript console; `connectors/` holds one Python 3.12 package per system; `packs/hospitality/` and `clients/akwara-cafe/` are config. Boundaries, the comment rule, and the hot-path rule are CI failures, and the error names the allowed alternative. Warnings are errors, on rustfmt, clippy with pedantic, ruff, pyright strict, pytest, `tsc` strict, and Biome. `AGENTS.md` is thin and pairs each rule with the check that enforces it. `verify/` holds a stub of the nine Akwara Cafe checks and a `ramonda` CLI with no commands. pstack is enabled in `.cursor/settings.json` by its marketplace name, which installs Cursor's reviewed release. Ponytail is pinned there by git URL and commit, and that commit's always-on rule is copied to `.cursor/rules/ponytail.mdc` because cloud agents do not run its session hook. TLA+ is written in the slice that writes the code it covers. Slice 0 creates `specs/` and writes no model.
 
 **Options turned down.** A prose style guide, or a human review step, as the way to keep agents honest. ESLint beside Biome, and any linter beyond the set above. Ponytail's `shortcut:` comments. Ponytail's Cursor hook install, which does not run for a cloud agent. Writing the TLA+ models in the scaffold slice. Tracking Ponytail on a floating branch. A git pin of `https://github.com/cursor/plugins` for pstack, which is the marketplace repo and not the plugin. A relay that depends on the gateway. A connector that imports another connector or `core`.
@@ -219,3 +241,19 @@ To add a decision, append the next number. To change one, add a new entry and ma
 **What it costs us.** CI runs three toolchains before any feature. A pedantic warning is fixed in the code. A hot-path file cannot block, allocate, or sleep, so the caller owns the buffer. The `ramonda` CLI does nothing until the stamp boots and `/create-verification-skill` fills `verify/` in. Slice 3 has to write the outbox recovery model and the approval and permission state machine with the code, because slice 0 left `specs/` empty.
 
 **Where it's argued.** [Build plan, slice 0](08-build-plan.md#0-repo-foundations). The directory names come from [architecture, Reuse](04-architecture.md#reuse). The languages come from [decision 17](#17-the-gateway-and-the-relay-are-rust-connectors-are-python-the-console-is-typescript).
+
+## 19. Build the map from the systems and test with the simulator
+
+**Decision.** Ramonda builds the company map from the systems the company connects. The org chart is positions, reporting lines, teams, and responsibilities. People fill positions. Nothing is keyed to a named person. Access in OpenFGA comes from the position on the live map. Agents belong to positions. They start at watch, then suggest, then act. A risky action waits for whoever holds the approving position. Each agent has a manual a person owns.
+
+The test is a simulator with a hidden record of what really happened. The first business is Akwara Cafe. A second, different simulated business follows. Scripted checks are a safety net only. `verify/ramonda check 1` is that net for the plumbing that exists today.
+
+Helix Foundry drafts into a staging HelixDB that it may overwrite. The map steward writes a separate live HelixDB. Foundry must not write the live database. The agreed Foundry install is self-hosted, under Apache-2.0, run with Docker, and it may use any model, including a local one. [Decision 12](#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. v0.1 uses simulated data only.
+
+**Options turned down.** A hand-written demo company with named people and planted facts. Per-person permission tables. A person approving every map version. Scripted checks as the main test. The wave plan merged in PR 80. Extending `scripts/seed_akwara_cafe.py` instead of replacing it with the simulator.
+
+**Why.** The scripted checks and the planted seed passed while proving little about a new company. A change of position has to change access without a new rule for that person. A map that a person maintains by hand does not stay current. The simulator writes messy history into the real systems, and the grader can score open questions against a record the agents do not see.
+
+**What it costs us.** The seed script, the named users in the local Keycloak realm, and `verify/ramonda check 1` remain until the simulator replaces them. Do not extend them. The public Foundry introduction still describes a hosted product. v0.1 does not follow that default. The second business is not described yet.
+
+**Where it's argued.** [Brief](01-product-brief.md). [Requirements](02-prd.md). [Simulator](03-demo-company.md). [Architecture](04-architecture.md). [Ontology](06-ontology.md). [Build plan](08-build-plan.md).
