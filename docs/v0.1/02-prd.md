@@ -1,303 +1,175 @@
 # Product requirements
 
-These requirements turn the [product brief](01-product-brief.md) into checks an engineer can build and a tester can run. The brief is the definition. This document adds no product scope. Who buys Ramonda, and that the charge is for outcomes, stays in the brief and is not build work. Where the brief does not specify a design, see `04-architecture.md`, `05-security-model.md`, and `06-ontology.md`.
+These requirements turn the [product brief](01-product-brief.md) into checks an engineer can build. The brief is the definition. This document adds no product scope. Where the brief does not specify a design, see [04-architecture.md](04-architecture.md), [05-security-model.md](05-security-model.md), and [06-ontology.md](06-ontology.md).
 
-## Users and roles
+The order of work, and the done test for each stage, is [08-build-plan.md](08-build-plan.md). An older requirements list numbered R1 to R38 and used named people and planted rows. [Decision 19](07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator) replaces that list. A historical decision that cites an old R number is describing the document as it was then.
 
-Five kinds of people use the product.
+## Users
 
-- **Staff** use the web and mobile app to ask questions, propose actions, and receive push alerts.
-- **Approvers** are staff named by an approval rule. They approve or decline in Ramonda's own approval step, including from the staff app on their phone, before a change is written back and before an artifact is marked official or sent outside. A Rakazo approval card alone does not count.
-- **Client admins** use the thin admin console for roles, connected systems, approval rules, the audit log, and evals. A human can pause a standing agent from that console.
-- **Akwara operators** onboard a client. They apply an industry pack and that client's config in the same console, inside that client's tenant.
-- **Auditors and security reviewers** read the audit log to check a sign-off. They do not change the log.
+- A person who holds a position uses the app to ask a question, to propose an action, and to receive an alert.
+- The person who holds the approving position approves or declines in Ramonda's own step. A Rakazo approval card does not count.
+- A person who holds the admin position resolves a disagreement in the map, or a sensitive change, and can pause an agent from the console.
+- An auditor reads the audit log and cannot change it.
 
-The worked example is Akwara Cafe, the fictional company in [03-demo-company.md](03-demo-company.md). The six roles are below. Permissions the brief does not fix are config. The company shape is under Acceptance.
-
-1. **Branch manager.** Asks about waste, sales, and deliveries at their branch. Proposes a change such as cutting weekday orders.
-2. **Barista.** Sees only their own shifts.
-3. **Regional ops lead.** Approves or declines an operational change. In the example, the weekday order cut.
-4. **Finance analyst.** Asks the same question as the branch manager and also sees margins.
-5. **Bakery and supply.** Works the central bakery, the suppliers, and deliveries.
-6. **HR.** Works staff records and shifts.
+The worked example is the Akwara Cafe simulator in [03-demo-company.md](03-demo-company.md). Positions are in that description. People who fill them come and go. Do not write a requirement that names a person.
 
 ## Core flows
 
-### 1. Ask and get a permissioned answer
+### 1. Ask from a position
 
-1. The staff member signs in as themselves.
-2. They ask a question in the app.
+1. The person signs in as themselves.
+2. They ask in their own words.
 3. The gateway reads the client's systems as that person. The agent holds no credential.
-4. The answer includes only what that person's permissions allow.
-5. The same question from another role comes back different where the permissions differ.
+4. The answer includes only what that person's position allows.
+5. The same question from another position comes back different where the positions differ.
 
-### 2. Propose, approve, write back, and record
+### 2. Routine work with nobody asking
 
-1. A staff member proposes a change, or the agent proposes one from their question. The gateway acts as the person who asked. In the example, cut weekday croissant orders.
-2. The proposal goes to the approver named by the rule. In the example, the regional ops lead.
-3. The approver approves or declines in Ramonda's own approval step. They can do that from the staff app. The gateway records the decision. A Rakazo approval card alone does not count.
-4. A decline writes nothing. The gateway's decision is the audit record.
-5. An approval writes the change through the gateway into the existing system, as the person who asked. In the example, the ordering system.
-6. The action and its audit event commit together in Postgres and are relayed to Redpanda.
-7. The log keeps an immutable record: the action, who asked, the approver's decision, and the system written.
-8. Email sends a readable copy of the approved action. The log remains the source of truth.
+1. A schedule, or a change event, wakes the agent for a position.
+2. At watch, the agent records the finding and messages nobody.
+3. At suggest, it tells the positions the map names, and any gated write stays pending.
+4. At act, it does the routine work that position is allowed to do alone.
+5. A write that changes a client system still waits for the approving position when the map says so.
 
-### 3. An always-on agent alerts the right person
+### 3. Approve, write back, and record
 
-1. A connected system emits a change event. In the example, sales or a bakery delivery showing croissant waste rising. The gateway receives it. The agent holds no credential.
-2. An always-on agent reads the event and decides whether it matters. Who should hear it comes from the map's ownership links, not from a script for this scenario.
-3. If there is a problem, the app push-alerts only people allowed to see it. The branch manager is alerted. The barista is not sent the waste figures.
-4. This flow does not itself change a client system. That write still needs a rule, or a human approval as in flow 2.
-5. When nobody asked, the gateway acts as that standing agent's own identity. It does not use a shared credential.
+1. A person, or the agent, proposes a change that the map marks as needing approval.
+2. The gateway returns pending and does not call the client system.
+3. The person who holds the approving position approves or declines in Ramonda's own step. The gateway records the decision.
+4. A decline writes nothing. The decision is still an audit row.
+5. An approval writes the change through the gateway into the existing system.
+6. The action and its audit event commit together in Postgres. A relay copies the committed event to Redpanda once that path exists.
+7. Email may carry a readable copy. If the copy and the log disagree, the log wins.
 
-### 4. Work across departments without leaking restricted data
+### 4. Keep the map current
 
-1. Two roles work on the same situation, each under their own sign-in. In the example, waste.
-2. The finance analyst's view includes margins. The barista's view is only their shifts.
-3. A field restricted to one role is not copied into another role's answer, alert, email, or artifact.
+1. A mirror job copies the useful parts of the connected systems into one Postgres database.
+2. Helix Foundry drafts a system model from that database and loads it into a staging HelixDB.
+3. The map steward writes the checked result into a separate live HelixDB. Foundry's own refresh must not write that live database.
+4. OpenFGA is filled from the live map.
+5. A person is asked only when the sources disagree, or when the change is sensitive.
 
-### 5. Produce an artifact
+## Map
 
-1. The agent starts from the client's existing templates and past examples, such as previous Monday packs or board decks, and matches their branding, layout, and tone. It drafts the regional ops lead's Monday branch pack from point-of-sale sales and bakery deliveries.
-2. The draft is shared only with people allowed to see every source it used.
-3. It is not marked official, and not sent outside the company, until the approver named by the rule approves that version. Approval of an earlier version does not cover a later one.
-4. The approved version is saved through a connector to where staff already work: the client's Drive, SharePoint, or email. It is not put in a new Ramonda dashboard.
-5. The audit log records who made the change, whether it was a create or an edit, the version, the owner, and the source data. An edit or a regeneration writes a new version and leaves the earlier version in place. The new version needs its own approval before it is official or sent outside.
+**R1.** The map is the org chart and the links around it. HelixDB holds structure and links only. Sales, shifts, and payments stay in the client systems. Agents read those live through the gateway.
 
-### 6. Onboard a client from a pack and config
+Done when the live map for the simulated month matches the simulator's hidden org chart, and a sale is read from Odoo rather than from HelixDB. Stage 2 in the build plan.
 
-1. The operator starts the client from an industry pack. For Akwara Cafe, the pack is hospitality.
-2. The pack provides a ready-made map (branches, menus, suppliers, shifts), standard roles, standard approval rules, and ready-made agents and evals.
-3. The operator applies client config: names, the real org chart, which systems, extra rules, and the client's data.
-4. Systems are attached with a connector that already exists. No code is added for this client.
-5. Staff sign in as themselves. A second café chain starts from the same pack and different config, on the same core version.
+**R2.** Ramonda builds the observed chart from the connected systems. A chart the company supplies is stored separately as the stated chart, with the source and the date on every line. Neither chart replaces the other. Nobody types the map in by hand.
 
-### 7. An auditor reviews the log
+Done when a run produces the live map with no hand-written nodes. A stale supplied chart stays beside the observed chart. A small obvious difference is logged. A difference that would change who can approve or who can see what is one question, and the paper does not win it by default.
 
-1. The reviewer opens the audit log in the admin console and finds the approved write from flow 2.
-2. The record shows the action, who asked, the approver's decision, and the system written. They cannot edit or delete it.
-3. If an email copy disagrees with the log, the log is the record.
-4. A watcher agent has received that audit event from Redpanda. It may record a finding and alert the client admin. It cannot stop or change the action. A human may pause the agent from the console.
+**R3.** Helix Foundry drafts into the staging HelixDB it owns. The map steward writes the live HelixDB. A Foundry refresh must not overwrite the live database.
 
-## Requirements
+Done when a Foundry refresh changes the staging database and leaves the live database as the steward last wrote it.
 
-### Map
+## Permissions
 
-**R1.** The map is a live model of the business: its things, the links between them, the actions people can take, and who can see and do what.
+**R4.** The same question gets a different answer by position.
 
-Done when: the demo map includes branches, products, staff, suppliers, and orders, linked from a branch to its staff and its orders.
+Done when two positions ask the same messy question and each answer stays inside that position, scored against the simulator's hidden record.
 
-**R2.** A client map starts from an industry pack and is then changed with client config. Pack versus client map is in `06-ontology.md`.
+**R5.** OpenFGA is filled from the live map. Access follows the position. There is no permission rule per person. The model does not grant access.
 
-Done when: Akwara Cafe is the hospitality pack plus config, and a name or org-chart entry changes without a code change.
+Done when a person who moves from one position to another gains and loses access with no new rule written for that person.
 
-**R3.** HelixDB stores the map. Helix Foundry can draft it, and the draft is then config. Layout is in `04-architecture.md`.
+**R6.** A person signs in as themselves, through Keycloak or the client's OIDC provider.
 
-Done when: the demo map is in HelixDB, a Foundry draft can be produced, and that draft can be changed as config.
+Done when the session is that person, not a shared login.
 
-### Permissions
+## Gateway and connectors
 
-**R4.** The same question gets a different answer by role and permission.
+**R7.** A read or a write goes through the gateway. The agent holds no credential. OpenBao lends a secret for one call, and the gateway drops it when the call returns.
 
-Done when: the branch manager, the finance analyst, and the barista each ask why croissant waste is up; the analyst also sees margins, and the barista sees only their shifts.
+Done when an agent process has no system password or token, and a signed-in call runs as that person.
 
-**R5.** People can work on one situation without seeing another role's restricted data.
+**R8.** When a person asked, the gateway acts as that person. When nobody asked, it acts as the agent for that position. It does not use a shared credential.
 
-Done when: a field restricted to one role is absent from another role's answer, push alert, email, and artifact about that situation.
+Done when an unattended run is audited as that agent, and the audit row also names the position that is accountable.
 
-**R6.** A person signs in as themselves: Keycloak, or the client's Entra or Okta, via OIDC.
+**R9.** A connector is written once per system and reused. The cafe uses Odoo, Frappe HR, a simulated M-Pesa transaction log, and a mailbox. No money is sent. Each branch has its own till. The log uses the public Daraja C2B confirmation fields `TransactionType`, `TransID`, `TransTime`, `TransAmount`, `BusinessShortCode`, `BillRefNumber`, `OrgAccountBalance`, a masked MSISDN, and names that may be blank. It also uses the public customer Paybill and Till SMS shapes. Do not wait for an owner-supplied SMS sample.
 
-Done when: a demo user signs in with that provider and the session is that named person, not a shared login.
+Done when two simulated companies on the same system share one connector and differ in the data the simulator wrote.
 
-**R7.** OpenFGA decides whether a read or an action is allowed. The model does not. How the check is called is in `04-architecture.md`.
+## Approvals
 
-Done when: OpenFGA allows or refuses both the barista's question and the order-cut write.
+**R10.** A write the map marks as needing approval waits for the approving position. The training stage does not bypass that wait. A routine write the map allows for that position does not wait.
 
-### Gateway and connectors
+Done when a gated action is absent from the client system while it is paused, and after a decline. Stage 4 is the test of that pause. An ungated routine write at act is allowed through.
 
-**R8.** A read or write a person asked for goes through the MCP gateway as that person. When nobody asked, the gateway acts as the standing agent's own identity. The agent never holds the credential, and there is no shared credential.
+**R11.** The approve or decline that counts is Ramonda's own step, stored by the gateway. A Rakazo approval card does not release the write. A decline writes nothing and is still audited.
 
-Done when: calls for a signed-in person run as that person, an unattended read runs as the standing agent, and the agent process has no system password or token.
+Done when a Rakazo card with no Ramonda decision leaves the client system unchanged, and the log contains the gateway decision.
 
-**R9.** Connect a system with an MCP server, an API wrapper exposed as MCP, or change events. Headless browser automation is only for a system with none of those, and it still goes through the gateway and R14.
+**R12.** A data-changing action runs only when a rule on the map, or a human approval outside the model, allows it. Text the agent read cannot grant that.
 
-Done when: each of the four demo connections uses one of the three methods, or browser automation is recorded against a system with no API and no event feed.
+Done when an instruction inside a business record does not change an order, a permission, or a secret.
 
-**R10.** A connector is written once per system and reused by every client on that system. Odoo, Sage, and M-Pesa are examples.
+## Audit and events
 
-Done when: two clients on the same system share one connector codebase and differ only in config.
+**R13.** The audit log is append-only and hash-chained. It is the source of truth when an email copy disagrees.
 
-**R11.** Connector secrets sit in OpenBao or Infisical.
+Done when the application cannot update or delete a row, and a conflicting email does not override the log.
 
-Done when: demo credentials are in that store and are not in the agent, the source tree, or the prompt.
+**R14.** An action and its event commit together in Postgres and are relayed to Redpanda, so a committed action is not lost and a rolled-back action publishes nothing.
 
-### Approvals
+Done when the relay test in the architecture's event section passes. This requirement waits until Redpanda is in the stamp.
 
-**R12.** A data-changing action goes to the approver named by the rule before it is written to the client's system.
+**R15.** Events and the audit stream run on Redpanda. Standing agents and the map steward read that stream. A consumer does not classify the event for them.
 
-Done when: the weekday order cut is not in the ordering system until the regional ops lead approves it.
+Done when a change in a client system reaches the steward through Redpanda, and no scenario rule in our code decides that the change matters.
 
-**R13.** The authoritative approve or decline is Ramonda's own approval step, controlled and recorded by the gateway, so it lands in the audit log. The approver can take that step from their phone in the staff app. A Rakazo approval card alone is not approval for a gated write. A decline writes nothing.
+## App and notifications
 
-Done when: a decline leaves the ordering system unchanged, the log contains that gateway decision, and a Rakazo card with no Ramonda decision does not write the order.
+**R16.** Staff use the Ramonda web app, and the Rakazo mobile client, to chat, to take Ramonda's approval step, and to receive alerts. WhatsApp is not a channel.
 
-**R14.** A data-changing action runs only when a rule or a human approval outside the model allows it. Data the agent read cannot grant that.
+Done when a question, Ramonda's approve or decline, and an alert work without WhatsApp. Mobile is not required to pass the earlier stages.
 
-Done when: with no such rule and no approval, the order cut is not written, even if the agent was told to write it.
+## Admin console
 
-### Audit and events
+**R17.** The console is where a person resolves a map disagreement or a sensitive change, sees connected systems and the audit log, and pauses an agent. It does not chart sales. There is no per-client console.
 
-**R15.** Events and audit run on Redpanda from the start.
+Done when that person can pause an agent and can record a decision on a flagged map change, and the map steward cannot pause anyone.
 
-Done when: the demo produces those records on Redpanda.
+## Reports and decks
 
-**R16.** An action and its event commit together in Postgres and are relayed to Redpanda, so nothing is lost between the two.
+**R23.** A position agent produces a report or a deck from data that position may see. The grader scores it against the simulator's hidden record.
 
-Done when: the event still reaches Redpanda if the relay stops after the commit, and a rolled-back action produces no event.
+Done when one such file is produced in stage 4 or stage 5, its figures match the hidden record, and a position that may not see a source does not receive the file. Do not build the old planted Monday pack, finance deck, or excluded draft.
 
-**R17.** The audit log is append-only and is the source of truth.
+## Simulator
 
-Done when: the app, the agent, and the console cannot update or delete a record, and a conflicting email does not override the log.
+**R18.** The cafe simulator writes history from the business description into the real systems and keeps a hidden record. It does not plant answers.
 
-**R18.** A watcher agent reads the audit stream as a second layer, separate from the agent that did the work. It may record a finding and alert the client admin. It cannot stop or change a run.
+Done when stage 1 of the build plan passes, and a later stage can grade an open question against that hidden record.
 
-Done when: the watcher receives the approved order-change event from Redpanda, can alert the admin, and cannot itself pause the agent or alter the order.
+**R19.** v0.1 then runs a second, different simulated business through the same path. Nobody hand-writes that company's map.
 
-### App and notifications
+Done when stage 5 of the build plan passes.
 
-**R19.** Staff use the Ramonda web app and mobile app to chat, to take Ramonda's own approval step, and to receive push alerts. WhatsApp is not a channel. A Rakazo approval card alone does not approve a gated write.
+## Security
 
-Done when: the question, Ramonda's approve or decline, and a push alert work on web and on mobile, with no WhatsApp step, and a Rakazo card without that step does not release the write.
+**R20.** One client is one stamp. A person in one stamp cannot read another client's map, records, prompts, or audit log.
 
-**R20.** An always-on agent flags a problem from an event before anyone asks, and alerts only people allowed to see it.
+**R21.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification. Detail is in [05-security-model.md](05-security-model.md).
 
-Done when: flow 3's waste event alerts the branch manager and does not send the waste figures to the barista.
-
-### Email
-
-**R21.** Email carries a readable copy of an approved action and a summary. The audit log is the source of truth.
-
-Done when: the approved order change produces an email a person can read, a summary of it can be produced from the log, and the log wins if the email is missing or wrong.
-
-### Artifacts
-
-**R22.** An artifact is company work built from the client's own data, such as a report, deck, spreadsheet, SOP, policy draft, forecast, or small internal tool. It is an object in the map, with an owner, its sources, and a version.
-
-Done when: the Monday branch pack is on the map with an owner, its point-of-sale and bakery sources, and a version.
-
-**R23.** An artifact is visible only to people who may see every source it used. Its audience is never wider than the most restricted of those sources.
-
-Done when: the barista cannot open the Monday branch pack, because they cannot see its sales and delivery sources.
-
-**R24.** A specific artifact version is approved before that version is sent outside the company or marked official. Approval of an earlier version does not cover a later one.
-
-Done when: version 2 of the Monday branch pack is not marked official, and is not sent outside, until version 2 itself is approved.
-
-**R25.** An approved artifact is saved through a connector to the client's existing storage, such as Drive, SharePoint, or email. It is not kept in a new Ramonda dashboard.
-
-Done when: the approved Monday pack is a file in that storage, written by a connector, and Akwara Cafe has no artifact screen of its own.
-
-**R26.** Every create or edit of an artifact is audited with the actor, the operation, and lineage to the source data. An edit is recorded against the new version, not by changing an older one.
-
-Done when: the log for an edit of the Monday pack records who initiated it, that it was an edit, the owner, the new version, and the point-of-sale and bakery sources.
-
-**R27.** Every edit, including a regeneration, creates a new immutable version. It does not change the previous version. That new version is not official, and is not sent outside, until it is approved under R24.
-
-Done when: an edit of the Monday pack leaves version 1 intact, writes version 2, and version 2 is not official until it is approved.
-
-**R28.** Brand assets, templates, and past artifacts are taken from the client's existing storage and used as the style source. Permissions still apply. A restricted past artifact must not leak its content through that style source.
-
-Done when: the Monday pack's style comes only from templates and past artifacts the drafter may see, and a past artifact they may not see does not appear in the pack or become readable through it.
-
-**R29.** A new artifact uses the client's templates and branding by default.
-
-Done when: the Monday branch pack uses Akwara Cafe's existing template and branding, with no one-off design.
-
-**R30.** The record names the template or past examples an artifact was based on.
-
-Done when: the Monday pack's record names the template and the past examples it followed.
-
-**R31.** An admin can mark templates as approved, and can exclude a document from being used as an example.
-
-Done when: Akwara Cafe's Monday-pack template is marked approved, and a document the admin excludes is not used as an example for the next pack.
-
-### Admin console
-
-**R32.** The console covers roles, connected systems, approval rules, the audit log, and evals. A human can pause a standing agent from it, for example after a watcher alert. There is no new staff dashboard and no per-client console.
-
-Done when: an admin manages those items for Akwara Cafe in the shared console, can pause a standing agent, and Akwara Cafe has no screen of its own.
-
-### Reuse
-
-**R33.** Core is one codebase and one version for every client: Rakazo, the gateway, permission checks, approvals, audit, the app, and the admin console. Rakazo is unmodified. The core is not forked per client.
-
-Done when: Akwara Cafe and a second client run one core build, with no fork or patch of Rakazo.
-
-**R34.** Per client, only config changes: names, the real org chart, which systems, extra rules, and their data.
-
-Done when: Akwara Cafe is a hospitality pack plus config, and removing that config leaves no café-only code.
-
-**R35.** A client request goes into core, a connector, or a pack, so the next client benefits, or it stays config. One-off client code is avoided.
-
-Done when: a request useful to only one café is met in core, a shared connector, a pack, or config, and no module is added for that client alone.
-
-### Security
-
-**R36.** Tenants are isolated.
-
-Done when: an Akwara Cafe user cannot read another client's map, records, prompts, or audit log.
-
-**R37.** Everything an agent reads is untrusted, including prompt injection in business data.
-
-Done when: an instruction planted in a sales or delivery record does not change an order, a permission, or a secret, unless a rule or a human approval under R14 allows it and that allowance was not part of the planted instruction.
-
-**R38.** The product must be assessable for SOC 2 and ISO 27001. That is readiness, not a certification claim. Detail is in `05-security-model.md`.
-
-Done when: a reviewer can find demo evidence for R6, R8, R11, R14, R17, R18, R36, and R37.
+**R22.** Helix Foundry may see a client's real data only with that client's own model key, or with written approval of a provider. v0.1 uses simulated data only.
 
 ## Non-functional requirements
 
-### Security
-
-R6, R8, R11, R14, R17, R18, R36, R37, and R38 are the bar. Agents never hold credentials. A data-changing action needs a rule or a human approval outside the model. Tenants are isolated. The audit log is append-only. A watcher reads that stream, may alert the admin, and cannot stop a run. The aim is SOC 2 and ISO 27001 readiness.
-
-### Reliability
-
-R16 is the check. No committed action loses its event between Postgres and Redpanda, and no event is published for an action that did not commit.
-
-### Observability
-
-Traces use OpenTelemetry. Layout is in `04-architecture.md`.
-
-Done when: the permissioned question and the approved write each have a trace showing the gateway call and the person it acted as.
-
-### Performance
-
-No response-time or throughput target is set. Do not pass or fail the build on speed.
+Traces use OpenTelemetry once the collector is in the stamp. No response-time target is set. Do not pass or fail a stage on speed.
 
 ## Out of scope
 
-Carried from the brief.
-
-- Not a business-intelligence dashboard, and not a replacement for a data warehouse.
-- Not a replacement for the client's systems of record.
-- Not a fork of Rakazo.
-- No one-off interface for a single client; new interfaces are built once and reused across clients.
-- Not dependent on WhatsApp.
+- A business-intelligence dashboard, or a replacement for a data warehouse.
+- A replacement for the client's systems of record.
+- A fork of Rakazo.
+- An interface built for one client.
+- WhatsApp.
+- A hand-maintained org chart, a per-person permission table, or a planted answer.
 
 ## Acceptance
 
-Run this on Akwara Cafe. It is the brief's test of whether the product works. Every other requirement keeps its own Done when.
+Run the stages in [08-build-plan.md](08-build-plan.md). Each stage is done when its open questions, and the duties that run with nobody asking, match the simulator's hidden record.
 
-Akwara Cafe has about five branches, a central bakery, three suppliers, about forty staff, and the six roles above. The branches, people, four systems of record, and the extra M-Pesa, file, and mail connections are in [03-demo-company.md](03-demo-company.md). This scenario reads point-of-sale sales and bakery deliveries, writes the ordering system, and produces the Monday branch pack.
-
-1. The branch manager asks why croissant waste is up. The answer uses point-of-sale sales and bakery deliveries.
-2. The finance analyst asks the same question and also sees margins.
-3. The barista asks the same question and sees only their shifts. The three answers are not the same. Two differing answers would meet the brief; this demo checks all three.
-4. A weekday croissant order cut is proposed to the regional ops lead. Until they approve, the ordering system is unchanged.
-5. They approve in Ramonda's own approval step, from the staff app. The gateway records that decision and writes the change into the ordering system as the person who asked. A Rakazo card alone does not release the write.
-6. The audit log holds an immutable record: the action, who asked, the decision, and the system written. The action and its event were committed together in Postgres and are on Redpanda.
-7. An email copy of the approved action was sent. If it disagrees with the log, the log is the record.
-8. Staff used the Ramonda app, not a new dashboard and not WhatsApp.
-9. The agent drafts the regional ops lead's Monday branch pack from point-of-sale and bakery data, using Akwara Cafe's existing template and matching its branding, layout, and tone. Someone who cannot see those sources cannot open it. A past artifact they may not see is not used as a style example. A version is not marked official until that version is approved. The approved pack is saved to the client's existing storage. The audit log records who made the change, whether it was a create or an edit, the version, the sources, and which template or past examples it followed. An edit, or running it again, keeps the first version and writes a new one, which needs its own approval before it is official.
-
+`verify/ramonda check 1` remains the safety net for the plumbing in slices 0 and 1. A green check does not pass a stage.
