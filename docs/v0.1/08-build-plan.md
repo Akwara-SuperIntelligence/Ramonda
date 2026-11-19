@@ -73,23 +73,23 @@ The anchor `1-amina-reads-westlands-sales` is the old name of slice 1. That slic
 
 **What is built.** Tuple generation from positions, responsibilities, and approval roles. The pair switch in [decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair).
 
-**Done.** Two positions ask for the same kind of fact and each answer stays inside that position, scored against the hidden record of who held which position. Move one simulated person from one position to another. Access follows the move with no new permission row for that person. A failed tuple write leaves the previous pair in force.
+**Done.** Two positions ask for the same kind of fact and each answer stays inside that position, scored against the hidden record of who held which position. Move one simulated person from one position to another. Access follows the move with no new permission row for that person. A failed tuple write leaves the previous pair in force. If the new tuples have not committed within 15 minutes, the access the new map would remove expires.
 
 ## 4. Position agents
 
 **Goal.** One or two agents, each belonging to a position, do real messy work.
 
-**What is built.** A human-owned manual, the stages watch, suggest, and act, a schedule or a Redpanda wake-up, and Ramonda's approval step for a risky write. The outbox and the relay land here if the agent writes a client system. They can land earlier if stage 2 needs Redpanda for map changes. Do not add them before something reads them.
+**What is built.** A human-owned manual in `clients/akwara-cafe/`, the stages watch, suggest, and act, a schedule or a Redpanda wake-up, Ramonda's approval step for a risky write, and one report or deck from a position agent. The outbox and the relay land here if the agent writes a client system. They can land earlier if stage 2 needs Redpanda for map changes. Do not add them before something reads them.
 
-**Done.** Fresh messy questions from the people in those positions, plus a duty that runs with nobody asking. The rubric in [How a stage counts as done](#how-a-stage-counts-as-done) passes against the hidden record. The agent passes watch, then suggest, then act, in that order. A risky write stays pending until the approving position decides in Ramonda's step. A Rakazo card alone leaves the system unchanged. `verify/ramonda check 1` may still pass and does not pass the agent.
+**Done.** Fresh messy questions from the people in those positions, plus a duty that runs with nobody asking. The rubric in [How a stage counts as done](#how-a-stage-counts-as-done) passes against the hidden record. The agent passes watch, then suggest, then act, in that order. A risky write stays pending until the approving position decides in Ramonda's step. A Rakazo card alone leaves the system unchanged. A report or a deck from one of these agents matches the hidden record, and a position that may not see a source does not receive it. `verify/ramonda check 1` may still pass and does not pass the agent.
 
 ## 5. Grow
 
-**Goal.** The cafe becomes the full description. About six months of history, then the simulator keeps running. More branches, the rest of the noise, and more position agents. Then a second simulated business that is not a cafe, through the same path, with nobody hand-writing its map.
+**Goal.** The cafe becomes the full description. About six months of history, then the simulator keeps running. More branches, the rest of the noise, and more position agents, including more reports and decks. Then a simulated logistics company, through the same path, with nobody hand-writing its map.
 
-**What is built.** The rest of the cafe systems the description names, the remaining agents, and a second simulator description with its own hidden record. The second business is not specified in this repo. Do not invent its industry in code before the owner describes it.
+**What is built.** The rest of the cafe systems the description names, the remaining agents, and a second simulator for a logistics company with its own hidden record. Do not copy the cafe chart into it. Do not invent its depots, fleet, or staff in this plan.
 
-**Done.** The cafe's open questions and unprompted duties match its hidden record across the branches that are running. The second business gets a correct org chart, position access, and useful routine work from its own systems, graded against its own hidden record. A person in the first business cannot read the second business's map or log. No module is named for either company.
+**Done.** The cafe's open questions and unprompted duties match its hidden record across the branches that are running. The logistics company gets a correct org chart, position access, and useful routine work from its own systems, graded against its own hidden record. A person in the cafe cannot read the logistics company's map or log. No module is named for either company.
 
 <a id="4-the-waste-agent-notices"></a>
 
@@ -104,24 +104,24 @@ PR 80 replaced an earlier slice list with five waves. Decision 19 replaces both.
 | Slice 2, allowed and refused for named people | [Stage 3](#3-position-access), by position |
 | Slice 3, a write waits | [Stage 4](#4-position-agents), for a risky write. The outbox and Redpanda come with the first reader |
 | Slice 4, the waste agent notices | Dropped as a scripted scenario. Unprompted duties are stage 4 and stage 5, graded on the hidden record |
-| Slice 5, house-style report | Dropped from v0.1 |
-| Slice 6, the watcher | The steward applies ordinary map updates. An alerting agent still cannot pause a run. A separate watcher is not a stage |
+| Slice 5, house-style report | [Stage 4](#4-position-agents) and [stage 5](#5-grow). A position agent produces a report or a deck, graded against the hidden record. The old planted Monday pack stays dropped |
+| Slice 6, the watcher | Dropped. The map steward asks when sources disagree. It cannot pause a run |
 | Slice 7, a named admin approves every map version | Dropped. [Decision 3](07-decisions.md#3-the-map-goes-live-only-after-a-person-approves-it) is superseded. A person is asked only on disagreement or a sensitive change |
 | Slice 8a, full seed and named staff | The seed is replaced by [stage 1](#1-simulator). Do not extend `scripts/seed_akwara_cafe.py` |
 | Slice 8b, a named barista's shifts | Dropped as a scripted check. Shifts stay in HR. Access is stage 3 |
 | Slice 8c, the approval email | Not a stage. If mail is sent, the audit log still wins |
 | Slice 8d, mobile | Not required before stage 5. Rakazo's own client is the app |
 | Slice 8e, pack version 2 and a planted note | Dropped. Do not plant an instruction |
-| Slice 9, the nine checks and a second cafe from a pack | Replaced by [stage 5](#5-grow). The second business is a different business, not a second cafe from a hand-written pack |
-| Wave 1, map, manuals, and a person making every draft current | Split across stages 2, 3, and 4. The person no longer approves every draft |
+| Slice 9, the nine checks and a second cafe from a pack | Replaced by [stage 5](#5-grow). The second business is a logistics company. A pack is only a starting set of agents and position templates |
+| Wave 1, map, manuals, and a person making every draft current | Split across stages 2, 3, and 4. The person no longer approves every draft. Manuals live in `clients/` |
 | Wave 2, named branch and barista agents | Stage 4, one or two positions, then stage 5 |
 | Wave 3, ops agent, bakery agent, Redpanda, Odoo write | Redpanda and the write path arrive with the stage that reads them. The named agents do not |
-| Wave 4, named finance and HR agents, Daraja, pay writes | HR data starts in stage 1 because the org chart is read from it. Finance and pay agents wait for stage 5. The payment log is simulator input, not a scripted match |
-| Wave 5, Monday pack, mobile, second cafe | The Monday pack is dropped. The second company is stage 5 and is not another cafe |
+| Wave 4, named finance and HR agents, Daraja, pay writes | HR is Frappe HR from stage 1. The payment log is a simulated M-Pesa log, with no money sent. Finance agents wait for stage 5 |
+| Wave 5, Monday pack, mobile, second cafe | The planted Monday pack stays dropped. Reports and decks are stage 4 and stage 5. The second company is a logistics company |
 
 ## What this plan leaves out
 
-WhatsApp, a fork of Rakazo, a headless browser, a payment that is actually sent, a business-intelligence dashboard, a per-client screen, a hand-written org chart, and a planted answer. Debezium is not in v0.1. Company reports and decks are not in v0.1.
+WhatsApp, a fork of Rakazo, a headless browser, a payment that is actually sent, a business-intelligence dashboard, a per-client screen, a hand-written org chart, and a planted answer. Debezium is not in v0.1. The old planted Monday pack, finance deck, and excluded draft are not in v0.1.
 
 ## Rules that stay
 

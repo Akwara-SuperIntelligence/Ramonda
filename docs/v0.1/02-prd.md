@@ -87,7 +87,7 @@ Done when an agent process has no system password or token, and a signed-in call
 
 Done when an unattended run is audited as that agent, and the audit row also names the position that is accountable.
 
-**R9.** A connector is written once per system and reused. The systems for the cafe are Odoo, an HR system such as Frappe HR, a payment log in the style of M-Pesa, and a mailbox.
+**R9.** A connector is written once per system and reused. The cafe uses Odoo, Frappe HR, a simulated M-Pesa transaction log, and a mailbox. No money is sent. The log's messages should look realistic. The exact text of a real M-Pesa message is a to-do until the owner supplies an example. Do not invent that format.
 
 Done when two simulated companies on the same system share one connector and differ in the data the simulator wrote.
 
@@ -129,11 +129,13 @@ Done when a question, Ramonda's approve or decline, and an alert work without Wh
 
 **R17.** The console is where a person resolves a map disagreement or a sensitive change, sees connected systems and the audit log, and pauses an agent. It does not chart sales. There is no per-client console.
 
-Done when that person can pause an agent and can record a decision on a flagged map change, and the alerting agent cannot pause anyone.
+Done when that person can pause an agent and can record a decision on a flagged map change, and the map steward cannot pause anyone.
 
-## Artifacts
+## Reports and decks
 
-Company reports, decks, and house-style packs are not part of v0.1. Do not build a Monday pack, a finance deck, or an excluded draft. Those fixtures belonged to the old scripted demo.
+**R23.** A position agent produces a report or a deck from data that position may see. The grader scores it against the simulator's hidden record.
+
+Done when one such file is produced in stage 4 or stage 5, its figures match the hidden record, and a position that may not see a source does not receive the file. Do not build the old planted Monday pack, finance deck, or excluded draft.
 
 ## Simulator
 

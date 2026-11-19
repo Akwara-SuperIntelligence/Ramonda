@@ -22,7 +22,7 @@ An always-on agent is woken by a schedule or by `{tenant}.changes`. It is not gi
 
 ## The job layer
 
-An agent belongs to one position. It has a manual that a person owns. The agent can read the manual through the gateway and cannot edit it. The stage is watch, then suggest, then act. The owner of the manual raises the stage. The agent cannot raise its own stage.
+An agent belongs to one position. It has a manual that a person owns. The file lives in that client's directory under `clients/`. For the cafe that directory is `clients/akwara-cafe/`. A person edits it. The agent can read it through the gateway and cannot edit it. The stage is watch, then suggest, then act. The owner of the manual raises the stage. The agent cannot raise its own stage.
 
 At watch, findings stay with the owner. At suggest, the positions named by the map are told, and a gated write stays pending. At act, routine work runs with nobody asking, and a gated write still waits for the approving position.
 
@@ -87,7 +87,7 @@ The live database is the one the map steward writes. Only the steward updates it
 
 HelixDB stores a labelled property graph. The current quickstart does not require a schema file before a write. Whether an unknown label is rejected is [open question 2](#open-questions) below. Agents do not send writes. The steward does, for the live database. Foundry does, for the staging database.
 
-The agreed Foundry install is self-hosted and may use any model, including a local one. The public introduction still describes the hosted product. See [the architecture](04-architecture.md#the-map) and [decision 12](07-decisions.md#12-foundry-sees-real-client-data-only-with-the-clients-approval).
+The agreed Foundry install is the self-hosted Docker Compose in [HelixDB/helix-foundry](https://github.com/HelixDB/helix-foundry), under Apache-2.0. It may use any model, including a local one. Do not point v0.1 at foundry.helix-db.com. See [the architecture](04-architecture.md#the-map) and [decision 12](07-decisions.md#12-foundry-sees-real-client-data-only-with-the-clients-approval).
 
 ## How the map is built and changed
 
@@ -99,7 +99,7 @@ The agreed Foundry install is self-hosted and may use any model, including a loc
 6. Later changes arrive on `{tenant}.changes`. The steward applies an ordinary change itself. A large structural change sends the steward back to Foundry for a fresh draft, which the steward merges.
 7. A person is asked only when sources disagree, or when the change is sensitive. That person holds the position for the decision. The live map stays as it was until they decide.
 
-If the tuple write fails, the previous pair stays current. Access the new map would remove stays in force until the new tuples commit. [Decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair) accepts that window. No separate revocation step, and no time limit, is specified. The gateway retries. It does not deny the whole company. The first failure is an audit row and an alert to the position that handles it.
+If the tuple write fails, the previous pair stays current. Access the new map would remove stays in force until the new tuples commit, and for no longer than 15 minutes. After 15 minutes that access expires even if the new tuples have not committed. The rest of the company is not locked out. [Decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair) is the pair. The 15 minute bound is the owner's later limit on the stale window. The gateway retries. The first failure is an audit row and a question from the map steward to the position that handles it.
 
 Foundry's scheduled refresh writes staging only. It must not write the live HelixDB.
 

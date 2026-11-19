@@ -48,7 +48,7 @@ Tests are messy questions from people in positions, plus the duties an agent run
 
 Connect Ramonda to a new company's systems. Nobody writes the org chart or the permissions by hand. Ramonda builds a correct org chart and map. It gives every position the right access. The agents start useful routine work within days.
 
-v0.1 proves that on the simulated cafe, then on a second, different simulated business. The second business is not described yet. It must not be a copy of the cafe.
+v0.1 proves that on the simulated cafe, then on a logistics company. The logistics company is not a second cafe. Its detail is not written yet. Do not invent its branches or its staff.
 
 ## Out of scope
 

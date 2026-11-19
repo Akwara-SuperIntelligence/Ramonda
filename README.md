@@ -16,7 +16,7 @@ An agent belongs to a position. It starts at watch, then moves to suggest, then 
 
 Ready is a concrete test. Connect Ramonda to a new company's systems. Nobody writes the org chart or the permissions by hand. Ramonda builds a correct org chart and map. It gives every position the right access. The agents start useful routine work within days.
 
-v0.1 has to prove that on a simulated cafe, then on a second, different simulated business. The cafe is described in [03-demo-company.md](docs/v0.1/03-demo-company.md). The order of work is in [08-build-plan.md](docs/v0.1/08-build-plan.md). The reason for this shape is [decision 19](docs/v0.1/07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator).
+v0.1 has to prove that on a simulated cafe, then on a simulated logistics company. The cafe is described in [03-demo-company.md](docs/v0.1/03-demo-company.md). The order of work is in [08-build-plan.md](docs/v0.1/08-build-plan.md). The reason for this shape is [decision 19](docs/v0.1/07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator).
 
 ## What runs today
 

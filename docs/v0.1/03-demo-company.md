@@ -10,7 +10,7 @@ The full cafe is about six months of history, after which the simulator keeps ru
 
 ## Positions
 
-People fill these positions. The position is the stable record. Headcount moves as people are hired, leave, fall sick, or swap a shift.
+People fill these positions. The general manager is the top of the chart. The position is the stable record. Headcount moves as people are hired, leave, fall sick, or swap a shift.
 
 | Position | Reports to | What the position is responsible for |
 | --- | --- | --- |
@@ -83,7 +83,7 @@ A sentence inside a delivery note, an email, or a payment reference is business 
 | --- | --- |
 | Odoo | Sales and stock, including bakery deliveries and supplier orders |
 | HR, using the Frappe HR connector as the stand-in | People, the titles they were given, who they report to, shifts, and pay |
-| A payment log in the style of M-Pesa | Till receipts, typos, and reversals. The simulator does not send money |
+| A payment log | Simulated M-Pesa transactions: till receipts, typos, and reversals. No money is sent. Messages should look realistic. The exact text of a real M-Pesa message is a to-do until the owner supplies an example. Do not invent that format |
 | Mailbox | Ordinary mail the business would have sent |
 
 Odoo is the system the local stamp runs today. The HR system, the payment log, and the mailbox are part of this description and are not in the local Compose file yet. See [04-architecture.md](04-architecture.md).

@@ -69,7 +69,7 @@ Rakazo Spaces are not a boundary. OpenFGA is, once it is running. A tool argumen
 | A Rakazo approval card is treated as permission to write | Ramonda's own approval step is the record | A card with no Ramonda decision does not write. The approval step is not built yet |
 | Someone edits or deletes an audit row | The application role cannot update or delete. Each row stores the previous hash | Recompute the chain. `verify/ramonda check 1` checks the chain on the local stamp |
 | The model provider keeps or trains on client data | The provider and the contract are the client's. The local stamp uses DeepSeek when `DEEPSEEK_API_KEY` is set. We do not send connector secrets | The provider still sees the business data the caller was allowed to read |
-| Foundry sends records to a model | Decision 12. Real client data needs the client's own model key or written approval. v0.1 uses simulated data only. The agreed install is self-hosted and may use a local model | A v0.1 run has no real client's tables connected to Foundry |
+| Foundry sends records to a model | Decision 12. Real client data needs the client's own model key or written approval. v0.1 uses simulated data only, on the self-hosted Docker install | A v0.1 run has no real client's tables connected to Foundry |
 | A drifted image changes Rakazo | Rakazo is pinned to `ghcr.io/elie222/rakazo/app:v0.9.0` in `deploy/compose.yaml`. The stamp does not patch it | The pin is in the Compose file |
 | A retried call writes the order twice, or publishes a success that never happened | The pending action stores the key before the call. A stored result is returned on a repeat. A second call that arrives before that result is stored is outside this guarantee. A crash after the client system applies the write, and before that result is stored, can still apply the write again. That gap is not specified. The outbox row commits only after the connector reports success | The relay is not built, so this is not shown |
 
@@ -79,7 +79,7 @@ People sign in as themselves through OIDC. The local stamp uses Keycloak. A clie
 
 When nobody asked, the gateway acts as the agent for the position. That agent is one non-human principal in OpenFGA, with limits. The audit row names the agent and the accountable position. It is not a shared password.
 
-OpenFGA is filled from the live map when the map changes, not when a prompt asks. Access follows the position. There is no per-person permission table. The model does not grant access. A request uses one tuple pair, the previous one or the new one. Access the new map would remove stays in force until the new tuples commit. If that write fails, the previous pair stays current and the gateway retries. That window is [decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair).
+OpenFGA is filled from the live map when the map changes, not when a prompt asks. Access follows the position. There is no per-person permission table. The model does not grant access. A request uses one tuple pair, the previous one or the new one. The pair changes together. Access the new map would remove stays in force until the new tuples commit, and for no longer than 15 minutes. After 15 minutes that access expires even if the write has not committed. The gateway retries. The company is not locked out. That rule is [decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair), with the time limit added in [decision 19](07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator).
 
 The gateway ignores a tenant id or a user id written inside a tool argument.
 
@@ -113,7 +113,7 @@ Each row holds the action and the acting identity. When the identity is an agent
 
 The row stores the previous row's hash and the SHA-256 of that hash plus the payload. The payload is UTF-8 JSON with sorted keys. A reviewer verifies the chain by recomputing each hash in order. `verify/ramonda check 1` does that on the local stamp.
 
-How long rows are kept is not set. Export to Redpanda is planned. An alerting agent may record a finding and alert the position that should hear it. It cannot pause an agent or change a record. A human pauses the agent from the console.
+How long rows are kept is not set. Export to Redpanda is planned. The map steward may record a finding and ask the position that should hear it. It cannot pause an agent or change a record on its own. A human pauses the agent from the console. There is no separate watcher.
 
 ## Tenant isolation
 
@@ -131,7 +131,7 @@ Data at rest is still to apply. Volume encryption for Postgres, HelixDB, and Rak
 
 The local stamp's agent calls use DeepSeek when `DEEPSEEK_API_KEY` is set. Those calls send the prompt and the tool results the caller was allowed to see. They do not send connector secrets. Whether a client's provider may retain or train on the text is that client's contract.
 
-Helix Foundry is a separate path. A generation sends synced tables, and a limited set of documents, to a model. The agreed v0.1 install is self-hosted and may use a local model. The public docs still describe hosted Anthropic as the default. v0.1 does not use that default. Real client data waits for decision 12.
+Helix Foundry is a separate path. v0.1 runs the self-hosted Docker install from [HelixDB/helix-foundry](https://github.com/HelixDB/helix-foundry), Apache-2.0. It may use a local model. Real client data waits for decision 12.
 
 The cafe's staff names, shifts, and pay are personal data of people in a Kenyan setting, even though the people are simulated. The Kenya Data Protection Act, 2019, is the law a real Kenyan client would be under. The Office of the Data Protection Commissioner enforces it. Which country a stamp runs in is a deployment choice. The software does not keep data inside Kenya by itself.
 
@@ -146,13 +146,13 @@ This is readiness for an assessment, not a certificate. Several controls wait on
 | Logging | Append-only hash-chained log. `verify/ramonda check 1` checks the chain | The Redpanda copy |
 | Cryptography | TLS. Secrets in OpenBao for one call. The Odoo connector accepts only a gateway client certificate | Volume encryption. OpenBao TLS on a non-local stamp |
 | Operations | One Compose file. Pinned Rakazo image | A second stamp. The relay |
-| Incident handling | A person will pause an agent from the console. The alerting agent cannot | The console control, and a drill |
+| Incident handling | A person will pause an agent from the console. The map steward cannot | The console control, and a drill |
 
 ## Incident response
 
-Detect. An alerting agent reads the audit stream and may alert the position that should hear it. Traces show the gateway call and the identity it acted as. Neither channel stops the run. The stream and the traces are not in the local stamp yet. The hash-chained log is.
+Detect. The map steward reads the audit stream and may ask the position that should hear about a disagreement. Traces show the gateway call and the identity it acted as. Neither channel stops the run. The stream and the traces are not in the local stamp yet. The hash-chained log is.
 
-Contain. A human pauses the agent in the console. The alerting agent cannot. Access is narrowed by changing the position on the live map. The narrower tuples apply when that write commits. Until then the previous pair stays current. Connector secrets are rotated in OpenBao. A pause does not unwind a write the client system already accepted.
+Contain. A human pauses the agent in the console. The map steward cannot. Access is narrowed by changing the position on the live map. The narrower tuples apply when that write commits. Until then the previous pair stays current, and for no longer than 15 minutes. Connector secrets are rotated in OpenBao. A pause does not unwind a write the client system already accepted.
 
 Record. The pause, the map change, the refusal, and the rotation are audit rows.
 
@@ -164,4 +164,3 @@ These are not decided. Do not fill them in by guessing.
 2. **Retention.** How long we keep audit rows and Rakazo transcripts is unset.
 3. **Volume encryption.** Encryption of disks is required. The mechanism is not chosen.
 4. **How long an operator may keep access** to a client's stamp is not chosen.
-5. **Foundry's self-hosted image.** The agreed install is self-hosted, any model, including a local one. The public introduction does not document that image. Do not connect Foundry to data until the owner names the image.

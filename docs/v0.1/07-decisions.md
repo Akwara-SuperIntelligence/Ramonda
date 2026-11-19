@@ -46,7 +46,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 4. Permissions switch with the map, as one pair
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The live map and its OpenFGA tuples still change as one pair. The steward writes routine updates. A person is not required for every version. The person alerted on a failure is whoever holds the position for that decision. The text below is the older wording.
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The live map and its OpenFGA tuples still change as one pair. The steward writes routine updates. A person is not required for every version. Access the new map would remove expires after 15 minutes if the new tuples have not committed. The text below is the older wording, and it does not name that limit.
 
 **Decision.** OpenFGA tuples are rebuilt only from an approved map (R3, R7). A request uses one pair: a map version and the tuples written from that version. The gateway switches only after the new tuples commit. If that write fails, the previous pair stays current. The new Helix load is not served. There is no extra grace period after the new tuples commit.
 
@@ -88,7 +88,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 7. The watcher records and alerts. A human pauses
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** An alerting agent still cannot pause a run or edit the map. The person it alerts holds the position for that decision. The map steward writes routine map updates. A separate watcher is not a stage in the current plan. The name in the text below is the old demo.
+**Superseded by [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** There is no separate watcher. The map steward asks a person when sources disagree, or when a change would alter who can approve or who can see what. The steward cannot pause a run. A person pauses an agent from the console. The text below is the old decision.
 
 **Decision.** The watcher reads `{tenant}.audit` and `{tenant}.changes` (R18). It may record a finding and alert the client admin. For Akwara Cafe that person is Nelly, including when a change suggests the map is behind, such as a new manager, branch, or supplier. It cannot stop a run, pause an agent, edit the map, or write tuples. Pause is a control on the admin console. A human uses it (R32).
 
@@ -154,7 +154,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 12. Foundry sees real client data only with the client's approval
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** This rule still holds. Foundry may see a client's real data only with that client's own model key, or with written approval. v0.1 uses simulated data only. The agreed install is self-hosted and may use any model, including a local one. The hosted Anthropic default in the text below is not the v0.1 path.
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** This rule still holds. Foundry may see a client's real data only with that client's own model key, or with written approval. v0.1 uses simulated data only. v0.1 runs the self-hosted Docker install at [HelixDB/helix-foundry](https://github.com/HelixDB/helix-foundry), Apache-2.0, and it may use a local model. The hosted Anthropic default in the text below is not the v0.1 path.
 
 **Decision.** Helix Foundry, by default, sends synced tables and up to five documents per set to Anthropic models hosted through Helix. A Pro or Max workspace can use its own Anthropic key instead. Foundry may run on a client's real data only with that client's own model key, or a provider the client approved in writing. Until then it drafts from Akwara Cafe's fake data only.
 
@@ -168,7 +168,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 13. Assemble what is mature. Build only what is different
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The split between what we assemble and what we build still holds. The map is produced by the steward from a Foundry draft. It is not a hand-written pack or a hand-written client file.
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The split between what we assemble and what we build still holds. The map is produced by the steward from the company's own systems. A pack, if used, is only a starting set of agents and position templates.
 
 **Decision.** We assemble Rakazo, HelixDB, Helix Foundry, OpenFGA, Keycloak, OpenBao, Postgres, Redpanda, OpenTelemetry, and the Akwara Cafe systems. We build the MCP gateway, the admin console, the connectors, artifact versions and the style filter, the outbox relay, the OpenFGA tuples derived from an approved map, and the hospitality pack plus client config.
 
@@ -252,12 +252,14 @@ A company may also hand over the chart it already has. The steward normalises a 
 
 The test is a simulator with a hidden record of what really happened. The first business is Akwara Cafe. A second, different simulated business follows. Scripted checks are a safety net only. `verify/ramonda check 1` is that net for the plumbing that exists today.
 
-Helix Foundry drafts into a staging HelixDB that it may overwrite. The map steward writes a separate live HelixDB. Foundry must not write the live database. The agreed Foundry install is self-hosted, under Apache-2.0, run with Docker, and it may use any model, including a local one. [Decision 12](#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. v0.1 uses simulated data only.
+Helix Foundry drafts into a staging HelixDB that it may overwrite. The map steward writes a separate live HelixDB. Foundry must not write the live database. v0.1 runs Foundry from [HelixDB/helix-foundry](https://github.com/HelixDB/helix-foundry), self-hosted with Docker, under Apache-2.0. It may use any model, including a local one. [Decision 12](#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. v0.1 uses simulated data only.
+
+The owner has since settled the open points below. An industry pack is only a starting set of agents and position templates. The map is always built from the company's own systems. Reports and decks are in v0.1. A position agent produces them, and the grader scores them against the simulator. The cafe chart has a general manager at the top. A position manual lives in that client's directory under `clients/`, and only a person edits it. There is no separate watcher. The map and its OpenFGA tuples still change as one pair. Access the new map would remove expires after 15 minutes if the new tuples have not committed. The second simulated business is a logistics company. HR is Frappe HR. The payment log is a simulated M-Pesa transaction log, and no money is sent. The exact text of a real M-Pesa message waits for an example from the owner. Do not invent that format.
 
 **Options turned down.** A hand-written demo company with named people and planted facts. Per-person permission tables. A person approving every map version. Scripted checks as the main test. The wave plan merged in PR 80. Extending `scripts/seed_akwara_cafe.py` instead of replacing it with the simulator.
 
 **Why.** The scripted checks and the planted seed passed while proving little about a new company. A change of position has to change access without a new rule for that person. A map that a person maintains by hand does not stay current. The simulator writes messy history into the real systems, and the grader can score open questions against a record the agents do not see.
 
-**What it costs us.** The seed script, the named users in the local Keycloak realm, and `verify/ramonda check 1` remain until the simulator replaces them. Do not extend them. The public Foundry introduction still describes a hosted product. v0.1 does not follow that default. The second business is not described yet.
+**What it costs us.** The seed script, the named users in the local Keycloak realm, and `verify/ramonda check 1` remain until the simulator replaces them. Do not extend them. Rakazo's consent flow is still open. The idempotency gap after a client-system write is still open. The logistics company's operations are not described yet.
 
 **Where it's argued.** [Brief](01-product-brief.md). [Requirements](02-prd.md). [Simulator](03-demo-company.md). [Architecture](04-architecture.md). [Ontology](06-ontology.md). [Build plan](08-build-plan.md).

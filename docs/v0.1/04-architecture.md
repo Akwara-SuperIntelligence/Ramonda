@@ -65,7 +65,7 @@ Keycloak is built for sign-in. Copying its groups into the mirror is planned. Th
 
 ## The map
 
-Helix Foundry is the drafter. The agreed install is self-hosted with Docker, under Apache-2.0, and it may use any model, including a local one. The public introduction is [What is Helix Foundry?](https://docs.helix-db.com/foundry/start-here/introduction). That page describes the hosted product at foundry.helix-db.com, whose default models are Anthropic. v0.1 follows the agreed self-hosted install. Do not point v0.1 at the hosted default.
+Helix Foundry is the drafter. v0.1 runs the self-hosted install from [HelixDB/helix-foundry](https://github.com/HelixDB/helix-foundry), using that repository's Docker Compose. The license is Apache-2.0. It may use any model, including a local one. Do not point v0.1 at the hosted product at foundry.helix-db.com. [Decision 12](07-decisions.md#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. v0.1 uses simulated data only.
 
 [Decision 12](07-decisions.md#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. Foundry may see a client's real data only with that client's own model key, or with written approval. v0.1 uses simulated data only.
 
@@ -103,9 +103,9 @@ Connectors are Python 3.12. One package per system. The gateway passes the actin
 | --- | --- |
 | Odoo, for sales and stock | Runs. The connector requires the gateway client certificate |
 | HR, Frappe HR as the stand-in | Package only. Not in Compose |
-| Payment log, M-Pesa style | Package `connectors/daraja` only. Not in Compose. The simulator does not send money |
+| Payment log | Simulated M-Pesa transactions. The `connectors/daraja` package is the scaffold. No money is sent. Do not treat that package as a description of a real M-Pesa message |
 | Mailbox | Package `connectors/mailpit` only. Not in Compose |
-| Files | Package `connectors/nextcloud` only. Not in v0.1 |
+| Files | Package `connectors/nextcloud` only. A report or a deck does not have to land here to be graded |
 
 The mirror is a separate job. It is not one of these connectors. It copies into Postgres for Foundry. Agents still read live data through the gateway, not from the mirror.
 
@@ -127,7 +127,7 @@ Postgres holds actions, approvals, audit rows, and the outbox. Redpanda is the b
 | --- | --- | --- |
 | `{tenant}.changes` | Gateway, from connector events | The map steward and standing agents |
 | `{tenant}.triggers` | Schedules and outside webhooks | The run those schedules and webhooks wake |
-| `{tenant}.audit` | Relay, from committed audit rows | An alerting agent, and any export |
+| `{tenant}.audit` | Relay, from committed audit rows | The map steward, and any export |
 
 `{tenant}.triggers` is not a place for a scenario rule. A sale or a delivery is `{tenant}.changes`. The consumer delivers the event. The agent, or the steward, decides.
 
@@ -139,7 +139,7 @@ The audit log is a Postgres table. The application role cannot update or delete 
 
 Email is a readable copy. The log wins if they disagree.
 
-An alerting agent may read the audit stream, record a finding, and alert the position that should hear it. It cannot pause a run or edit the map. A person pauses an agent from the console. [Decision 7](07-decisions.md#7-the-watcher-records-and-alerts-a-human-pauses) records that limit. The name in that decision is the old demo.
+An alerting duty belongs to the map steward. It asks a person when sources disagree, or when a change would alter who can approve or who can see what. It cannot pause a run or edit the live map on its own authority. A person pauses an agent from the console. There is no separate watcher. [Decision 7](07-decisions.md#7-the-watcher-records-and-alerts-a-human-pauses) is the old watcher, and it is superseded.
 
 ## App and admin console
 
@@ -161,10 +161,11 @@ Inside the stamp, positions are separated by OpenFGA. A branch does not get its 
 | --- | --- | --- |
 | Core | Gateway, relay, outbox contract, console, audit | `core/` |
 | Connectors | One Python package per system | `connectors/` |
-| Simulator | The cafe, then a second business. Not written yet | Not chosen. Do not put it in `scripts/seed_akwara_cafe.py` |
-| Layout left by slice 0 | Empty pack directory, and the gateway endpoint file | `packs/hospitality/`, `clients/akwara-cafe/` |
+| Simulator | The cafe, then a logistics company. Not written yet | Not chosen. Do not put it in `scripts/seed_akwara_cafe.py` |
+| Starting templates | Agents and position templates only. Not the map | `packs/hospitality/` |
+| Client config | Manuals for this client's positions. People edit them. Agents do not | `clients/akwara-cafe/` |
 
-`packs/hospitality/` and `clients/akwara-cafe/` are not the org chart and not a hand-written company. Do not fill them with positions, people, or planted facts. The map is built by the steward. Where a position's manual is stored is not decided. Until it is, do not invent a second copy of the org chart to hold the manual.
+`packs/hospitality/` may hold a starting set of agents and position templates. It is not the org chart. The map is always built from the company's own systems. A position manual lives in that client's directory under `clients/`. A person edits the file. The agent can read it through the gateway and cannot edit it. `clients/akwara-cafe/gateway-mcp.json` only points Rakazo at the gateway. Do not fill these directories with planted facts.
 
 ## Deployment
 
@@ -186,6 +187,5 @@ How to start the stamp is in the [README](../../README.md). Certificate rules ar
 
 ## Open questions
 
-1. The public Foundry docs describe a hosted product. The agreed install is self-hosted, any model, including a local one. Do not invent a Docker Compose service for Foundry until the owner points at the image.
-2. The second simulated business is not described. Do not invent it in this document.
-3. Where a position's manual is stored is not decided.
+1. Rakazo's consent flow is still open. `verify/ramonda check 1` reaches the gateway with a Keycloak password grant. The consent step inside Rakazo runs only when `DEEPSEEK_API_KEY` is set. Do not fork Rakazo to close the gap.
+2. How a connector remembers an idempotency key after a crash, and what a second call does while the first is still in flight, is still open. The events section names the gap. Do not invent an Odoo deduplication scheme to close it.
