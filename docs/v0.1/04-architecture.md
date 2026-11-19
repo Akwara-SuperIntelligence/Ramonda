@@ -103,7 +103,7 @@ Connectors are Python 3.12. One package per system. The gateway passes the actin
 | --- | --- |
 | Odoo, for sales and stock | Runs. The connector requires the gateway client certificate |
 | HR, Frappe HR as the stand-in | Package only. Not in Compose |
-| Payment log | Simulated M-Pesa transactions. The `connectors/daraja` package is the scaffold. No money is sent. Do not treat that package as a description of a real M-Pesa message |
+| Payment log | Simulated M-Pesa transactions in the public Daraja C2B confirmation fields, plus Paybill and Till SMS shapes. No money is sent. The `connectors/daraja` package is the scaffold |
 | Mailbox | Package `connectors/mailpit` only. Not in Compose |
 | Files | Package `connectors/nextcloud` only. A report or a deck does not have to land here to be graded |
 
@@ -131,7 +131,7 @@ Postgres holds actions, approvals, audit rows, and the outbox. Redpanda is the b
 
 `{tenant}.triggers` is not a place for a scenario rule. A sale or a delivery is `{tenant}.changes`. The consumer delivers the event. The agent, or the steward, decides.
 
-The client system is not inside the Postgres transaction. The gateway stores the action, including its idempotency key, before it calls the connector. It commits the action and the outbox row only after the connector reports success. A repeat returns the result the connector has already stored for that key. A second call that arrives before that result is stored is outside this guarantee. If the connector crashes after the client system has applied the write and before it has stored that result, the key alone does not stop a second write. How that gap is closed is not specified. Do not assume Odoo deduplicates the key. Recovery retries the same key and does not ask for a second approval. Debezium is not in v0.1. It can replace the relay later without a change to writers.
+The client system is not inside the Postgres transaction. Every gated or allowed write carries a unique idempotency key. The connector stores that key on the record in the client system, for example in an Odoo reference field, as part of the write. Before a retry, the connector looks the key up in the client system. If the record is already there, it skips the write and returns the stored result. A second call with the same key, while the first is still running, is refused as in progress. The caller waits and checks again. The two calls never run in parallel. The gateway commits the action and the outbox row only after the connector reports success. Recovery retries the same key and does not ask for a second approval. Debezium is not in v0.1. It can replace the relay later without a change to writers.
 
 ## Audit
 
@@ -184,7 +184,3 @@ How to start the stamp is in the [README](../../README.md). Certificate rules ar
 | MCP gateway, audit write, borrowed secrets, connector mTLS | Rakazo v0.9.0, Keycloak, OpenBao, Postgres, Odoo | Built |
 | Simulator, mirror, map steward | HelixDB, Helix Foundry, OpenFGA, Redpanda | Planned |
 | Position agents, approval step, console, outbox relay | The HR system, the payment log, the mailbox | Planned |
-
-## Open questions
-
-How a connector remembers an idempotency key after a crash, and what a second call does while the first is still in flight, is still open. The events section names the gap. Do not invent an Odoo deduplication scheme to close it.

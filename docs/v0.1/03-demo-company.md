@@ -72,7 +72,7 @@ The simulator mixes ordinary mess into the history. It does not follow a script 
 - Hires, quits, sick days, and shift swaps.
 - A delivery that is late or short.
 - Equipment that breaks and is later repaired.
-- A payment that was typed wrong, and a reversal.
+- A payment that was typed wrong, a duplicate callback, a blank customer name, a wrong paybill reference, and a reversal.
 - HR title drift. The title stored in HR will not always match the position name in the table above.
 
 A sentence inside a delivery note, an email, or a payment reference is business text. It is not an instruction to Ramonda. Do not add a note whose only purpose is to tell an agent the right action.
@@ -83,7 +83,7 @@ A sentence inside a delivery note, an email, or a payment reference is business 
 | --- | --- |
 | Odoo | Sales and stock, including bakery deliveries and supplier orders |
 | HR, using the Frappe HR connector as the stand-in | People, the titles they were given, who they report to, shifts, and pay |
-| A payment log | Simulated M-Pesa transactions: till receipts, typos, and reversals. No money is sent. Messages should look realistic. The exact text of a real M-Pesa message is a to-do until the owner supplies an example. Do not invent that format |
+| A payment log | Simulated M-Pesa transactions. No money is sent. Each branch has its own till. Records use the public Daraja C2B confirmation fields `TransactionType`, `TransID`, `TransTime`, `TransAmount`, `BusinessShortCode`, `BillRefNumber`, `OrgAccountBalance`, a masked MSISDN, and names that may be blank, plus the public customer Paybill and Till SMS shapes |
 | Mailbox | Ordinary mail the business would have sent |
 
 Odoo is the system the local stamp runs today. The HR system, the payment log, and the mailbox are part of this description and are not in the local Compose file yet. See [04-architecture.md](04-architecture.md).

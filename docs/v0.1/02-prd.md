@@ -87,7 +87,7 @@ Done when an agent process has no system password or token, and a signed-in call
 
 Done when an unattended run is audited as that agent, and the audit row also names the position that is accountable.
 
-**R9.** A connector is written once per system and reused. The cafe uses Odoo, Frappe HR, a simulated M-Pesa transaction log, and a mailbox. No money is sent. The log's messages should look realistic. The exact text of a real M-Pesa message is a to-do until the owner supplies an example. Do not invent that format.
+**R9.** A connector is written once per system and reused. The cafe uses Odoo, Frappe HR, a simulated M-Pesa transaction log, and a mailbox. No money is sent. Each branch has its own till. The log uses the public Daraja C2B confirmation fields `TransactionType`, `TransID`, `TransTime`, `TransAmount`, `BusinessShortCode`, `BillRefNumber`, `OrgAccountBalance`, a masked MSISDN, and names that may be blank. It also uses the public customer Paybill and Till SMS shapes. Do not wait for an owner-supplied SMS sample.
 
 Done when two simulated companies on the same system share one connector and differ in the data the simulator wrote.
 
