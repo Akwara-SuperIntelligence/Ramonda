@@ -55,9 +55,9 @@ The worked example is the Akwara Cafe simulator in [03-demo-company.md](03-demo-
 
 Done when the live map for the simulated month matches the simulator's hidden org chart, and a sale is read from Odoo rather than from HelixDB. Stage 2 in the build plan.
 
-**R2.** Ramonda builds the map from the connected systems. A chart the company supplies is compared and differences are flagged. Nobody types the map in by hand.
+**R2.** Ramonda builds the observed chart from the connected systems. A chart the company supplies is stored separately as the stated chart, with the source and the date on every line. Neither chart replaces the other. Nobody types the map in by hand.
 
-Done when a run produces the live map with no hand-written nodes, and a supplied chart that differs is flagged for a person.
+Done when a run produces the live map with no hand-written nodes. A stale supplied chart stays beside the observed chart. A small obvious difference is logged. A difference that would change who can approve or who can see what is one question, and the paper does not win it by default.
 
 **R3.** Helix Foundry drafts into the staging HelixDB it owns. The map steward writes the live HelixDB. A Foundry refresh must not overwrite the live database.
 

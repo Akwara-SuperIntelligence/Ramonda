@@ -54,6 +54,29 @@ Links:
 
 The steward may add a type when the systems require it. A hand-written file of instances is not the way those instances arrive.
 
+## The stated chart and the observed chart
+
+The observed chart is the one the steward builds from the systems. It uses HR titles, manager fields, Keycloak groups, and how work actually flows.
+
+The stated chart is the org chart the company already has, if it hands one over. The steward accepts it in the form the company uses.
+
+- A spreadsheet or a CSV maps directly onto positions, reporting lines, teams, and branches.
+- A PDF, a slide, or a photo of a whiteboard is read by the model, then normalised into that same shape.
+- Manager fields already in HR, such as Frappe HR, are read as the company's stated reporting lines when that is the chart they keep.
+
+The same HR field can inform both charts. Provenance says which reading a line came from. Each line keeps its source, the file version when there is a file, and the date. Neither chart silently overwrites the other.
+
+Comparison confirms the lines that agree. A difference is classified.
+
+- A position on the paper with nobody in it is a vacancy.
+- Work done by someone the paper does not show is an unofficial responsibility.
+- A manager on the paper who never approves anything is a chart that is out of date.
+- A difference of the same kind is classified the same way.
+
+A small obvious fix is applied and logged. Anything that would change who can approve, or who can see what, is one short question to the approving position. It is not applied first. When the charts disagree, the steward weighs the systems above the paper, because a stated chart is often stale.
+
+A new upload is a new version. The comparison runs again. The previous version stays in the map history. Reading a real client's PDF or photo uses a model, so [decision 12](07-decisions.md#12-foundry-sees-real-client-data-only-with-the-clients-approval) still holds. v0.1 uses the simulated file only.
+
 ## Where it lives
 
 Two HelixDB databases sit on the client's stamp.
@@ -71,7 +94,7 @@ The agreed Foundry install is self-hosted and may use any model, including a loc
 1. The mirror copies the useful parts of Odoo, the HR system, Keycloak groups, and the payment log into one Postgres database. Email is not mirrored. Agents read the mailbox live through the gateway.
 2. Foundry drafts types, cross-system links, and mappings from that Postgres database. The draft is versioned `ontology.toml` and `mappings.toml`, with provenance. Foundry loads the draft into staging.
 3. The steward builds the org chart. It uses HR titles, manager fields, Keycloak groups, and how work flows. It merges messy titles onto positions. It adds responsibilities and approval roles, which Foundry does not know.
-4. When the company has supplied an org chart, the steward compares it and flags differences.
+4. When the company has supplied an org chart, the steward stores it as the stated chart and compares it with the observed chart, as in [The stated chart and the observed chart](#the-stated-chart-and-the-observed-chart).
 5. The steward writes the checked result into the live HelixDB and records a change. The gateway then writes the OpenFGA tuples for that result. A request uses the previous pair or the new pair, never the new map with the old tuples.
 6. Later changes arrive on `{tenant}.changes`. The steward applies an ordinary change itself. A large structural change sends the steward back to Foundry for a fresh draft, which the steward merges.
 7. A person is asked only when sources disagree, or when the change is sensitive. That person holds the position for the decision. The live map stays as it was until they decide.

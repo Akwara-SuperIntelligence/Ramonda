@@ -88,9 +88,15 @@ A sentence inside a delivery note, an email, or a payment reference is business 
 
 Odoo is the system the local stamp runs today. The HR system, the payment log, and the mailbox are part of this description and are not in the local Compose file yet. See [04-architecture.md](04-architecture.md).
 
+## Official chart
+
+The simulator also writes an official org chart file for the cafe. The file is the positions in the table above, as they stood a few months before the simulated present. It is deliberately stale. It may be a spreadsheet. The hidden record, not the file, says which lines have since drifted, and which class each drift is. A vacancy, an unofficial responsibility, and a manager who no longer approves are the kinds of drift. The exact lines are part of that hidden record. They are not printed here, and they are not written into the file as corrections.
+
+The steward is graded on catching those drifts. Trusting the file as the live chart fails the grade. Do not copy the file into the live map by hand.
+
 ## Hidden record
 
-The simulator keeps a private record of what it meant to happen. That record includes the true position chart, who held each position on each day, the quantities it wrote, and the payments it intended before typos and reversals.
+The simulator keeps a private record of what it meant to happen. That record includes the true position chart, who held each position on each day, where the official file has drifted, the quantities it wrote, and the payments it intended before typos and reversals.
 
 Graders use that record. The record is not loaded into the systems the agents read, and it is not written into the live map. A person can inject a surprise event. The injection is recorded in the hidden record as well.
 

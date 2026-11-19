@@ -6,7 +6,7 @@ You connect the systems. Ramonda works out how the company is organised. Akwara 
 
 The org chart organises the product. It holds positions, reporting lines, teams, and responsibilities. People fill positions. A record is not keyed to a named person.
 
-Ramonda builds this map from the connected systems and keeps it current. When the company also supplies an org chart, Ramonda compares the two and flags the differences. A person is asked only when the sources disagree, or when a change is sensitive. Nobody maintains the map by hand.
+Ramonda builds this map from the connected systems and keeps it current. A company may also hand over the org chart it already has. Ramonda keeps that stated chart beside the chart it observed, and it does not let either one replace the other. A person is asked only when a difference would change who can approve or who can see what. Nobody maintains the map by hand.
 
 Access follows the position. OpenFGA is filled from the map, so a change of position changes access. There is no permission rule per person.
 

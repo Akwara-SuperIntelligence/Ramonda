@@ -101,7 +101,7 @@ The approval step is not built yet.
 
 ## Prompt injection and untrusted content
 
-Business data is untrusted. That includes delivery notes, emails, payment references, webhooks, and documents. The text can be shown to a person. It cannot change an approval, an OpenFGA tuple, or a secret.
+Business data is untrusted. That includes delivery notes, emails, payment references, webhooks, documents, and a supplied org chart. The text can be shown to a person. It cannot change an approval, an OpenFGA tuple, or a secret. Reading a PDF or a photo of a chart does not grant a permission the map does not already give.
 
 The blast radius is the caller's position, then the approval rule, then the audit row. The agent can only ask the gateway.
 

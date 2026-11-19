@@ -65,7 +65,7 @@ The anchor `1-amina-reads-westlands-sales` is the old name of slice 1. That slic
 
 **What is built.** The mirror into Postgres. Helix Foundry drafting into the staging HelixDB. The steward. The live HelixDB that only the steward updates. Comparison against the true chart. A flagged difference when HR title drift and the other sources disagree.
 
-**Done.** A person asks who holds a position and who that position reports to, in messy words. The answer matches the hidden org chart. A drifted HR title is mapped to the right position, or it is flagged for a person. The live map was not typed in. A Foundry refresh does not overwrite the live database. Sales for the month are still read from Odoo, not from HelixDB.
+**Done.** A person asks who holds a position and who that position reports to, in messy words. The answer matches the hidden org chart. A drifted HR title is mapped to the right position, or it is flagged for a person. The stale official file from the simulator stays as the stated chart. The steward does not copy it over the observed chart. The grader can see that the drifts in the hidden record were caught. A small obvious fix is logged. A difference that would change who can approve or who can see what is a question. The live map was not typed in. A Foundry refresh does not overwrite the live database. Sales for the month are still read from Odoo, not from HelixDB.
 
 ## 3. Position access
 

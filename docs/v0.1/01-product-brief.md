@@ -17,7 +17,7 @@ A company cannot safely put agents into its real positions. A generic agent does
 ## What it does
 
 1. The org chart organises the product. It holds positions, reporting lines, teams, and responsibilities. People fill positions. Nothing is keyed to a named person.
-2. Ramonda builds the map from the connected systems and keeps it current. When the company supplies its own org chart, Ramonda compares the two and flags differences. A person is asked only when the sources disagree, or when a change is sensitive. Nobody maintains the map by hand.
+2. Ramonda builds the map from the connected systems and keeps it current. A company may also hand over the chart it already has, as a spreadsheet, a PDF or a slide, a photo, or the manager fields in HR. That stated chart sits beside the observed chart. Neither replaces the other. A small obvious difference is fixed and logged. A person is asked only when a difference would change who can approve or who can see what. When they disagree, the systems outweigh the paper. Nobody maintains the map by hand.
 3. Access comes from the position. OpenFGA is filled from the map. A change of position changes access. There is no permission rule per person.
 4. An agent belongs to a position. It starts at watch, then suggest, then act on routine work. A risky action waits for whoever holds the approving position. Each agent has a manual that a person owns.
 5. The same product serves every client. What changes is the systems you connect and the map Ramonda builds. Connectors are written once per system and reused. Ramonda is not forked per client.
