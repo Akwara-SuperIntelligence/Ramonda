@@ -70,7 +70,7 @@ Comparison confirms the lines that agree. A difference is classified.
 
 - A position on the paper with nobody in it is a vacancy.
 - Work done by someone the paper does not show is an unofficial responsibility.
-- A manager on the paper who never approves anything is a chart that is out of date.
+- A manager the paper names as an approver, who never approves in the systems, is a chart that is out of date. A manager who only has a reporting line, and no approval role, is not out of date for that reason.
 - A difference of the same kind is classified the same way.
 
 A small obvious fix is applied and logged. Anything that would change who can approve, or who can see what, is one short question to the approving position. It is not applied first. When the charts disagree, the steward weighs the systems above the paper, because a stated chart is often stale.

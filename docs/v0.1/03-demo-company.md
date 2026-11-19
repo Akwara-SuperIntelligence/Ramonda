@@ -90,7 +90,7 @@ Odoo is the system the local stamp runs today. The HR system, the payment log, a
 
 ## Official chart
 
-The simulator also writes an official org chart file for the cafe. The file is the positions in the table above, as they stood a few months before the simulated present. It is deliberately stale. It may be a spreadsheet. The hidden record, not the file, says which lines have since drifted, and which class each drift is. A vacancy, an unofficial responsibility, and a manager who no longer approves are the kinds of drift. The exact lines are part of that hidden record. They are not printed here, and they are not written into the file as corrections.
+The simulator also writes an official org chart file for the cafe. The file is the positions in the table above, as they stood a few months before the simulated present. It is deliberately stale. It may be a spreadsheet. The hidden record, not the file, says which lines have since drifted, and which class each drift is. A vacancy, an unofficial responsibility, and a paper approver who no longer approves are the kinds of drift. The exact lines are part of that hidden record. They are not printed here, and they are not written into the file as corrections.
 
 The steward is graded on catching those drifts. Trusting the file as the live chart fails the grade. Do not copy the file into the live map by hand.
 
