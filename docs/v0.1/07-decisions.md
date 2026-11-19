@@ -18,7 +18,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 2. Redpanda from the start
 
-**Limit.** The text below retries with the same key. It does not say how the connector remembers that key if it crashes after the client system has applied the write and before it stores the result. That gap is open. Do not treat Odoo as deduplicating the key.
+**Limit.** The text below retries with the same key. It does not say how the connector remembers that key if it crashes after the client system has applied the write and before it stores the result. A second call that arrives while the first call is still in flight is outside this text. That gap is open. Do not treat Odoo as deduplicating the key.
 
 **Decision.** Events and audit run on Redpanda from the start (R15). Postgres commits an action and its event in one transaction. A relay publishes the committed outbox row. The connector call uses an idempotency key. If the gateway dies after the client system has applied a write, it retries that approved action with the same key. It does not retry an action that is still waiting for a person (R16).
 
