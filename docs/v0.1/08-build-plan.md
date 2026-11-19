@@ -22,7 +22,7 @@ Score a run on these points.
 2. Access. The answer stays inside the position. A leak fails, including in an alert, an email, or a file.
 3. Tone. A staff member can use the answer without learning a tool name, a topic name, or a table name.
 4. Initiative. From suggest onward, the agent tells the positions the map names. Other positions get no figures. Nobody had to ask. Watch does not send that message.
-5. Approval. The client system is unchanged until the approving position decides in Ramonda's step. The audit row names the actor and, on a standing run, the accountable position.
+5. Approval. A write the map marks as gated stays out of the client system until the approving position decides in Ramonda's step. A routine write the map allows may proceed. The audit row names the actor and, on a standing run, the accountable position.
 
 Stage gate for an agent.
 

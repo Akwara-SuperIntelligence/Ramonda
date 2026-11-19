@@ -76,7 +76,7 @@ The agreed Foundry install is self-hosted and may use any model, including a loc
 6. Later changes arrive on `{tenant}.changes`. The steward applies an ordinary change itself. A large structural change sends the steward back to Foundry for a fresh draft, which the steward merges.
 7. A person is asked only when sources disagree, or when the change is sensitive. That person holds the position for the decision. The live map stays as it was until they decide.
 
-If the tuple write fails, the previous pair stays current. The gateway retries. It does not deny the whole company. The first failure is an audit row and an alert to the position that handles it.
+If the tuple write fails, the previous pair stays current. Access the new map would remove stays in force until the new tuples commit. [Decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair) accepts that window. No separate revocation step, and no time limit, is specified. The gateway retries. It does not deny the whole company. The first failure is an audit row and an alert to the position that handles it.
 
 Foundry's scheduled refresh writes staging only. It must not write the live HelixDB.
 

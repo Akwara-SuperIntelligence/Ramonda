@@ -62,7 +62,7 @@ Rakazo Spaces are not a boundary. OpenFGA is, once it is running. A tool argumen
 
 | Threat | Control | What would show it |
 | --- | --- | --- |
-| Business text tells the agent to ignore the rules and write an order | The text is data. It is not an approval and not an OpenFGA tuple. The gateway refuses the write | A delivery note, mail, or payment reference that contains an instruction leaves the order, the permissions, and the secrets unchanged. Do not plant that sentence as a fixture. The simulator's ordinary noise is enough input |
+| Business text tells the agent to ignore the rules and write an order | The text is data. It cannot become an approval, an OpenFGA tuple, or a secret. The gateway refuses a write the caller's position may not make | The instruction does not change permissions or secrets, and it does not write an order that position may not make. A write the position may already make is still that position's write. Do not plant the sentence as a fixture |
 | An agent reads or writes outside its position | The agent is one OpenFGA principal, with limits. The gateway acts as that principal, not as a shared login | An unattended read is audited as that agent and stays inside the position. Not built yet |
 | Someone copies a connector password out of the agent or the prompt | The secret is fetched for one call and then dropped | On the local stamp the gateway reads the Odoo secret from OpenBao for the call. The agent process does not receive it |
 | A user in one client reads another client's map or log | One stamp per client | Needs a second stamp. Not shown |
@@ -71,7 +71,7 @@ Rakazo Spaces are not a boundary. OpenFGA is, once it is running. A tool argumen
 | The model provider keeps or trains on client data | The provider and the contract are the client's. The local stamp uses DeepSeek when `DEEPSEEK_API_KEY` is set. We do not send connector secrets | The provider still sees the business data the caller was allowed to read |
 | Foundry sends records to a model | Decision 12. Real client data needs the client's own model key or written approval. v0.1 uses simulated data only. The agreed install is self-hosted and may use a local model | A v0.1 run has no real client's tables connected to Foundry |
 | A drifted image changes Rakazo | Rakazo is pinned to `ghcr.io/elie222/rakazo/app:v0.9.0` in `deploy/compose.yaml`. The stamp does not patch it | The pin is in the Compose file |
-| A retried call writes the order twice, or publishes a success that never happened | An idempotency key. The outbox row commits only after the connector reports success | Specified. The relay is not built, so this is not shown |
+| A retried call writes the order twice, or publishes a success that never happened | The pending action stores the idempotency key before the call. A repeated key returns the stored result. The outbox row commits only after success | Specified. The relay is not built, so this is not shown |
 
 ## Identity and access
 
@@ -79,7 +79,7 @@ People sign in as themselves through OIDC. The local stamp uses Keycloak. A clie
 
 When nobody asked, the gateway acts as the agent for the position. That agent is one non-human principal in OpenFGA, with limits. The audit row names the agent and the accountable position. It is not a shared password.
 
-OpenFGA is filled from the live map when the map changes, not when a prompt asks. Access follows the position. There is no per-person permission table. The model does not grant access.
+OpenFGA is filled from the live map when the map changes, not when a prompt asks. Access follows the position. There is no per-person permission table. The model does not grant access. A request uses one tuple pair, the previous one or the new one. Access the new map would remove stays in force until the new tuples commit. If that write fails, the previous pair stays current and the gateway retries. That window is [decision 4](07-decisions.md#4-permissions-switch-with-the-map-as-one-pair).
 
 The gateway ignores a tenant id or a user id written inside a tool argument.
 
@@ -93,9 +93,9 @@ Who can read a secret is an OpenBao policy for that stamp. Rotation is replace t
 
 ## Approvals
 
-A write that changes a client system needs a rule on the map, or a human approval outside the model. The gateway returns pending and does not call the connector until the person who holds the approving position decides in Ramonda's step.
+A write the map marks as needing a person returns pending. The gateway does not call the connector until the person who holds the approving position decides in Ramonda's step. A write the map already allows for that position proceeds, and is still audited. Text the agent read cannot add an allowance the map does not already give.
 
-That decision is the audit record. A Rakazo card is not the record. A decline writes nothing and is still an audit row.
+The Ramonda approval decision is the audit record. A Rakazo card is not the record. A decline writes nothing and is still an audit row.
 
 The approval step is not built yet.
 
@@ -142,7 +142,7 @@ This is readiness for an assessment, not a certificate. Several controls wait on
 | Theme | What we can show now | Still to build |
 | --- | --- | --- |
 | Access control | Keycloak sign-in. The gateway ignores tool-argument identity. The Odoo read runs as the signed-in user | OpenFGA from the live map |
-| Change control | Specified. A client-system write waits for Ramonda's approval step | The approval step |
+| Change control | Specified. A gated write waits for Ramonda's approval step. A map rule can allow a routine write | The approval step |
 | Logging | Append-only hash-chained log. `verify/ramonda check 1` checks the chain | The Redpanda copy |
 | Cryptography | TLS. Secrets in OpenBao for one call. The Odoo connector accepts only a gateway client certificate | Volume encryption. OpenBao TLS on a non-local stamp |
 | Operations | One Compose file. Pinned Rakazo image | A second stamp. The relay |
@@ -152,7 +152,7 @@ This is readiness for an assessment, not a certificate. Several controls wait on
 
 Detect. An alerting agent reads the audit stream and may alert the position that should hear it. Traces show the gateway call and the identity it acted as. Neither channel stops the run. The stream and the traces are not in the local stamp yet. The hash-chained log is.
 
-Contain. A human pauses the agent in the console. The alerting agent cannot. Access is narrowed by changing the position on the live map, which rebuilds the OpenFGA tuples. Connector secrets are rotated in OpenBao. A pause does not unwind a write the client system already accepted.
+Contain. A human pauses the agent in the console. The alerting agent cannot. Access is narrowed by changing the position on the live map. The narrower tuples apply when that write commits. Until then the previous pair stays current. Connector secrets are rotated in OpenBao. A pause does not unwind a write the client system already accepted.
 
 Record. The pause, the map change, the refusal, and the rotation are audit rows.
 
