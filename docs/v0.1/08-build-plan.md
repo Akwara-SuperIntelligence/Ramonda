@@ -81,7 +81,9 @@ The anchor `1-amina-reads-westlands-sales` is the old name of slice 1. That slic
 
 **What is built.** A human-owned manual in `clients/akwara-cafe/`, the stages watch, suggest, and act, a schedule or a Redpanda wake-up, Ramonda's approval step for a risky write, and one report or deck from a position agent. The outbox and the relay land here if the agent writes a client system. They can land earlier if stage 2 needs Redpanda for map changes. Do not add them before something reads them.
 
-**Done.** Fresh messy questions from the people in those positions, plus a duty that runs with nobody asking. The rubric in [How a stage counts as done](#how-a-stage-counts-as-done) passes against the hidden record. The agent passes watch, then suggest, then act, in that order. A risky write stays pending until the approving position decides in Ramonda's step. A Rakazo card alone leaves the system unchanged. A report or a deck from one of these agents matches the hidden record, and a position that may not see a source does not receive it. `verify/ramonda check 1` may still pass and does not pass the agent.
+**Done.** Fresh messy questions from the people in those positions, plus a duty that runs with nobody asking. The rubric in [How a stage counts as done](#how-a-stage-counts-as-done) passes against the hidden record. The agent passes watch, then suggest, then act, in that order. A report or a deck from one of these agents matches the hidden record, and a position that may not see a source does not receive it. `verify/ramonda check 1` may still pass and does not pass the agent.
+
+**Acceptance check.** A gated action pauses before anything is written. It stays paused until the person who holds the approving position says yes in Ramonda's step. That pause is not proven today. Check 1 does not prove it. Stage 4 fails if the client system changes before that yes, or if a Rakazo card alone releases the write. Do not fork Rakazo to fake the pause.
 
 ## 5. Grow
 

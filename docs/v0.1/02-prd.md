@@ -95,7 +95,7 @@ Done when two simulated companies on the same system share one connector and dif
 
 **R10.** A write the map marks as needing approval waits for the approving position. The training stage does not bypass that wait. A routine write the map allows for that position does not wait.
 
-Done when a gated action is absent from the client system while it is pending, and after a decline. An ungated routine write at act is allowed through.
+Done when a gated action is absent from the client system while it is paused, and after a decline. Stage 4 is the test of that pause. An ungated routine write at act is allowed through.
 
 **R11.** The approve or decline that counts is Ramonda's own step, stored by the gateway. A Rakazo approval card does not release the write. A decline writes nothing and is still audited.
 

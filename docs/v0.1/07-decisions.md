@@ -102,7 +102,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 8. The gateway learns who is calling from its own OAuth token
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** `verify/ramonda check 1` gets a Keycloak token for the gateway client and calls the gateway as that person. That path does not go through Rakazo. Rakazo's consent flow runs in the same check only when `DEEPSEEK_API_KEY` is set. The sentence below still stands for that consent flow. Do not fork Rakazo.
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** `verify/ramonda check 1` gets a Keycloak token for the gateway client and calls the gateway as that person. That path does not go through Rakazo, and it does not prove the pause before a gated action. Stage 4 of the build plan has to show that pause. Do not fork Rakazo.
 
 **Decision.** Rakazo v0.9.0 does not forward the signed-in user's session or ID token to MCP servers. The gateway is a remote MCP server. Its OAuth authorization server is Keycloak, or the client's Entra ID or Okta. A staff member who is already signed in consents once. The gateway then receives a token for that person and acts as them (R6, R8). The standing agent has its own client and its own token. The gateway ignores a tenant or user id written in a tool argument.
 
@@ -218,7 +218,7 @@ To add a decision, append the next number. To change one, add a new entry and ma
 
 ## 17. The gateway and the relay are Rust. Connectors are Python. The console is TypeScript.
 
-**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The language split still holds. The local stamp runs the Rust gateway, and check 1 reaches it with a Keycloak token. Rakazo's MCP consent is the open part of the sentence below. See decision 8. Do not fork Rakazo.
+**Read with [19](#19-build-the-map-from-the-systems-and-test-with-the-simulator).** The language split still holds. The local stamp runs the Rust gateway, and check 1 reaches it with a Keycloak token. The pause before a gated action is not proven by that check. Stage 4 has to show it. Do not fork Rakazo.
 
 **Decision.** The MCP gateway is Rust from day one, with no Python stopgap. Connectors are Python 3.12, typed, using the official MCP Python SDK. The outbox relay is Rust, in the same Cargo workspace as the gateway. It is part of the same write path, the Postgres outbox to Redpanda. The relay's language is the least load-bearing part of this decision and is open to revision. The admin console is TypeScript, built with Vite, with bun as the package manager. It is not Next.js.
 
@@ -260,6 +260,6 @@ The owner has since settled the open points below. An industry pack is only a st
 
 **Why.** The scripted checks and the planted seed passed while proving little about a new company. A change of position has to change access without a new rule for that person. A map that a person maintains by hand does not stay current. The simulator writes messy history into the real systems, and the grader can score open questions against a record the agents do not see.
 
-**What it costs us.** The seed script, the named users in the local Keycloak realm, and `verify/ramonda check 1` remain until the simulator replaces them. Do not extend them. Rakazo's consent flow is still open. The idempotency gap after a client-system write is still open. The logistics company's operations are not described yet.
+**What it costs us.** The seed script, the named users in the local Keycloak realm, and `verify/ramonda check 1` remain until the simulator replaces them. Do not extend them. The pause before a gated action is not proven yet. Stage 4 has to show it. The idempotency gap after a client-system write is still open. The logistics company's operations are not described yet.
 
 **Where it's argued.** [Brief](01-product-brief.md). [Requirements](02-prd.md). [Simulator](03-demo-company.md). [Architecture](04-architecture.md). [Ontology](06-ontology.md). [Build plan](08-build-plan.md).

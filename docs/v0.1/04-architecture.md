@@ -187,5 +187,4 @@ How to start the stamp is in the [README](../../README.md). Certificate rules ar
 
 ## Open questions
 
-1. Rakazo's consent flow is still open. `verify/ramonda check 1` reaches the gateway with a Keycloak password grant. The consent step inside Rakazo runs only when `DEEPSEEK_API_KEY` is set. Do not fork Rakazo to close the gap.
-2. How a connector remembers an idempotency key after a crash, and what a second call does while the first is still in flight, is still open. The events section names the gap. Do not invent an Odoo deduplication scheme to close it.
+How a connector remembers an idempotency key after a crash, and what a second call does while the first is still in flight, is still open. The events section names the gap. Do not invent an Odoo deduplication scheme to close it.
