@@ -131,7 +131,7 @@ Postgres holds actions, approvals, audit rows, and the outbox. Redpanda is the b
 
 `{tenant}.triggers` is not a place for a scenario rule. A sale or a delivery is `{tenant}.changes`. The consumer delivers the event. The agent, or the steward, decides.
 
-The client system is not inside the Postgres transaction. The gateway stores the action, including its idempotency key, before it calls the connector. It commits the action and the outbox row only after the connector reports success. A repeat of that key returns the result the connector already stored, and does not apply the write again. Recovery retries the same key and does not ask for a second approval. Debezium is not in v0.1. It can replace the relay later without a change to writers.
+The client system is not inside the Postgres transaction. The gateway stores the action, including its idempotency key, before it calls the connector. It commits the action and the outbox row only after the connector reports success. A repeat returns the result the connector has already stored for that key. If the connector crashes after the client system has applied the write and before it has stored that result, the key alone does not stop a second write. How that gap is closed is not specified. Do not assume Odoo deduplicates the key. Recovery retries the same key and does not ask for a second approval. Debezium is not in v0.1. It can replace the relay later without a change to writers.
 
 ## Audit
 

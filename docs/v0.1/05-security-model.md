@@ -71,7 +71,7 @@ Rakazo Spaces are not a boundary. OpenFGA is, once it is running. A tool argumen
 | The model provider keeps or trains on client data | The provider and the contract are the client's. The local stamp uses DeepSeek when `DEEPSEEK_API_KEY` is set. We do not send connector secrets | The provider still sees the business data the caller was allowed to read |
 | Foundry sends records to a model | Decision 12. Real client data needs the client's own model key or written approval. v0.1 uses simulated data only. The agreed install is self-hosted and may use a local model | A v0.1 run has no real client's tables connected to Foundry |
 | A drifted image changes Rakazo | Rakazo is pinned to `ghcr.io/elie222/rakazo/app:v0.9.0` in `deploy/compose.yaml`. The stamp does not patch it | The pin is in the Compose file |
-| A retried call writes the order twice, or publishes a success that never happened | The pending action stores the idempotency key before the call. A repeated key returns the stored result. The outbox row commits only after success | Specified. The relay is not built, so this is not shown |
+| A retried call writes the order twice, or publishes a success that never happened | The pending action stores the key before the call. A stored result is returned on a repeat. A crash after the client system applies the write, and before that result is stored, can still apply the write again. That gap is not specified. The outbox row commits only after the connector reports success | The relay is not built, so this is not shown |
 
 ## Identity and access
 
