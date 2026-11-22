@@ -16,7 +16,7 @@ An agent belongs to a position. It starts at watch, then moves to suggest, then 
 
 Ready is a concrete test. Connect Ramonda to a new company's systems. Nobody writes the org chart or the permissions by hand. Ramonda builds a correct org chart and map. It gives every position the right access. The agents start useful routine work within days.
 
-v0.1 has to prove that on a simulated cafe, then on a simulated logistics company. The cafe is described in [03-demo-company.md](docs/v0.1/03-demo-company.md). The order of work is in [08-build-plan.md](docs/v0.1/08-build-plan.md). The reason for this shape is [decision 19](docs/v0.1/07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator).
+v0.1 has to prove that on a simulated cafe, then on a simulated logistics company. The cafe is described in [Akwara Cafe, the simulator](https://linear.app/akwara-hq/document/ramonda-v01-akwara-cafe-the-simulator-ca85c105a7af). The order of work is in the [Build plan](https://linear.app/akwara-hq/document/ramonda-v01-build-plan-bcc05dff0daa). The reason for this shape is [decision 19, Build the map from the systems and test with the simulator](https://linear.app/akwara-hq/document/ramonda-v01-decisions-log-817852748b33).
 
 ## What runs today
 
@@ -50,15 +50,26 @@ Run these commands from the repository root.
 
 When Odoo is healthy, `python3 scripts/seed_akwara_cafe.py` reloads the old Westlands rows. `verify/ramonda check 1` then runs the safety net. Both commands need the stamp from step 2. A green check does not pass a product stage. The check is described in [verify/feature-map.md](verify/feature-map.md).
 
-## Documents
+## Plans, specs and tickets live in Linear
 
-| Document | What it is |
-| --- | --- |
-| [01-product-brief.md](docs/v0.1/01-product-brief.md) | What Ramonda is |
-| [02-prd.md](docs/v0.1/02-prd.md) | Requirements |
-| [03-demo-company.md](docs/v0.1/03-demo-company.md) | The simulator's cafe |
-| [04-architecture.md](docs/v0.1/04-architecture.md) | How the map and the gateway fit |
-| [05-security-model.md](docs/v0.1/05-security-model.md) | Security claims |
-| [06-ontology.md](docs/v0.1/06-ontology.md) | What the map holds |
-| [07-decisions.md](docs/v0.1/07-decisions.md) | Why earlier choices changed |
-| [08-build-plan.md](docs/v0.1/08-build-plan.md) | Build order after the foundation |
+Plans, specs, decisions, and tickets live in the [Akwara workspace](https://linear.app/akwara-hq). Tickets are in the Ramonda team (key RAM). GitHub issues are not used for planning.
+
+Projects:
+
+- [0. Ramonda overview and reference](https://linear.app/akwara-hq/project/0-ramonda-overview-and-reference-9e8dc09c81d1)
+- [1. Simulator](https://linear.app/akwara-hq/project/1-simulator-4de458bbcbba)
+- [2. Map steward](https://linear.app/akwara-hq/project/2-map-steward-7dab95bb8206)
+- [3. Position-based access](https://linear.app/akwara-hq/project/3-position-based-access-262937e1451d)
+- [4. First position agents](https://linear.app/akwara-hq/project/4-first-position-agents-6c5f181ffb94)
+- [5. Second business (logistics)](https://linear.app/akwara-hq/project/5-second-business-logistics-9780e3dd0bcc)
+
+Docs:
+
+- [Product brief](https://linear.app/akwara-hq/document/ramonda-v01-product-brief-e338d72b5aca)
+- [PRD](https://linear.app/akwara-hq/document/ramonda-v01-product-requirements-prd-8891c38f5804)
+- [Akwara Cafe, the simulator](https://linear.app/akwara-hq/document/ramonda-v01-akwara-cafe-the-simulator-ca85c105a7af)
+- [Architecture](https://linear.app/akwara-hq/document/ramonda-v01-architecture-fce12b302e80)
+- [Security model](https://linear.app/akwara-hq/document/ramonda-v01-security-model-775c99b29a99)
+- [Ontology](https://linear.app/akwara-hq/document/ramonda-v01-ontology-what-the-map-holds-6fbd8352129e)
+- [Decisions log](https://linear.app/akwara-hq/document/ramonda-v01-decisions-log-817852748b33)
+- [Build plan](https://linear.app/akwara-hq/document/ramonda-v01-build-plan-bcc05dff0daa)

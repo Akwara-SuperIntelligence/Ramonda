@@ -1,6 +1,6 @@
 # Feature map
 
-This file is the safety net for the plumbing in slices 0 and 1. It is not the product test. Stages are scored against the simulator's hidden record, as in [the build plan](../docs/v0.1/08-build-plan.md#how-a-stage-counts-as-done). [Decision 19](../docs/v0.1/07-decisions.md#19-build-the-map-from-the-systems-and-test-with-the-simulator) withdrew the other eight scripted checks. Do not add them back. Do not add planted facts.
+This file is the safety net for the plumbing in slices 0 and 1. It is not the product test. Stages are scored against the simulator's hidden record, as in [How a stage counts as done](https://linear.app/akwara-hq/document/ramonda-v01-build-plan-bcc05dff0daa). [19. Build the map from the systems and test with the simulator](https://linear.app/akwara-hq/document/ramonda-v01-decisions-log-817852748b33) withdrew the other eight scripted checks. Do not add them back. Do not add planted facts.
 
 ## Check 1
 
